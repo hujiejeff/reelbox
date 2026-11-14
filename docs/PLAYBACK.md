@@ -83,7 +83,7 @@ cargo build -p reelbox --target x86_64-pc-windows-gnu
 ## 已知限制
 
 - `tiny_http` 未处理 Range 请求:mp4 直链拖动进度会从头发,建议优先用 m3u8 源
-- 没有进度记忆 / 自动下一集 / 手动选清晰度
+- 没有手动选清晰度
 - 反代只监听本机,不对外暴露
 
 ## 验收清单
@@ -95,9 +95,27 @@ cargo build -p reelbox --target x86_64-pc-windows-gnu
 | 分享页能抽出 m3u8 | 通过 | `cargo test extract_tests` 3 条 |
 | 防盗链 UA/Referer 生效 | 通过 | 反代日志里分片返回 200 |
 | 退出播放不泄漏 | 通过 | `closePlayer` 销毁 Hls 实例并清 `src` |
+| 进度记忆 | 通过 | 播放后退出,详情页出现"继续观看 · 集名 · 时间" |
+| 播完自动下一集 | 通过 | video `ended` 时按扁平剧集表顺延 |
 
 一键复核:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File verify-playback.ps1
 ```
+
+## 播放器交互
+
+| 操作 | 行为 |
+| --- | --- |
+| 空格 | 播放 / 暂停 |
+| ← / → | 后退 / 前进 10 秒 |
+| F | 全屏切换 |
+| Esc | 退出播放 |
+| 鼠标静止 2.6 秒 | 顶部标题条淡出 |
+
+## 进度记忆
+
+- 存储:localStorage 的 ,键是 - 值:, 是秒
+- 每 5 秒写一次(且只在不小于 3 秒时写),关闭播放器时强制写一次
+- 再次打开同一集,自动跳到上次位置;详情页顶部出现"继续观看"

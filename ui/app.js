@@ -25,7 +25,21 @@ const $ = (id) => document.getElementById(id);
 async function init() {
   $("pBack").onclick = closePlayer;
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("player").hidden) closePlayer();
+    const box = $("player");
+    if (box.hidden) return;
+    const v = $("video");
+    if (e.key === "Escape") return closePlayer();
+    if (e.key === " " || e.code === "Space") {
+      e.preventDefault();
+      v.paused ? v.play().catch(() => {}) : v.pause();
+      return;
+    }
+    if (e.key === "ArrowRight") { v.currentTime = Math.min(v.duration || 1e9, v.currentTime + 10); return; }
+    if (e.key === "ArrowLeft") { v.currentTime = Math.max(0, v.currentTime - 10); return; }
+    if (e.key === "f" || e.key === "F") {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (box.requestFullscreen) box.requestFullscreen();
+    }
   });
 
   try {
@@ -253,6 +267,14 @@ function resetGrid() {
 
 function renderDetail(d) {
   const summary = (d.summary || "").replace(/[\s\u3000]+/g, " ").trim();
+  S.detailTitle = d.title;
+  S.detailEps = [];
+  d.groups.forEach((g) => g.episodes.forEach((e) => S.detailEps.push({ id: e.id, name: e.name })));
+  const rec = progGet(detailKey());
+  const resumeBtn =
+    rec && rec.id
+      ? '<button class="resume" id="btnResume">继续观看 · ' + esc(rec.name || "") + " · " + fmtTime(rec.t) + "</button>"
+      : "";
   const groups = d.groups
     .map(
       (g, gi) =>
@@ -279,10 +301,18 @@ function renderDetail(d) {
           (summary.length > 90 ? '<button class="more" id="btnMore">展开</button>' : "") +
         "</div>" +
       "</div>" +
+      resumeBtn +
       (groups || '<p class="noep">这个源没给剧集列表</p>') +
     "</div>";
 
   $("btnBack").onclick = () => showView("home");
+
+  const btnResume = $("btnResume");
+  if (btnResume)
+    btnResume.onclick = () => {
+      const r = progGet(detailKey());
+      if (r && r.id) playEpisode(r.id, r.name);
+    };
 
   const more = $("btnMore");
   if (more)
@@ -309,25 +339,112 @@ function renderDetail(d) {
 }
 
 let hls = null;
+let playCtx = null;
+let idleTimer = 0;
 
+/* ---------- 播放进度 ---------- */
+const PROG_KEY = "reelbox.progress";
+
+function progAll() {
+  try { return JSON.parse(localStorage.getItem(PROG_KEY) || "{}"); } catch (_) { return {}; }
+}
+
+function progGet(key) { return key ? progAll()[key] : null; }
+
+function progSet(key, val) {
+  if (!key) return;
+  const all = progAll();
+  all[key] = val;
+  try { localStorage.setItem(PROG_KEY, JSON.stringify(all)); } catch (_) {}
+}
+
+function fmtTime(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const mm = h ? String(m).padStart(2, "0") : String(m);
+  return (h ? h + ":" : "") + mm + ":" + String(s).padStart(2, "0");
+}
+
+function detailKey() { return S.source && S.detailTitle ? S.source.id + "|" + S.detailTitle : ""; }
+
+/* ---------- 播放器 ---------- */
 function closePlayer() {
   const box = $("player");
   const v = $("video");
+  saveProgress(true);
   if (hls) { hls.destroy(); hls = null; }
   try { v.pause(); } catch (_) {}
   v.removeAttribute("src");
   v.load();
   box.hidden = true;
   box.classList.remove("dim");
+  clearTimeout(idleTimer);
+  refreshResume();
+}
+
+/* 关闭播放器后,把"继续观看"补到详情页上(详情页是之前渲染的,不会自己更新) */
+function refreshResume() {
+  const wrap = $("v-detail").querySelector(".detail-wrap");
+  if (!wrap) return;
+  const rec = progGet(detailKey());
+  let btn = $("btnResume");
+  if (!rec || !rec.id) {
+    if (btn) btn.remove();
+    return;
+  }
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.className = "resume";
+    btn.id = "btnResume";
+    const anchor = wrap.querySelector(".epgroup") || wrap.querySelector(".noep");
+    wrap.insertBefore(btn, anchor || null);
+  }
+  btn.textContent = "继续观看 · " + (rec.name || "") + " · " + fmtTime(rec.t);
+  btn.onclick = () => playEpisode(rec.id, rec.name);
+}
+
+function saveProgress(force) {
+  if (!playCtx || !playCtx.id) return;
+  const v = $("video");
+  const t = v.currentTime;
+  if (!isFinite(t) || t < 3) return;
+  const now = Date.now();
+  if (!force && now - (playCtx.saved || 0) < 5000) return;
+  playCtx.saved = now;
+  progSet(playCtx.key, { id: playCtx.id, name: playCtx.name, t: t, at: now });
 }
 
 function openPlayer(url, name) {
   const box = $("player");
   const v = $("video");
   box.hidden = false;
+  box.classList.remove("dim");
   $("pTitle").textContent = name || "";
-  $("pState").textContent = "加载中…";
+  $("pState").textContent = url ? "加载中…" : "取流中…";
   if (hls) { hls.destroy(); hls = null; }
+  if (!url) return;
+
+  v.onloadedmetadata = () => {
+    if (playCtx && playCtx.resume > 5) {
+      try { v.currentTime = playCtx.resume; } catch (_) {}
+    }
+  };
+  v.ontimeupdate = () => saveProgress(false);
+  v.onplaying = () => { $("pState").textContent = ""; };
+  v.onended = () => {
+    const ctx = playCtx;
+    if (!ctx || !ctx.list || !ctx.list.length) return;
+    const next = ctx.list[ctx.index + 1];
+    if (next) playEpisode(next.id, next.name);
+    else $("pState").textContent = "已经是最后一集";
+  };
+  box.onmousemove = () => {
+    box.classList.remove("dim");
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => box.classList.add("dim"), 2600);
+  };
 
   const isHls = url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
   if (window.Hls && Hls.isSupported() && isHls) {
@@ -339,16 +456,30 @@ function openPlayer(url, name) {
       v.play().catch(() => {});
     });
     hls.on(Hls.Events.ERROR, (_e, d) => {
-      if (d && d.fatal) { $("pState").textContent = "播放失败:" + d.details; window.__err && window.__err("hls: " + d.details); }
+      if (d && d.fatal) {
+        $("pState").textContent = "播放失败:" + d.details;
+        window.__err && window.__err("hls: " + d.details);
+      }
     });
   } else {
     v.src = url;
     v.play().catch(() => {});
   }
-  v.onplaying = () => { $("pState").textContent = ""; };
 }
 
 async function playEpisode(id, name) {
+  const key = detailKey();
+  const rec = progGet(key);
+  const list = S.detailEps || [];
+  const idx = list.findIndex((e) => e.id === id);
+  playCtx = {
+    key: key,
+    id: id,
+    name: name,
+    list: list,
+    index: idx,
+    resume: rec && rec.id === id ? rec.t || 0 : 0,
+  };
   openPlayer("", name);
   try {
     const st = await invoke("play", { source: S.source, episodeId: id });
