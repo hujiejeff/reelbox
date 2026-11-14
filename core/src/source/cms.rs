@@ -556,3 +556,32 @@ fn absolute(u: &str, base: &str) -> String {
     };
     format!("{dir}{u}")
 }
+
+#[cfg(test)]
+mod extract_tests {
+    use super::*;
+
+    #[test]
+    fn finds_relative_m3u8() {
+        let html = r#"<script>const url = "/20251222/65250_ab09f628/index.m3u8?sign=abc";</script>"#;
+        let got = extract_m3u8(html, "https://vip.dytt-cine.com/share/xyz").unwrap();
+        assert_eq!(
+            got,
+            "https://vip.dytt-cine.com/20251222/65250_ab09f628/index.m3u8?sign=abc"
+        );
+    }
+
+    #[test]
+    fn finds_absolute_m3u8() {
+        let html = r#"var u = "https://a.example/x/index.m3u8?t=1";"#;
+        assert_eq!(
+            extract_m3u8(html, "https://a.example/p").unwrap(),
+            "https://a.example/x/index.m3u8?t=1"
+        );
+    }
+
+    #[test]
+    fn none_when_absent() {
+        assert!(extract_m3u8("<html>no video here</html>", "https://a.example/").is_none());
+    }
+}
