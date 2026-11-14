@@ -520,7 +520,7 @@ function bindSourceManager() {
         const exists = S.sources.some((x) => x.id === res.id);
         if (!exists) {
           S.sources = S.sources.concat([
-            { id: res.id, name: res.name, kind: "webox", url: res.path },
+            { id: res.id, name: res.name, type: "webox", url: res.path },
           ]);
           await persistSources();
         }

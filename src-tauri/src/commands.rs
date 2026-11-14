@@ -59,7 +59,10 @@ fn plugin_fetch() -> Box<dyn Fn(&str) -> Option<String>> {
 }
 
 fn is_plugin(src: &Source) -> bool {
-    src.kind == "webox"
+    // 老配置里 kind 可能被序列化成 type 而丢掉,所以再看一眼扩展名
+    let by_path = src.url.to_ascii_lowercase().ends_with(".webox.js")
+        || src.url.to_ascii_lowercase().ends_with(".reelbox.js");
+    src.kind == "webox" || by_path
 }
 
 #[tauri::command]
