@@ -120,3 +120,20 @@ powershell -ExecutionPolicy Bypass -File verify-playback.ps1
 - 值:`{ id, name, t, at }`,`t` 是秒
 - 每 5 秒写一次(且只在 ≥3 秒时写),关闭播放器时强制写一次
 - 再打开同一集自动跳到上次位置;详情页顶部出现「继续观看 · 集名 · 时间」
+
+## 多源验证(2026-11-14)
+
+| 源 | 分享页 | 抽出的地址 | 结果 |
+| --- | --- | --- | --- |
+| 电影天堂 dytt | `vip.dytt-cine.com/share/...` | `/2025..*/index.m3u8?sign=...` | 界面实测起播 |
+| 量子资源 lzzy | `v.lzcdn27.com/share/...` | `/20260427/9445_0f2985ca/index.m3u8?sign=...` | 清单/子清单/分片全部 200 |
+
+量子源的实测链路(命令行,不经过界面):
+
+```
+master   #EXTM3U + EXT-X-STREAM-INF  → 2000k/hls/mixed.m3u8
+variant  #EXTINF:4.2, c1cec772ce0000000.ts
+segment  HTTP 200, 996,400 bytes
+```
+
+两个源都是「分享页 → 相对路径 m3u8」的同一形态,走的是同一段 `resolve_media` + `extract_m3u8`。
