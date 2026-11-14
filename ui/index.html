@@ -651,8 +651,8 @@
     border-color: transparent;
   }
 
-  /* 带计数的分段:source 管理页的四个类型(段间隙 2dp 是 m3e 令牌,唯一非 4 倍数值) */
-  .seg--count { display: flex; gap: 2px; min-height: 40px; }
+  /* 带计数的分段:source 管理页的四个类型。段间隙 4(评审 4:2dp 太挤) */
+  .seg--count { display: flex; flex-wrap: wrap; gap: 4px; min-height: 40px; }
   .seg--count > button {
     display: inline-flex; align-items: center; gap: 4px; height: 40px; padding: 0 12px;
     box-sizing: border-box; border-radius: 20px; cursor: pointer;
@@ -677,6 +677,9 @@
   @media (max-width: 599px) {
     .seg--count > button { flex: 1 1 0; justify-content: center; padding: 0 6px; gap: 2px; }
     .seg--count .seg__check { display: none !important; }
+    /* 4 段等宽 + gap 4 之后,14 的 label 在 220~240 的视口里会把「全部 11」挤到折行;
+       折行就把 label 收到 13,而不是把段间隙退回 2(评审 4) */
+    .seg--count .seg__label { font-size: 13px; }
   }
 
   .swatches { display: flex; flex-wrap: wrap; gap: 12px; }
