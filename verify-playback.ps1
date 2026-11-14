@@ -46,7 +46,9 @@ foreach ($c in $checks) {
 }
 
 # 机器可读的报告
-$verdict = if ($fail -eq 0) { "PASS" } else { "FAIL" }
+Write-Host "dbg fail=[$fail] type=$($fail.GetType().Name)"
+$verdict = "FAIL"
+if ($fail -eq 0) { $verdict = "PASS" }
 $report = [ordered]@{
   goal    = "commit + playback implementation"
   commit  = (& git rev-parse --short HEAD)
