@@ -34,6 +34,7 @@ const S = {
   detailGroups: [],     // 详情里的线路,播放失败"换线路"用
   favs: {},             // 收藏:localStorage["reelbox.favs"],键 = 源id|片名
   srcFilter: "all",     // 源管理页分段:all | vod | plugin | live
+  reqSeq: 0,            // 请求代际:切源/换分类时 +1,回来的迟到的响应一律丢掉
 };
 
 const $ = (id) => document.getElementById(id);
@@ -454,8 +455,12 @@ function rememberCategory() {
   prefSet(LS.lastChild, S.child || "");
 }
 
-async function switchSource(src) {
+async function switchSource(src, opts) {
+  if (!src) return;
+  const o = opts || {};
   log("switchSource", src && src.id);
+  // 换代:上一个源发出去的请求从这里开始全部作废(I2)
+  const seq = ++S.reqSeq;
   S.source = src;
   // 最近使用靠这里喂:不接上「最近使用」永远是空的
   pushRecent(src && src.id);
@@ -473,16 +478,23 @@ async function switchSource(src) {
   S.detailId = "";
   S.listError = null;
   if (!$("player").hidden) closePlayer();
-  showView("home");
+  // 顶栏已经是新源了,网格不能还留着上个源的片:立刻清空 + 上骨架屏
+  resetGrid();
+  showListLoading();
+  const scroller = $("scroll");
+  if (scroller) scroller.scrollTop = 0; // 新源可能只有几条,别落在半空
+  if (!o.stay) showView("home");
   const seeded = seedCategory();
   if (seeded) {
     // 存的分类要先让 loadFilters 校验一遍(新源里可能没有这个分类),再取列表,
     // 否则会拿一个不存在的分类去请求。没存过分类时保持并行,不多等一个来回。
     await loadFilters();
+    if (seq !== S.reqSeq) return; // 期间又切源了:这轮结果作废
     await loadItems();
   } else {
     await Promise.all([loadFilters(), loadItems()]);
   }
+  if (seq !== S.reqSeq) return;
   // 当前源变了:源管理页的选中态与设置首页摘要都要跟着走
   renderSourceManager();
   syncSetSummaries();
@@ -547,11 +559,17 @@ async function fetchDetail(id) {
 }
 
 async function loadFilters() {
+  // 分类属于某个源:回来的晚于切源就丢掉,别把上个源的分类摆在顶栏上(I2)
+  const forSource = S.source;
   let fs = [];
   try {
     fs = await fetchFilters();
   } catch (e) {
     log("filters fail", e);
+  }
+  if (forSource !== S.source) {
+    log("filters dropped", "source changed");
+    return;
   }
   const opts = (fs && fs[0] && fs[0].options) || [];
   S.parents = opts.filter((o) => !o.parent && o.value);
@@ -578,17 +596,23 @@ async function loadFilters() {
 
 async function loadItems() {
   if (!S.source) return;
+  const seq = ++S.reqSeq; // 每次取列表都换代:先回来的旧响应会被丢掉
   S.loading = true;
   S.listError = null;
   showListLoading();
   try {
     const page = await fetchPage(1, S.child);
+    if (seq !== S.reqSeq) {
+      log("list dropped", "seq=" + seq + " now=" + S.reqSeq);
+      return;
+    }
     S.items = page.items || [];
     S.page = 1;
     S.next = page.nextCursor || "";
     resetGrid();
     appendCards(0);
   } catch (e) {
+    if (seq !== S.reqSeq) return;
     log("LIST FAIL", errText(e));
     S.items = [];
     S.next = "";
@@ -596,22 +620,27 @@ async function loadItems() {
     S.listError = errorInfo("list", e);
     showListError(S.listError, () => loadItems());
   } finally {
-    S.loading = false;
-    setStatus();
+    if (seq === S.reqSeq) {
+      S.loading = false;
+      setStatus();
+    }
   }
 }
 
 async function loadMore() {
   if (S.loading || !S.next) return;
   const more = Number(S.next);
+  const seq = S.reqSeq;
   S.loading = true;
   try {
     const page = await fetchPage(more, S.child);
+    if (seq !== S.reqSeq) return; // 翻页途中切了源/分类:这页不要了
     const before = S.items.length;
     S.items = S.items.concat(page.items || []);
     S.next = page.nextCursor || "";
     appendCards(before);
   } catch (e) {
+    if (seq !== S.reqSeq) return;
     // 翻页失败不该把已经看到的内容清掉:停掉自动翻页,给一个可点的提示
     log("LIST MORE FAIL", errText(e));
     S.next = "";
@@ -627,16 +656,19 @@ async function loadMore() {
 async function doSearch() {
   const q = ($("q").value || "").trim();
   if (!q) return loadItems();
+  const seq = ++S.reqSeq;
   S.loading = true;
   S.listError = null;
   showListLoading();
   try {
     const page = await fetchSearch(q, 1);
+    if (seq !== S.reqSeq) return;
     S.items = page.items || [];
     S.next = "";
     resetGrid();
     appendCards(0);
   } catch (e) {
+    if (seq !== S.reqSeq) return;
     log("SEARCH FAIL", errText(e));
     S.items = [];
     S.next = "";
@@ -644,8 +676,10 @@ async function doSearch() {
     S.listError = errorInfo("search", e);
     showListError(S.listError, () => doSearch());
   } finally {
-    S.loading = false;
-    setStatus();
+    if (seq === S.reqSeq) {
+      S.loading = false;
+      setStatus();
+    }
   }
 }
 
@@ -1708,19 +1742,38 @@ function statusDotHtml(src) {
   );
 }
 
+/** 源管理页:当前过滤段没有源时的空态,带下一步 */
+function showSrcEmpty(box) {
+  const label = { all: "还没有任何源", vod: "没有点播源", plugin: "没有插件源", live: "还没有直播源" }[S.srcFilter] || "这里还没有源";
+  const tip =
+    S.srcFilter === "live"
+      ? "直播源要等 v0.3 才支持播放,现在导入只会登记。"
+      : S.srcFilter === "all"
+      ? "可以从网络索引一次导入,或者手动加一个接口地址。"
+      : "切到「全部」看看,或者用下面的按钮加一个。";
+  box.innerHTML = stateCard({
+    icon: S.srcFilter === "live" ? "live_tv" : "dns",
+    title: label,
+    msg: tip,
+    actions: S.srcFilter === "all" ? [{ id: "add", label: "添加源" }, { id: "idx", label: "网络导入", soft: true }] : [],
+  });
+  const add = box.querySelector('[data-act="add"]');
+  if (add) add.onclick = () => editSource(null);
+  const idx = box.querySelector('[data-act="idx"]');
+  if (idx) idx.onclick = () => importFromIndex();
+}
+
 /** 源列表:m3e list item,每项 = 名称 / 类型 / 地址 + 右侧状态点与「更多」 */
 function renderSourceManager() {
   const box = $("srcmgr");
   if (!box) return;
   const all = S.sources || [];
   const list = S.srcFilter === "all" ? all : all.filter((s) => sourceType(s) === S.srcFilter);
-  if (!all.length) {
-    box.innerHTML = '<p class="hint">还没有源。下面「添加源」或「网络导入」都行。</p>';
-    return;
-  }
+  // 分段计数与列表永远同源同刷:导入/新增/删除之后不会再出现 11 vs 12(I7)
+  renderSrcSeg();
   if (!list.length) {
-    box.innerHTML =
-      '<p class="hint">这个类型下还没有源。点下面的「添加源」加一个,或者切回「全部」。</p>';
+    // 过滤后 0 条必须给空态(带下一步),不能只剩一句灰字(A-8)
+    showSrcEmpty(box);
     return;
   }
   // 行上用「列表下标」而不是 id:同 id 的两条源不会互相误伤(A1)
@@ -3308,7 +3361,31 @@ function renderSkeleton() {
 
 function clearSkeleton() {
   SKEL_N = 0;
+  clearSkelTimer();
   $("grid").querySelectorAll(".skel").forEach((n) => n.remove());
+}
+
+/**
+ * 骨架屏兜底:接口 10 秒还不回来,就一直转下去没人知道发生了什么。
+ * 超时后直接给错误三态里的「重试」,用户至少能自己再来一次。
+ */
+const SKEL_TIMEOUT_MS = 10000;
+let skelTimer = 0;
+
+function clearSkelTimer() {
+  if (skelTimer) clearTimeout(skelTimer);
+  skelTimer = 0;
+}
+
+function armListTimeout() {
+  clearSkelTimer();
+  skelTimer = setTimeout(() => {
+    skelTimer = 0;
+    if (!S.loading || (S.items || []).length) return;
+    log("LIST TIMEOUT", SKEL_TIMEOUT_MS + "ms");
+    S.loading = false;
+    showListError(errorInfo("list", "超时:10 秒没有回应"), () => loadItems());
+  }, SKEL_TIMEOUT_MS);
 }
 
 const DETAIL_SKELETON =
@@ -3318,12 +3395,13 @@ const DETAIL_SKELETON =
     '<div class="skel-chips">' + "<i></i>".repeat(14) + "</div>" +
   "</div>";
 
-/** 列表:加载中(骨架屏) */
+/** 列表:加载中(骨架屏 + 10s 超时兜底) */
 function showListLoading() {
   const el = $("empty");
   el.style.display = "none";
   el.innerHTML = "";
   renderSkeleton();
+  armListTimeout();
 }
 
 /** 列表:空(没有内容) */
