@@ -1783,7 +1783,11 @@ function showSrcEmpty(box) {
   if (idx) idx.onclick = () => importFromIndex();
 }
 
-/** 源列表:m3e list item,每项 = 名称 / 类型 / 地址 + 右侧状态点与「更多」 */
+/**
+ * 源列表:m3e list item,每项 = 图标容器 / 名称 + 类型徽标 / 地址 + 右侧「进去看」「更多」。
+ * 容器颜色按类型(点播 secondary / 插件 tertiary / 直播 error 族);当前源只把
+ * 图标容器换成 primary、名称加粗,不再整行铺色(评审 §0-3、§2.4)。
+ */
 function renderSourceManager() {
   const box = $("srcmgr");
   if (!box) return;
@@ -1802,21 +1806,25 @@ function renderSourceManager() {
       const active = !!(S.source && S.source.id === s.id);
       const crawl = isCrawlSource(s);
       const idx = all.indexOf(s);
+      const type = sourceType(s);
       return (
-        '<div class="m3e-list-item" data-idx="' + idx + '"' + (active ? ' data-active="1"' : "") + ">" +
-          '<span class="m3e-list-item__leading"><span class="m3e-icon" aria-hidden="true">' +
-            (isPluginSource(s) ? "extension" : "dns") + "</span></span>" +
+        '<div class="m3e-list-item" data-idx="' + idx + '" data-type="' + esc(type) + '"' +
+          (active ? ' aria-current="true"' : "") + ">" +
+          '<span class="m3e-list-item__leading">' +
+            '<span class="m3e-icon" aria-hidden="true">' + esc(srcTypeIcon(s)) + "</span></span>" +
           '<span class="m3e-list-item__content">' +
-            '<span class="m3e-list-item__headline">' + esc(s.name) +
-              '<span class="src-badge">' + sourceKindLabel(s) + "</span>" +
+            // 状态点放在标题行里:它要跟名称那一行对齐,而不是跟 72 高的整行中心对齐
+            '<span class="m3e-list-item__headline">' +
+              '<span class="src-row__name">' + esc(s.name) + "</span>" +
+              '<span class="src-badge" data-type="' + esc(type) + '">' + sourceKindLabel(s) + "</span>" +
               (crawl
                 ? '<span class="src-badge src-badge--warn" title="地址是 HTML 爬取配置,不是点播接口">取不到数据</span>'
                 : "") +
+              statusDotHtml(s) +
             "</span>" +
             '<span class="m3e-list-item__supporting">' + esc(s.url) + "</span>" +
           "</span>" +
           '<span class="m3e-list-item__trailing">' +
-            statusDotHtml(s) +
             // 「进去看」= 真的进这个源的首页;点行只切源、留在源页,两件事分开(I5)
             '<button type="button" class="m3e-icon-button m3e-icon-button--standard src-row__go"' +
               ' data-act="home" data-idx="' + idx + '" title="进去看" aria-label="进去看 · ' + esc(s.name) + '">' +
@@ -2195,6 +2203,24 @@ async function removeSource(src) {
   if (S.source === src) await switchSource(list[0]);
 }
 
+/** 「导入」菜单:网络索引 / JSON 文件 / 插件文件。底栏只有这一个入口(§2.6) */
+function openImportMenu(anchor) {
+  return openMenu(
+    anchor,
+    [
+      { type: "label", label: "导入源" },
+      { id: "index", label: "从网络索引导入", icon: "public" },
+      { id: "json", label: "导入 JSON 文件", icon: "data_object" },
+      { id: "plugin", label: "导入插件(.webox.js)", icon: "extension" },
+    ],
+    (id) => {
+      if (id === "index") importFromIndex();
+      else if (id === "json") $("srcFile").click();
+      else if (id === "plugin") $("pluginFile").click();
+    }
+  );
+}
+
 /** 网络导入:跳过的 iplayr 爬取配置要明说,不能静默丢 */
 async function importFromIndex() {
   const url = await promptDialog("网络导入源", "索引地址", INDEX_URL, "https://.../index.json", "导入");
@@ -2315,9 +2341,8 @@ function bindSourceManager() {
     $("srcAdd").dataset.bound = "1";
     $("srcAdd").onclick = () => editSource(null);
     if ($("srcClip")) $("srcClip").onclick = () => addFromClipboard();
-    $("srcIndex").onclick = importFromIndex;
-    $("srcImport").onclick = () => $("srcFile").click();
-    $("srcPlugin").onclick = () => $("pluginFile").click();
+    // 底栏只剩「添加源 / 导入」两个键:三个导入方式收进菜单(评审 V2)
+    if ($("srcImport")) $("srcImport").onclick = (e) => openImportMenu(e.currentTarget);
     $("pluginFile").onchange = importPluginFile;
     $("srcFile").onchange = importJsonFile;
     // 全部测速:之前 onclick 是空的,点了一点反应都没有(I6)
@@ -2617,7 +2642,11 @@ function fillAbout() {
 
 function fillLogPath() {
   const el = $("logPath");
-  if (el) el.textContent = (APP_INFO && APP_INFO.log_path) || "读取中…";
+  if (!el) return;
+  const p = (APP_INFO && APP_INFO.log_path) || "";
+  el.textContent = p || "读取中…";
+  // 两行 clamp 之后必然有截断,title 兜住完整路径
+  if (p) el.title = p;
 }
 
 async function loadAppInfo() {
@@ -3650,7 +3679,9 @@ let currentView = "home";
 
 function layoutControls() {
   const controls = $("controls");
-  const wide = window.matchMedia("(min-width: 840px)").matches;
+  // 840–1119 时左侧栏换成了 84 的 rail(没有 sideControls 这一格),
+  // 切源按钮与搜索框跟着回到首页顶栏,1120 起才回到侧栏
+  const wide = window.matchMedia("(min-width: 1120px)").matches;
   const target = wide ? $("sideControls") : $("topbar");
   if (controls.parentElement !== target) target.appendChild(controls);
   controls.style.display = "";

@@ -334,6 +334,10 @@
   /* 喜欢:自己的 app bar + 复用首页卡片网格 */
   .fav-bar { flex: none; display: flex; align-items: center; height: 56px; padding: 0 16px; }
   @media (min-width: 840px) { .fav-bar { padding-inline: 24px; } }
+  /* 喜欢页:compact 固定 2 列。收藏是"一眼挑一条",3 列会把封面和标题压得太小(§7.6) */
+  @media (max-width: 599px) {
+    #favGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
+  }
   /* 详情页标题旁的 ♡ */
   .detail-title { display: flex; align-items: flex-start; gap: 6px; }
   .detail-title h2 { flex: 1; min-width: 0; }
@@ -435,6 +439,39 @@
     color: var(--m3e-sys-color-on-surface-variant);
   }
 
+  /* 二级页里的一行设置:左文(标题 + 摘要)右控件;--stack 时上下叠 */
+  .set-row { display: flex; align-items: center; gap: 16px; }
+  .set-row + .set-row { margin-top: 16px; }
+  .set-row--stack { flex-direction: column; align-items: stretch; gap: 12px; }
+  .set-row__text { flex: 1; min-width: 0; }
+  /* 标题与摘要必须是两块,不然 b 和 span 会在同一行连成病句(评审 V4) */
+  .set-row__text b {
+    display: block;
+    font: 500 16px/24px system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface);
+  }
+  .set-row__text span {
+    display: block; margin-top: 2px;
+    font: 400 14px/20px system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant);
+  }
+  .set-block { display: flex; flex-direction: column; }
+  .set-block__head { display: flex; align-items: center; min-height: 24px; }
+  .set-block__title {
+    font: 500 16px/24px system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface);
+  }
+  /* 日志路径:等宽 12/18、两行截断、任意位置换行(评审 V5) */
+  .set-mono {
+    margin: 8px 0 0; padding: 10px 12px; border-radius: 12px;
+    background: var(--m3e-sys-color-surface-container-high);
+    font: 400 12px/18px ui-monospace, Consolas, monospace;
+    color: var(--m3e-sys-color-on-surface-variant);
+    overflow-wrap: anywhere; word-break: break-word;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
   /* 入口行:图标容器 40×40 r12 + 标题 + 当前值摘要 + chevron */
   .set-entry {
     display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box;
@@ -517,7 +554,7 @@
   .set-page__back:hover { background: var(--m3e-sys-color-surface-container-high); }
   .set-page__back .m3e-icon { font-size: 24px; }
   .set-page__title {
-    flex: 1; min-width: 0; margin: 0; padding-inline: 4px;
+    flex: 1; min-width: 0; margin: 0; padding-inline: 0;
     font: 600 22px/28px system-ui, "PingFang SC", sans-serif; letter-spacing: 0;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
@@ -540,12 +577,9 @@
     padding-bottom: env(safe-area-inset-bottom);
   }
   .set-page__footer .m3e-button { height: 40px; flex: none; white-space: nowrap; }
+  /* 主按钮吃满剩余宽度(上限 240),次按钮固定 96 —— 底栏永远只有这两个(§2.6) */
   .set-page__primary { flex: 1 1 auto; max-width: 240px; min-width: 96px; }
-  .set-page__secondary { flex: none; }
-  /* 手机上一行放不下就横向滚,不要把按钮文字挤成竖排 */
-  @media (max-width: 599px) {
-    .set-page__footer { overflow-x: auto; }
-  }
+  .set-page__secondary { flex: 0 0 auto; width: 96px; }
   /* push 进入的二级页盖住主导航(M3 的 detail 页不显示底栏) */
   body[data-setpage] .float-tabs { display: none; }
   .set-acts { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -562,6 +596,7 @@
     .set-master {
       display: flex; flex-direction: column; flex: none; width: 336px; box-sizing: border-box;
       padding: 16px 8px; overflow-y: auto;
+      /* 1px solid:亚像素分隔线在 175% 缩放的屏上会渲染成 0.571 CSS px(评审 §三) */
       border-inline-end: 1px solid var(--m3e-sys-color-outline-variant);
     }
     .set-home { display: none; }
@@ -571,6 +606,19 @@
     .set-page__scroll { padding: 8px 24px 40px; }
     .set-page__body { max-width: 720px; }
     .set-page__footer { padding-inline: 24px; }
+  }
+  /* 840–1119:宽屏但不宽裕。主导航收成 84 的 rail、设置 master 收到 280,
+     把横向量留给二级页内容;1120 起恢复 336 + 整列侧栏(评审 §三 宽屏右列被挤到 385) */
+  @media (min-width: 840px) and (max-width: 1119px) {
+    .side { display: none; }
+    .rail { display: flex; width: 84px; }
+    .cattabs { display: flex; }
+    .toolbar { padding-inline: 16px; }
+    .scroll { padding-inline: 16px; }
+    .set-master { width: 280px; }
+  }
+  @media (min-width: 1120px) {
+    .set-master { width: 336px; }
   }
   .seg { display: flex; flex-wrap: wrap; gap: 8px; }
   .seg button {
@@ -873,33 +921,75 @@
   .m3e-filter-chip__leading { display: inline-flex; align-items: center; justify-content: center; }
   .m3e-filter-chip__check { display: inline-flex; align-items: center; justify-content: center; }
   .m3e-filter-chip__check svg { display: block; }
-  /* 源管理:m3e 的 list item(每项:名称 / 类型 / 地址 + 右侧编辑删除) */
-  .src-list, .srcmgr { display: flex; flex-direction: column; gap: 2px; }
-  .srcmgr .m3e-list-item, .src-list .m3e-list-item { border-radius: 16px; }
-  .srcmgr .m3e-list-item[data-active="1"] {
+  /* 源管理:m3e list item,行高 72 = 40×40 图标容器 + 名称/地址 + 行尾两个按钮。
+     数值出自 docs/DESIGN-SPEC-UI.md §2.3 / §3.1。 */
+  .src-list, .srcmgr { display: flex; flex-direction: column; gap: 4px; }
+  .srcmgr .m3e-list-item, .src-list .m3e-list-item { border-radius: 16px; min-height: 72px; }
+  .srcmgr .m3e-list-item:hover,
+  .srcmgr .m3e-list-item:focus-within {
+    background: var(--m3e-sys-color-surface-container-high);
+  }
+  /* 图标容器 40×40 r12:颜色按类型(点播 secondary / 插件 tertiary / 直播 error) */
+  .srcmgr .m3e-list-item__leading {
+    flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
     background: var(--m3e-sys-color-secondary-container);
     color: var(--m3e-sys-color-on-secondary-container);
   }
-  .srcmgr .m3e-list-item__content .m3e-list-item__headline {
-    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
-    font: 600 13.5px/1.45 system-ui, "PingFang SC", sans-serif;
+  .srcmgr .m3e-list-item__leading .m3e-icon { font-size: 24px; color: inherit; }
+  .srcmgr .m3e-list-item[data-type="plugin"] .m3e-list-item__leading {
+    background: var(--m3e-sys-color-tertiary-container);
+    color: var(--m3e-sys-color-on-tertiary-container);
   }
+  .srcmgr .m3e-list-item[data-type="live"] .m3e-list-item__leading {
+    background: var(--m3e-sys-color-error-container);
+    color: var(--m3e-sys-color-on-error-container);
+  }
+  /* 当前源:容器换成 primary + 名称 600,行底不铺色(§2.4) */
+  .srcmgr .m3e-list-item[aria-current="true"] .m3e-list-item__leading {
+    background: var(--m3e-sys-color-primary);
+    color: var(--m3e-sys-color-on-primary);
+  }
+  .srcmgr .m3e-list-item__content .m3e-list-item__headline {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;
+  }
+  .srcmgr .src-row__name {
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 500 16px/24px system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface);
+  }
+  .srcmgr .m3e-list-item[aria-current="true"] .src-row__name { font-weight: 600; }
+  /* 状态点在标题行里,被 margin auto 顶到行尾:天然与名称行居中(§2.3) */
+  .srcmgr .m3e-list-item__headline .status-dot { margin-inline-start: auto; }
   .srcmgr .m3e-list-item__content .m3e-list-item__supporting,
   .src-list .m3e-list-item__content .m3e-list-item__supporting {
     margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font: 500 11.5px/1.5 system-ui, "PingFang SC", sans-serif;
-    color: var(--m3e-sys-color-on-surface-variant); max-width: 42ch;
+    font: 400 11.5px/16px ui-monospace, Consolas, monospace;
+    color: var(--m3e-sys-color-on-surface-variant);
   }
-  .srcmgr .m3e-list-item__leading .m3e-icon,
   .src-list .m3e-list-item__leading .m3e-icon { font-size: 22px;
     color: var(--m3e-sys-color-on-surface-variant); }
-  .srcmgr .m3e-list-item[data-active="1"] .m3e-list-item__leading .m3e-icon { color: inherit; }
-  .srcmgr .m3e-list-item__trailing { gap: 2px; }
+  .srcmgr .m3e-list-item__trailing { gap: 4px; }
+  .srcmgr .m3e-list-item__trailing .m3e-icon-button {
+    color: var(--m3e-sys-color-on-surface-variant);
+  }
+  /* 类型徽标:高 24 / 12px / 按类型上色。只回答"这源怎么播",子类型不进徽标(§3.3) */
   .src-badge {
-    font: 600 10.5px/1 system-ui, "PingFang SC", sans-serif; padding: 3px 7px; border-radius: 8px;
+    display: inline-flex; align-items: center; flex: none;
+    height: 24px; padding: 0 8px; border-radius: 8px;
+    font: 500 12px/16px system-ui, "PingFang SC", sans-serif; letter-spacing: .02em;
     background: var(--m3e-sys-color-surface-container-highest);
     color: var(--m3e-sys-color-on-surface-variant);
   }
+  .src-badge[data-type="vod"] {
+    background: var(--m3e-sys-color-secondary-container);
+    color: var(--m3e-sys-color-on-secondary-container);
+  }
+  .src-badge[data-type="plugin"] {
+    background: var(--m3e-sys-color-tertiary-container);
+    color: var(--m3e-sys-color-on-tertiary-container);
+  }
+  .src-badge[data-type="live"],
   .src-badge--warn {
     background: var(--m3e-sys-color-error-container);
     color: var(--m3e-sys-color-on-error-container);
@@ -943,11 +1033,16 @@
     max-width: 460px; margin: 26px auto 0; padding: 26px 22px 22px;
     display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
   }
-  .state__icon { font-size: 40px; color: var(--m3e-sys-color-on-surface-variant); opacity: .7; }
+  /* 盒子必须跟着字形一起放大:24×24 的盒子装 40px 字形会把图标裁成一段残弧(评审 V3) */
+  .state__icon {
+    box-sizing: border-box; width: 40px; height: 40px; display: grid; place-items: center;
+    --m3e-comp-icon-size: 40px; font-size: 40px; line-height: 40px;
+    color: var(--m3e-sys-color-on-surface-variant); opacity: .7;
+  }
   .state--error .state__icon { color: var(--m3e-sys-color-error); opacity: 1; }
-  .state__title { font: 600 15px/1.45 system-ui, "PingFang SC", sans-serif; }
+  .state__title { font: 600 22px/28px system-ui, "PingFang SC", sans-serif; }
   .state__msg {
-    font: 500 13px/1.65 system-ui, "PingFang SC", sans-serif;
+    font: 400 14px/20px system-ui, "PingFang SC", sans-serif;
     color: var(--m3e-sys-color-on-surface-variant); max-width: 34em;
   }
   .state__acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
@@ -1090,6 +1185,11 @@
                 </button>
                 <h2 class="set-page__title">源</h2>
                 <div class="set-page__acts">
+                  <!-- 从剪贴板是低频动作:收进 app bar,底栏只留 主 + 导入(评审 V2) -->
+                  <button type="button" class="m3e-icon-button m3e-icon-button--standard" id="srcClip"
+                    title="从剪贴板添加" aria-label="从剪贴板添加">
+                    <span class="m3e-icon" aria-hidden="true">content_paste</span>
+                  </button>
                   <button type="button" class="m3e-button m3e-button--text" id="btnTestAll">全部测速</button>
                 </div>
               </header>
@@ -1100,12 +1200,16 @@
                   <div class="srcmgr" id="srcmgr"></div>
                 </div>
               </div>
+              <!-- 底栏只留 2 个键:主(flex:1 max 240)+ 导入(96,开菜单三项)。
+                   390 视口放 5 个键会溢出,「导入插件」整颗看不见(评审 V2) -->
               <footer class="set-page__footer">
-                <button type="button" class="m3e-button set-page__primary" id="srcAdd">添加源</button>
-                <button type="button" class="m3e-button m3e-button--outlined set-page__secondary" id="srcClip">从剪贴板</button>
-                <button type="button" class="m3e-button m3e-button--outlined set-page__secondary" id="srcIndex">网络索引</button>
-                <button type="button" class="m3e-button m3e-button--outlined set-page__secondary" id="srcImport">导入 JSON</button>
-                <button type="button" class="m3e-button m3e-button--outlined set-page__secondary" id="srcPlugin">导入插件</button>
+                <button type="button" class="m3e-button set-page__primary" id="srcAdd">
+                  <span class="m3e-icon" aria-hidden="true">add</span>添加源
+                </button>
+                <button type="button" class="m3e-button m3e-button--outlined set-page__secondary"
+                  id="srcImport" aria-haspopup="menu">
+                  <span class="m3e-icon" aria-hidden="true">file_upload</span>导入
+                </button>
                 <input type="file" id="srcFile" accept=".json,application/json" hidden>
                 <input type="file" id="pluginFile" accept=".js,text/javascript" hidden>
               </footer>
