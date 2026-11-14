@@ -61,6 +61,8 @@ async function init() {
   bindDebugToggle();
   bindWheelScroll();
   S.srcFilter = prefGet("reelbox.srcFilter", "all");
+  S.favs = favAll();
+  renderFavs();
   log("init start");
   initPluginHost({ invoke: invoke, log: log });
   {
@@ -1036,6 +1038,144 @@ function resetGrid() {
   $("grid").innerHTML = "";
 }
 
+/* ---------- 收藏(喜欢) ---------- */
+// localStorage["reelbox.favs"]:键 = 源id|片名,值 = {sourceId,id,title,poster,addedAt}。
+// 键里带源 id,同名片在不同源里是两条;源被删掉时条目留着(不可播,点了会说清楚)。
+
+const FAV_KEY = "reelbox.favs";
+
+function favAll() {
+  try {
+    const v = JSON.parse(localStorage.getItem(FAV_KEY) || "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function favSave(map) {
+  try { localStorage.setItem(FAV_KEY, JSON.stringify(map)); } catch (_) {}
+  S.favs = map;
+}
+
+function favKey(sourceId, title) {
+  return String(sourceId || "") + "|" + String(title || "");
+}
+
+function favGet(sourceId, title) {
+  return favAll()[favKey(sourceId, title)] || null;
+}
+
+/** 新的在前 */
+function favList() {
+  const all = favAll();
+  return Object.keys(all)
+    .map((k) => all[k])
+    .filter((f) => f && f.title)
+    .sort((a, b) => String(b.addedAt || "").localeCompare(String(a.addedAt || "")));
+}
+
+/** 收藏/取消收藏;返回 true 表示现在是收藏状态 */
+function favToggle(fav) {
+  const all = favAll();
+  const k = favKey(fav.sourceId, fav.title);
+  let on;
+  if (all[k]) {
+    delete all[k];
+    on = false;
+  } else {
+    all[k] = {
+      sourceId: String(fav.sourceId || ""),
+      id: String(fav.id || ""),
+      title: String(fav.title || ""),
+      poster: String(fav.poster || ""),
+      addedAt: new Date().toISOString(),
+    };
+    on = true;
+  }
+  favSave(all);
+  renderFavs();
+  return on;
+}
+
+function syncFavBtn(btn, on) {
+  if (!btn) return;
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  const label = on ? "取消收藏" : "收藏";
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+}
+
+/** 详情页标题旁的 ♡:实心 = 已收藏(aria-pressed 同时给读屏和样式用) */
+function favBtnHtml(d) {
+  const on = !!favGet(S.source && S.source.id, d.title);
+  return (
+    '<button type="button" class="m3e-icon-button m3e-icon-button--standard fav-btn" id="btnFav"' +
+    ' aria-pressed="' + (on ? "true" : "false") + '"' +
+    ' aria-label="' + (on ? "取消收藏" : "收藏") + '" title="' + (on ? "取消收藏" : "收藏") + '">' +
+    '<span class="m3e-icon" aria-hidden="true">favorite</span></button>'
+  );
+}
+
+/** 喜欢页:复用首页卡片(同一套 .card / .poster),点进去走 openFav */
+function renderFavs() {
+  const grid = $("favGrid");
+  const empty = $("favEmpty");
+  if (!grid || !empty) return;
+  const list = favList();
+  grid.innerHTML = list
+    .map((f, i) => {
+      const src = (S.sources || []).find((s) => s.id === f.sourceId);
+      return (
+        '<article class="card" data-fav="' + i + '"><div class="poster">' +
+        (src ? '<span class="badge">' + esc(src.name) + "</span>" : "") +
+        '</div><div class="meta"><b>' + esc(f.title) + "</b></div></article>"
+      );
+    })
+    .join("");
+
+  const cards = Array.from(grid.children);
+  list.forEach((f, i) => {
+    const el = cards[i];
+    if (!el || !f.poster) return;
+    const box = el.querySelector(".poster");
+    posterFor(f.poster)
+      .then((u) => {
+        const img = document.createElement("img");
+        img.alt = "";
+        img.src = u;
+        box.classList.add("has-img");
+        box.prepend(img);
+      })
+      .catch(() => {});
+  });
+
+  empty.style.display = list.length ? "none" : "";
+  if (list.length) {
+    empty.innerHTML = "";
+    return;
+  }
+  empty.innerHTML = stateCard({
+    icon: "favorite",
+    title: "还没有收藏",
+    msg: "在剧集详情页点一下标题旁的 ♡,就会收到这里。",
+    actions: [{ id: "home", label: "去首页看看" }],
+  });
+  const b = empty.querySelector('[data-act="home"]');
+  if (b) b.onclick = () => showView("home");
+}
+
+/** 收藏项 → 详情:先切回收藏时的那个源,再打开 */
+async function openFav(f) {
+  const src = (S.sources || []).find((s) => s.id === f.sourceId);
+  if (!src) {
+    alertDialog("源不在了", "「" + f.title + "」是用一个已经删掉的源收藏的,加回那个源才能看。");
+    return;
+  }
+  if (!S.source || S.source.id !== src.id) await switchSource(src);
+  await openDetail({ id: f.id, title: f.title, poster: f.poster || "" });
+}
+
 function renderDetail(d) {
   const summary = (d.summary || "").replace(/[\s\u3000]+/g, " ").trim();
   S.detailTitle = d.title;
@@ -1075,7 +1215,7 @@ function renderDetail(d) {
       '<div class="detail-top">' +
         '<div class="hero"><img alt=""></div>' +
         '<div class="hero-meta">' +
-          "<h2>" + esc(d.title) + "</h2>" +
+          '<div class="detail-title"><h2>' + esc(d.title) + "</h2>" + favBtnHtml(d) + "</div>" +
           (summary ? '<p id="sum">' + esc(summary) + "</p>" : "") +
           (summary.length > 90 ? '<button class="more" id="btnMore">展开</button>' : "") +
         "</div>" +
@@ -1085,6 +1225,20 @@ function renderDetail(d) {
     "</div>";
 
   $("btnBack").onclick = () => showView("home");
+
+  const btnFav = $("btnFav");
+  if (btnFav) {
+    btnFav.onclick = () => {
+      const on = favToggle({
+        sourceId: S.source && S.source.id,
+        id: S.detailId || d.id,
+        title: d.title,
+        poster: d.poster || "",
+      });
+      syncFavBtn(btnFav, on);
+      toast(on ? "已加入「喜欢」" : "已取消收藏", on ? { actionLabel: "去看看", onAction: () => showView("fav") } : undefined);
+    };
+  }
 
   const btnResume = $("btnResume");
   if (btnResume)
@@ -2633,6 +2787,7 @@ function showView(key) {
   if (list) list.style.display = onHome ? "" : "none";
   if (divider) divider.style.display = onHome ? "" : "none";
   if (onHome) renderParents();
+  if (key === "fav") renderFavs();
   if (key === "settings") {
     bindSettings();
     // 进设置 = 回到入口列表(expanded 下左列常驻,默认落在「源」)
@@ -2686,6 +2841,11 @@ document.addEventListener("click", (e) => {
     rememberCategory();
     renderChildren();
     return loadItems();
+  }
+  const favCard = e.target.closest("[data-fav]");
+  if (favCard) {
+    const f = favList()[Number(favCard.getAttribute("data-fav"))];
+    if (f) return openFav(f);
   }
   const card = e.target.closest(".card");
   if (card) {

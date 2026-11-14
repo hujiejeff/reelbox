@@ -308,6 +308,21 @@
   .chip-ep:hover { background: var(--m3e-sys-color-surface-container-high); }
   .chip-ep:active { transform: scale(.97); }
 
+  /* 喜欢:自己的 app bar + 复用首页卡片网格 */
+  .fav-bar { flex: none; display: flex; align-items: center; height: 56px; padding: 0 16px; }
+  @media (min-width: 840px) { .fav-bar { padding-inline: 24px; } }
+  /* 详情页标题旁的 ♡ */
+  .detail-title { display: flex; align-items: flex-start; gap: 6px; }
+  .detail-title h2 { flex: 1; min-width: 0; }
+  .fav-btn { flex: none; margin-top: -4px; }
+  .fav-btn .m3e-icon {
+    font-variation-settings: "FILL" 0; color: var(--m3e-sys-color-on-surface-variant);
+    transition: color 150ms cubic-bezier(.2,0,0,1);
+  }
+  .fav-btn[aria-pressed="true"] .m3e-icon {
+    font-variation-settings: "FILL" 1; color: var(--m3e-sys-color-primary);
+  }
+
   /* 详情页:窄屏(手机) */
   @media (max-width: 599px) {
     .detail-wrap { padding: 4px 14px 36px; }
@@ -1017,7 +1032,11 @@
       </div>
 
       <div class="view" id="v-fav">
-        <div class="placeholder"><span class="m3e-icon">favorite</span><b>还没有收藏</b><span>在详情页点 ♡ 收藏</span></div>
+        <div class="fav-bar"><h2 class="set-page__title">喜欢</h2></div>
+        <div class="scroll" id="favScroll">
+          <div class="grid" id="favGrid"></div>
+          <div class="empty" id="favEmpty" style="display:none"></div>
+        </div>
       </div>
 
       <div class="view" id="v-settings">
