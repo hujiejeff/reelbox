@@ -3,8 +3,6 @@
 //! 宿主只暴露一个能力:`ctx.http.get(url)`(真正的网络请求在 Rust 里做)。
 //! 每次调用钩子返回 JSON 字符串,方便上层直接塞给前端。
 
-use std::any::Any;
-
 use boa_engine::{js_string, Context as JsContext, JsValue, NativeFunction, Source};
 
 use super::PluginMeta;
@@ -83,7 +81,7 @@ globalThis.__R = undefined; globalThis.__E = undefined;
     var f = globalThis.__DEFINE["{hook}"];
     if (typeof f !== "function") {{ globalThis.__E = "没有实现 {hook}"; return; }}
     var arg = Object.assign({{}}, ctx, {arg_json});
-    Promise.resolve(f.call(globalThis.__DEFINE, arg)).then(
+    Promise.resolve(f.call(globalThis.__DEFINE, arg, arg)).then(
       function (v) {{ try {{ globalThis.__R = JSON.stringify(v); }} catch (e) {{ globalThis.__R = String(v); }} }},
       function (e) {{ globalThis.__E = String(e && e.message ? e.message : e); }}
     );

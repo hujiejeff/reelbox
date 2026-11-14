@@ -18,12 +18,23 @@ pub struct PluginMeta {
     pub api: String,
 }
 
-/// 从插件源码里抽 `WeBox.define({...})` 的字段
+/// 从插件源码里抽 `reelbox.define({...})` 或 `WeBox.define({...})` 的字段
 pub fn parse_meta(js: &str) -> Result<PluginMeta, String> {
-    let start = js
-        .find("WeBox.define(")
-        .ok_or_else(|| "找不到 WeBox.define(".to_string())?;
-    let body = &js[start + "WeBox.define(".len()..];
+    // 原生契约优先,其次兼容 WeBox
+    const NATIVE: &str = "reelbox.define(";
+    const LEGACY: &str = "WeBox.define(";
+    let start = match js.find(NATIVE) {
+        Some(i) => i,
+        None => js
+            .find(LEGACY)
+            .ok_or_else(|| "找不到 reelbox.define( 或 WeBox.define(".to_string())?,
+    };
+    let prefix_len = if js[start..].starts_with(NATIVE) {
+        NATIVE.len()
+    } else {
+        LEGACY.len()
+    };
+    let body = &js[start + prefix_len..];
     let obj_start = body.find('{').ok_or_else(|| "define() 里没有对象".to_string())?;
     let obj = &body[obj_start..];
     let map = parse_object(obj)?;
@@ -289,6 +300,77 @@ WeBox.define({
         assert_eq!(fs.len(), 1);
         assert_eq!(fs[0].key, "classify");
         assert_eq!(fs[0].options.len(), 2);
+    }
+
+    /// 原生契约样例:reelbox.define + ctx.fail + play 返回多档数组
+    const NATIVE_DEMO: &str = r#"reelbox.define({
+  id: "test.native",
+  name: "原生样例",
+  version: "1.0.0",
+  api: 1,
+  caps: ["http"],
+  filters: async function (ctx) {
+    return [{ key: "c", label: "分类", options: [{ label: "全部", value: "" }] }];
+  },
+  list: async function (ctx, args) {
+    return { items: [{ id: "n1", title: "原生第一条" }], next: "2" };
+  },
+  play: async function (ctx, args) {
+    if (!args.id) ctx.fail("parse", "缺 id");
+    return [
+      { quality: "1080P", url: "https://x/1080.m3u8" },
+      { quality: "720P", url: "https://x/720.m3u8" }
+    ];
+  }
+});"#;
+
+    fn write_native() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("reelbox-plugin-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("demo.reelbox.js");
+        std::fs::write(&p, NATIVE_DEMO).unwrap();
+        p
+    }
+
+
+    #[test]
+    fn parses_native_reelbox_define() {
+        let m = parse_meta(NATIVE_DEMO).unwrap();
+        assert_eq!(m.id, "test.native");
+        assert_eq!(m.name, "原生样例");
+        assert_eq!(m.version, "1.0.0");
+    }
+
+    #[test]
+    fn native_meta_still_accepts_webox() {
+        assert_eq!(parse_meta(DEMO).unwrap().name, "本地插件源");
+    }
+
+    #[test]
+    fn runs_native_list_from_file() {
+        let p = write_native();
+        let out = run_file(&p, "list", "{}", Box::new(|_| None)).unwrap();
+        let page = crate::plugin::adapt::page_from_json(&out).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].title, "原生第一条");
+    }
+
+    #[test]
+    fn runs_native_play_returns_array() {
+        let p = write_native();
+        let out = run_file(&p, "play", r#"{"id":"n1"}"#, Box::new(|_| None)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = v.as_array().expect("play 应返回数组");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["quality"], "1080P");
+        assert_eq!(arr[1]["url"], "https://x/720.m3u8");
+    }
+
+    #[test]
+    fn native_fail_reports_message() {
+        let p = write_native();
+        let err = run_file(&p, "play", r#"{"id":""}"#, Box::new(|_| None)).unwrap_err();
+        assert!(err.contains("缺 id"), "实际: {err}");
     }
 
     #[test]

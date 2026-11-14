@@ -32,6 +32,10 @@ reelbox.define({
 
 `items` 里每条:`{id, title, poster?, subtitle?, kind?}`
 
+钩子签名固定为 `(ctx, args)`;宿主会把同一个合并对象同时作为这两个参数传入,所以老式 `function (ctx) { ctx.page }` 的写法也还能跑。
+
+`items` 也可以写成 `list`(WeBox 风格),两种都认。
+
 **`next` 是游标不是页码** —— 有下一页就返回任意非空字符串,没有了就返回 `""`。
 
 **`play` 可以返回数组** —— 多档清晰度会出现在播放器的画质菜单里。

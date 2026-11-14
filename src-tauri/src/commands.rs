@@ -104,8 +104,21 @@ pub async fn play(source: Source, episode_id: String) -> Result<Stream, String> 
             let out = plugin::run_file(&path, "play", &arg, plugin_fetch())?;
             let mut v: serde_json::Value =
                 serde_json::from_str(&out).map_err(|e| format!("play 返回值不是 JSON: {e}"))?;
-            // play 允许返回数组(多清晰度),先取第一个
+            // play 允许返回数组(多清晰度):url 取第一档,其余放进 options
+            let mut options = Vec::new();
             if let Some(arr) = v.as_array() {
+                for (i, one) in arr.iter().enumerate() {
+                    let u = one.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    if u.is_empty() {
+                        continue;
+                    }
+                    let q = one
+                        .get("quality")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("档 {}", i + 1));
+                    options.push(reelbox_core::model::StreamOption { quality: q, url: u });
+                }
                 v = arr.first().cloned().unwrap_or(serde_json::Value::Null);
             }
             let url = v
@@ -125,6 +138,7 @@ pub async fn play(source: Source, episode_id: String) -> Result<Stream, String> 
                 url,
                 mime: "application/vnd.apple.mpegurl".into(),
                 headers,
+                options,
             })
         })
         .await;

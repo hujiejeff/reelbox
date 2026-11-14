@@ -168,6 +168,7 @@ impl Client {
             url: media.to_string(),
             mime: mime.to_string(),
             headers,
+            options: Vec::new(),
         })
     }
 

@@ -18,15 +18,18 @@ fn pick<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
     None
 }
 
-/// 插件返回的列表:`{ list: [...] }` 或直接数组
+/// 插件返回的列表:`{ list: [...] }`(WeBox)、`{ items: [...] }`(原生) 或直接数组
 pub fn page_from_json(text: &str) -> Result<Page, String> {
     let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("不是 JSON: {e}"))?;
     let arr = if let Some(a) = v.as_array() {
         a.clone()
-    } else if let Some(a) = v.get("list").and_then(|x| x.as_array()) {
+    } else if let Some(a) = ["list", "items", "data", "result"]
+        .iter()
+        .find_map(|k| v.get(*k).and_then(|x| x.as_array()))
+    {
         a.clone()
     } else {
-        return Err("没有 list 数组".into());
+        return Err("没有 list/items 数组".into());
     };
 
     let mut items = Vec::new();

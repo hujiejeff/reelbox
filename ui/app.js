@@ -705,6 +705,28 @@ function pTogglePlay() {
 
 function renderLevels() {
   const btn = $("pQuality");
+  const menu0 = $("pLevels");
+  // 插件给了多档:直接用插件的档位
+  const opts = (playCtx && playCtx.options) || [];
+  if (opts.length > 1) {
+    btn.hidden = false;
+    const cur = (playCtx && playCtx.quality) || opts[0].quality;
+    btn.textContent = cur;
+    menu0.innerHTML = opts
+      .map((o, i) => '<button data-opt="' + i + '">' + esc(o.quality) + "</button>")
+      .join("");
+    menu0.querySelectorAll("button").forEach((b) => {
+      const i = Number(b.getAttribute("data-opt"));
+      if (opts[i].quality === cur) b.setAttribute("aria-current", "true");
+      b.onclick = () => {
+        menu0.hidden = true;
+        playCtx.quality = opts[i].quality;
+        openPlayer(opts[i].url, $("pTitle").textContent);
+        renderLevels();
+      };
+    });
+    return;
+  }
   const menu = $("pLevels");
   const heights = new Set((hls && hls.levels ? hls.levels : []).map((l) => l.height || 0));
   if (!hls || !hls.levels || hls.levels.length < 2 || heights.size < 2) {
@@ -981,6 +1003,17 @@ async function playEpisode(id, name) {
   try {
     const st = await invoke("play", { source: S.source, episodeId: id });
     const local = await invoke("player_url", { stream: st });
+    // 多清晰度:每档都给一个代理地址
+    const opts = [];
+    if (st.options && st.options.length > 1) {
+      for (const o of st.options) {
+        const u = await invoke("player_url", {
+          stream: { url: o.url, mime: st.mime, headers: st.headers, options: [] },
+        });
+        opts.push({ quality: o.quality, url: u });
+      }
+    }
+    if (playCtx) playCtx.options = opts;
     log("stream", st.mime, String(local).slice(0, 60));
     openPlayer(local, name);
   } catch (e) {

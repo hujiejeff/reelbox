@@ -179,12 +179,6 @@ function makePage(html, url) {
   return { $: $, url: url, html: html };
 }
 
-ctx.fail = function (code, msg) {
-  var e = new Error(msg || code);
-  e.code = code;
-  throw e;
-};
-
 var ctx = {
   http: {
     get: function (u) {
@@ -203,4 +197,11 @@ var ctx = {
       return Date.now();
     },
   },
+};
+
+// 分类错误:network / parse / auth / unsupported
+ctx.fail = function (code, msg) {
+  var e = new Error(msg || code);
+  e.code = code;
+  throw e;
 };

@@ -51,11 +51,20 @@ pub struct Detail {
 
 /// 最终交给播放器的地址。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StreamOption {
+    pub quality: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stream {
     pub url: String,
     pub mime: String,
     #[serde(default)]
     pub headers: std::collections::BTreeMap<String, String>,
+    /// 多清晰度:`url` 是默认档,这里放全部可选档(含默认)
+    #[serde(default)]
+    pub options: Vec<StreamOption>,
 }
 
 /// 筛选项的一个取值;parent 非空表示它是某个一级分类下的二级分类。
