@@ -98,7 +98,7 @@
   .chips::-webkit-scrollbar { display: none; }
   .m3e-filter-chip { flex: none; }
 
-  .scroll { flex: 1; overflow-y: auto; padding: 0 16px 96px; }
+  .scroll { flex: 1; overflow-y: auto; padding: 14px 16px 96px; }
   .grid { display: grid; gap: 16px 14px; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); }
   .card { cursor: pointer; }
   .poster { aspect-ratio: 2 / 3; border-radius: 18px;
@@ -163,6 +163,18 @@
   .chip-ep:hover { background: var(--m3e-sys-color-surface-container-high); }
   .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11px; word-break: break-all; max-width: 100%; }
   .placeholder span { max-width: 90%; }
+
+  /* 控件组:宽屏在侧栏纵向,窄屏在顶栏横向 */
+  .controls { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .side .controls { flex-direction: column; align-items: stretch; padding: 14px 12px 6px; }
+  .side .controls .src-btn { align-self: flex-start; }
+  .controls .searchbox { flex: 1; }
+  .search-go {
+    display: grid; place-items: center; width: 32px; height: 32px; flex: none;
+    border: none; border-radius: 50%; background: transparent; color: inherit; cursor: pointer;
+  }
+  .search-go:hover { background: var(--m3e-sys-color-surface-container-highest); }
+  .side__brand { display: none; }
 </style>
 </head>
 <body>
@@ -193,7 +205,7 @@
     </nav>
 
     <aside class="side" id="side">
-      <div class="side__brand">Reelbox</div>
+      <div id="sideControls"></div>
       <nav class="side__nav" aria-label="主导航">
         <button class="side__item" data-nav="home" aria-current="page"><span class="m3e-icon">home</span>首页</button>
         <button class="side__item" data-nav="fav"><span class="m3e-icon">favorite</span>喜欢</button>
@@ -204,22 +216,9 @@
     </aside>
 
     <div class="main">
-      <header class="topbar">
-        <button class="src-btn" id="srcBtn" aria-haspopup="true">
-          <span id="srcName">加载中</span>
-          <span class="m3e-icon" aria-hidden="true">arrow_drop_down</span>
-        </button>
-        <div class="srcmenu" id="srcMenu" role="menu"></div>
-      </header>
+      <header class="topbar" id="topbar"></header>
 
       <div class="view" data-on id="v-home">
-        <div class="toolbar">
-          <div class="searchbox">
-            <span class="m3e-icon" aria-hidden="true">search</span>
-            <input id="q" placeholder="搜索影片" autocomplete="off">
-          </div>
-          <button class="m3e-button m3e-button--filled m3e-button--size-m" type="button" id="btnSearch">搜索</button>
-        </div>
         <div class="cattabs" id="cattabs"></div>
         <div class="chips" id="childchips" style="display:none"></div>
         <div class="scroll" id="scroll">
@@ -237,6 +236,18 @@
       </div>
 
       <div class="view" id="v-detail"></div>
+    </div>
+  </div>
+
+  <div class="controls" id="controls" style="display:none">
+    <button class="src-btn" id="srcBtn" aria-haspopup="true">
+      <span id="srcName">加载中</span>
+      <span class="m3e-icon" aria-hidden="true">arrow_drop_down</span>
+    </button>
+    <div class="srcmenu" id="srcMenu" role="menu"></div>
+    <div class="searchbox">
+      <button class="search-go" id="btnSearch" aria-label="搜索"><span class="m3e-icon" aria-hidden="true">search</span></button>
+      <input id="q" placeholder="搜索影片" autocomplete="off">
     </div>
   </div>
 
