@@ -78,14 +78,20 @@ function rowHtml(r, isRecent) {
   return (
     '<button type="button" class="src-panel__row" data-idx="' + esc(r.idx) + '" data-src="' + esc(r.id) + '"' +
     (r.current ? ' aria-current="true"' : "") + ">" +
-      '<span class="m3e-icon src-panel__lead" aria-hidden="true">' +
-        (isRecent ? "history" : esc(r.icon || "dns")) + "</span>" +
+      '<span class="src-panel__lead" aria-hidden="true">' +
+        '<span class="m3e-icon">' + (isRecent ? "history" : esc(r.icon || "dns")) + "</span>" +
+      "</span>" +
       '<span class="src-panel__name">' + esc(r.name) + "</span>" +
-      (isRecent && r.icon ? '<span class="m3e-icon src-panel__type" aria-hidden="true">' + esc(r.icon) + "</span>" : "") +
-      '<span class="status-dot" data-state="' + esc(r.state || "untested") + '" role="img" aria-label="' +
-        esc(r.stateLabel || "未测速") + '"' + (r.stateLabel ? ' title="' + esc(r.stateLabel) + '"' : "") +
-      "></span>" +
-      (r.current ? '<span class="m3e-icon src-panel__check" aria-hidden="true">check</span>' : "") +
+      (isRecent && r.icon
+        ? '<span class="m3e-icon src-panel__type" aria-hidden="true">' + esc(r.icon) + "</span>"
+        : "") +
+      '<span class="src-panel__trail">' +
+        // health = 8dp 圆/方块/空心环;check = 18dp 对勾。两者不要混成一个点
+        '<span class="status-dot" data-state="' + esc(r.state || "untested") + '" role="img" aria-label="' +
+          esc(r.stateLabel || "未测速") + '"' + (r.stateLabel ? ' title="' + esc(r.stateLabel) + '"' : "") +
+        "></span>" +
+        (r.current ? '<span class="m3e-icon src-panel__check" aria-hidden="true">check</span>' : "") +
+      "</span>" +
     "</button>"
   );
 }
