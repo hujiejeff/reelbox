@@ -38,6 +38,7 @@ pub fn run() {
             commands::plugin_fetch,
             commands::plugin_stream_allow,
             commands::selftest_mode,
+            commands::selftest_title,
             commands::selftest_report,
         ])
         .run(tauri::generate_context!())

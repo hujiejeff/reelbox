@@ -254,9 +254,35 @@ async function runSelfTest() {
     if (!items.length) return await stop("列表为空");
     if (!report.list.ok) return await stop("首个条目没有中文片名");
 
+    /* ---- 指定片名(复现某个播不了的片):--selftest-title=xxx ---- */
+    const want = await invoke("selftest_title").catch(() => "");
+    let pick = first;
+    if (want) {
+      const match = (list) => (list || []).find((it) => String(it.title || "").indexOf(want) >= 0);
+      let hit = match(items);
+      if (!hit) {
+        // 列表里没有就用插件自己的 search 钩子捞
+        try {
+          const page = await fetchSearch(want, 1);
+          const found = page.items || [];
+          say("search " + JSON.stringify(want) + " n=" + found.length);
+          hit = match(found) || found[0];
+        } catch (e) {
+          say("search fail " + (e && e.message ? e.message : e));
+        }
+      }
+      if (hit) {
+        pick = hit;
+        report.list.picked = pick.title || "";
+        say("picked " + JSON.stringify(pick.title || "") + " id=" + pick.id);
+      } else {
+        say("picked none,回退列表第一条");
+      }
+    }
+
     /* ---- 详情 ---- */
     const t1 = Date.now();
-    const d = await openDetail(first);
+    const d = await openDetail(pick);
     const eps = (S.detailEps || []).slice();
     report.detail = {
       ms: Date.now() - t1,

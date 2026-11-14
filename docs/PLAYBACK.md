@@ -61,7 +61,7 @@ hls.js ──> http://127.0.0.1:<随机端口>/p?u=<base64url 地址>&h=<base64u
 cargo test -p reelbox-core
 ```
 
-期望:`10 passed; 0 failed`。其中三条覆盖分享页抽流:
+期望:`34 passed; 0 failed`。其中三条覆盖分享页抽流:
 
 - `finds_relative_m3u8` —— 相对路径 `/20251222/.../index.m3u8?sign=abc`
 - `finds_absolute_m3u8` —— 绝对地址
@@ -80,9 +80,36 @@ cargo build -p reelbox --target x86_64-pc-windows-gnu
 
 实测截图见 `docs/playback.png`(《百家讲坛》20251222,画面为 CCTV-10 片头)。
 
+## 识别真实流类型(2026-11-14 修)
+
+插件按**地址后缀**猜 mime,可签名地址往往没有后缀。4k影视 有些片名给的是
+ByteDance CDN 上的直链 mp4(`...~tplv-xxxx-image.image?x-sign=...`,598 MB),
+插件却写成 `application/vnd.apple.mpegurl` —— hls.js 把 mp4 当清单解析,直接
+`manifestParsingError`,页面停在 `readyState=0`。这就是"同一份二进制两次结果不同"的原因:
+列表第一条是哪个片名由源站更新决定,不是随机抖动。
+
+所以宿主不再相信插件声明的 mime,播放前用 `stream_kind` 探一次真实字节:
+
+```
+play 钩子 ──> {url, mime:"application/vnd.apple.mpegurl"}   ← 插件说的
+stream_kind ──> 取头 4KB(Range: bytes=0-4095)
+                ├─ #EXTM3U            → kind=hls   → hls.js
+                ├─ ftyp/moov/mdat…    → kind=file  → 原生 <video src=反代地址>
+                └─ 认不出来           → kind=unknown → 仍走 hls.js(错误照旧上报)
+```
+
+反代同步收紧:
+
+- **只改写真正的清单**:body 以 `#EXTM3U` 开头才逐行改写;不是清单就原样回传,
+  不再"因为 URL 里有 .m3u8 就硬改"
+- **媒体本体流式透传**:`video/*`、`audio/*`、`.mp4/.ts/.m4s/...` 不走内存缓冲,
+  直接 `tiny_http::Response::new(reader)` 流给播放器
+- **Range 透传**:请求带 `Range` 就转给源站,把 `206` + `Content-Range` 照抄回来,
+  拖动进度条不再从零重下(以前 598 MB 的片子还会被 96 MB 缓冲上限截断)
+
 ## 已知限制
 
-- `tiny_http` 未处理 Range 请求:mp4 直链拖动进度会从头发,建议优先用 m3u8 源
+- 直链 mp4 走原生 `<video>`,没有清晰度切换(多档只在 HLS 下有意义)
 - 没有手动选清晰度
 - 反代只监听本机,不对外暴露
 
@@ -155,8 +182,25 @@ segment  HTTP 200, 996,400 bytes
 | `switchSource` | 切源 |
 | `openDetail` | 打开详情 |
 | `playEpisode` | 点某集 |
-| `stream` | 取流成功(mime + 代理地址前 60 字符) |
-| `STREAM FAIL` / `HLS FATAL` | 取流或解码失败原因 |
-| `mute toggle` | 每次切换静音前后的 `muted` / `volume` |
+| `play hook` | 插件 `play` 钩子耗时 + 它给的原始地址(截断)+ mime |
+| `probe` | `stream_kind` 的结论:kind / HTTP 码 / content-type / 采样字节数 |
+| `play mode` | 最终走 hls.js 还是原生 `<video>`(以及为什么) |
+| `stream` | 取流成功(mime + 反代地址前 90 字符 + 清晰度档数) |
+| `HLS ERR` | hls.js 每次报错:`type` / `details` / `fatal` / `response.code` / `url` |
+| `HLS FATAL` | 致命错误(播放中断) |
+| `VIDEO ERR` | `<video>` 的 `error.code` / `error.message` / networkState |
+| `M3U8 probe` | 自检失败时再拉一次反代地址:HTTP 码 / 字节数 / 是不是 `#EXTM3U` |
+| `STREAM FAIL` | 取流失败原因 |
+
+Rust 侧(同一个文件、同样带 `HH:MM:SS`)还会写:
+
+| 事件 | 内容 |
+| --- | --- |
+| `PROXY m3u8` | 清单请求:状态码 / 字节数 / content-type / content-encoding / 请求头 |
+| `PROXY media` | 媒体(分片或 mp4 直链):状态码 / content-type / content-length / Range |
+| `PROXY NOT-M3U8` | 以为拿到清单、结果不是:带上前 400 字节(解析失败的现场) |
+| `PROXY http` / `PROXY ERR` | 源站 4xx/5xx(状态码与响应体前 160 字节)/ 连接失败 |
+| `PROBE` | `stream_kind` 探测结论 |
+| `SELFTEST` | 自检各阶段(前端写的,同一文件) |
 
 出问题时,把 `Ctrl+Shift+D` 面板截个图,或者直接把 `reelbox.log` 发我,比口头描述快得多。

@@ -102,23 +102,48 @@ iframe → 父页
 ## 自检与验收
 
 ```bash
-# 全流程:列表 → 详情 → 播放(视频真的在走),结果写进 %APPDATA%/reelbox/reelbox.log
+# 全流程:列表 → 详情 → 播放(最多试 3 集,至少 2 集真的在走),
+# 结果写进 %APPDATA%/reelbox/reelbox.log,摘要写进 docs/selftest-report.json
 D:/rt/release/reelbox.exe --selftest
+
+# 复现"某个具体片名播不了":片名走插件自己的 search 钩子去找
+D:/rt/release/reelbox.exe --selftest --selftest-title=折月亮
+REELBOX_SELFTEST_TITLE=折月亮 D:/rt/release/reelbox.exe --selftest
+
+# 稳定性验收:连跑 N 次(默认 3),每次都要 PASS,否则非零退出
+powershell -NoProfile -ExecutionPolicy Bypass -File ./verify-plugin-playback.ps1
+powershell ... -File ./verify-plugin-playback.ps1 -Runs 5 -Title 折月亮
 
 # 静态 + 单测 + (可选)上面的实跑
 powershell -NoProfile -ExecutionPolicy Bypass -File ./verify-playback.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File ./verify-playback.ps1 -Live
 ```
 
-日志里会看到:
+日志里会看到(一次通过的三集尝试):
 
 ```
 sandbox ready {"tauriIpc":"undefined","storage":"blocked:SecurityError",…}
-SELFTEST list ms=579 n=30 first="光阴之外" poster=yes
-SELFTEST detail ms=521 title="光阴之外" summary=65 groups=1 eps=48
-SELFTEST play ms=1873 readyState=4 t=0.25 playing=true
-SELFTEST PASS
+SELFTEST list ms=520 n=30 first="谷雨" poster=yes
+SELFTEST detail ms=541 title="谷雨" summary=255 groups=1 eps=22
+SELFTEST play 1/3 ep="第1集" ok=yes ms=3760 readyState=4 size=1920x800 t=0→0.74
+SELFTEST play 2/3 ep="第2集" ok=yes ms=3312 readyState=4 size=1920x800 t=0→0.67
+SELFTEST play summary ok=2/2 tries=2 ms=7072
+SELFTEST cms ok source=电影天堂
+SELFTEST PASS play=2/2
+SELFTEST DONE
 ```
+
+判定 PASS 的条件:至少 2 集同时满足 `readyState>=3`、`videoWidth>0`、
+`currentTime` 比开始时前进 0.5 秒以上。失败时会把 `HLS ERR` / `VIDEO ERR` /
+`PROBE` / `M3U8 probe` 证据行一起打出来,并写进 `docs/selftest-report.json`
+(`play.attempts[].reason`)。
+
+### 插件说的 mime 不算数
+
+插件常按地址后缀猜 mime,签名地址没有后缀就会猜错(4k影视 有的片名给的是
+598 MB 直链 mp4,却写成 `application/vnd.apple.mpegurl`)。宿主在 `play` 之后
+调 `stream_kind` 看一眼真实字节,再决定用 hls.js 还是原生 `<video>`。
+详见 `docs/PLAYBACK.md` 的「识别真实流类型」。
 
 ## 回退到 boa
 

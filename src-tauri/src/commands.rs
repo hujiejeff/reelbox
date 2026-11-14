@@ -222,6 +222,18 @@ pub fn selftest_mode() -> bool {
     selftest_enabled()
 }
 
+/// 自检可以指定片名(`--selftest-title=折月亮` 或 `REELBOX_SELFTEST_TITLE`)。
+/// 用来复现"某个具体片名播不了",默认空串表示按列表第一条。
+#[tauri::command]
+pub fn selftest_title() -> String {
+    std::env::args()
+        .find_map(|a| a.strip_prefix("--selftest-title=").map(|s| s.to_string()))
+        .or_else(|| std::env::var("REELBOX_SELFTEST_TITLE").ok())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 fn selftest_enabled() -> bool {
     static FLAG: OnceLock<bool> = OnceLock::new();
     *FLAG.get_or_init(|| {

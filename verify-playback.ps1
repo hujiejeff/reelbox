@@ -65,11 +65,19 @@ $pluginChecks = @(
   @{ f = "src-tauri/src/commands.rs";     p = "pub fn plugin_stream_allow"; d = "allowlist command" },
   @{ f = "src-tauri/src/commands.rs";     p = "REELBOX_PLUGIN_ENGINE"; d = "boa fallback switch" },
   @{ f = "core/src/plugin/net.rs";        p = "pub fn is_private_url"; d = "SSRF guard" },
-  @{ f = "docs/PLUGIN-RUNTIME.md";        p = "PLUGIN-RUNTIME";     d = "runtime docs" }
+  @{ f = "docs/PLUGIN-RUNTIME.md";        p = "PLUGIN-RUNTIME";     d = "runtime docs" },
+  @{ f = "src-tauri/src/logging.rs";      p = "pub fn event";       d = "shared log file" },
+  @{ f = "src-tauri/src/commands.rs";     p = "pub async fn stream_kind"; d = "stream kind sniff" },
+  @{ f = "src-tauri/src/proxy.rs";        p = "fn is_media_body";   d = "media stream-through" },
+  @{ f = "src-tauri/src/proxy.rs";        p = "Range";              d = "range passthrough" },
+  @{ f = "ui/app.js";                     p = "stream_kind";        d = "probe before play" },
+  @{ f = "ui/app.js";                     p = "PLAY_NEED";          d = "selftest needs 2 plays" },
+  @{ f = "verify-plugin-playback.ps1";    p = "selftest-runs.json"; d = "plugin playback loop" },
+  @{ f = "docs/selftest-report.json";     p = $null;                d = "selftest report" }
 )
 foreach ($c in $pluginChecks) {
   if (-not (Test-Path $c.f)) { Write-Host "  [MISSING] $($c.f) ($($c.d))" -ForegroundColor Red; $fail = 1; $results += @{ name = $c.d; ok = $false }; continue }
-  if (-not (Select-String -Path $c.f -Pattern ([regex]::Escape($c.p)) -Quiet)) {
+  if ($null -ne $c.p -and -not (Select-String -Path $c.f -Pattern ([regex]::Escape($c.p)) -Quiet)) {
     Write-Host "  [MISSING] $($c.d) in $($c.f)" -ForegroundColor Red; $fail = 1; $results += @{ name = $c.d; ok = $false }
   } else {
     Write-Host "  [OK] $($c.d)" -ForegroundColor Green; $results += @{ name = $c.d; ok = $true }
@@ -131,9 +139,8 @@ if ($Live) {
 }
 
 # 机器可读的报告
-Write-Host "dbg fail=[$fail] type=$($fail.GetType().Name)"
 $verdict = "FAIL"
-if ($fail -eq 0) { $verdict = "PASS" }
+if ([int]$fail -eq 0) { $verdict = "PASS" }
 $report = [ordered]@{
   goal    = "commit + playback implementation"
   commit  = (& git rev-parse --short HEAD)
@@ -146,5 +153,5 @@ $report = [ordered]@{
 $report | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 verify-report.json
 
 Write-Host ""
-if ($fail -eq 0) { Write-Host "PASS: playback implemented and wired" -ForegroundColor Green; exit 0 }
+if ([int]$fail -eq 0) { Write-Host "PASS: playback implemented and wired" -ForegroundColor Green; exit 0 }
 Write-Host "FAIL: see items above" -ForegroundColor Red; exit 1
