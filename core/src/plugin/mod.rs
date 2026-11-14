@@ -184,3 +184,61 @@ WeBox.define({
         assert_eq!(m.version, "2");
     }
 }
+
+/// 从插件文件跑一个钩子:读文件 → 建宿主 → 调用。
+/// `fetch` 决定插件里的网络请求怎么做。
+pub fn run_file(
+    path: &std::path::Path,
+    hook: &str,
+    arg_json: &str,
+    fetch: Box<dyn Fn(&str) -> Option<String>>,
+) -> Result<String, String> {
+    let src = std::fs::read_to_string(path).map_err(|e| format!("读插件失败: {e}"))?;
+    let mut host = runtime::Host::load(&src, fetch)?;
+    host.call(hook, arg_json)
+}
+
+/// 插件里声明的分类(没有就返回空)
+pub fn plugin_filters(
+    path: &std::path::Path,
+    fetch: Box<dyn Fn(&str) -> Option<String>>,
+) -> Vec<crate::model::Filter> {
+    let out = match run_file(path, "filters", "{}", fetch) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let v: serde_json::Value = match serde_json::from_str(&out) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let arr = match v.as_array() {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for f in arr {
+        let key = f.get("key").and_then(|x| x.as_str()).unwrap_or("");
+        let label = f.get("label").and_then(|x| x.as_str()).unwrap_or(key);
+        if key.is_empty() {
+            continue;
+        }
+        let mut opts = Vec::new();
+        if let Some(list) = f.get("options").and_then(|x| x.as_array()) {
+            for o in list {
+                let value = o.get("value").and_then(|x| x.as_str()).unwrap_or("");
+                let lab = o.get("label").and_then(|x| x.as_str()).unwrap_or(value);
+                opts.push(crate::model::Option_ {
+                    label: lab.to_string(),
+                    value: value.to_string(),
+                    parent: String::new(),
+                });
+            }
+        }
+        out.push(crate::model::Filter {
+            key: key.to_string(),
+            label: label.to_string(),
+            options: opts,
+        });
+    }
+    out
+}

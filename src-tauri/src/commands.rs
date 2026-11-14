@@ -1,6 +1,7 @@
 //! 前端能调的全部能力。网络是阻塞的,统一丢到线程池里跑。
 
 use reelbox_core::model::{Detail, Filter, Page, Stream};
+use reelbox_core::plugin;
 use reelbox_core::source::{self, cms::Client, Source};
 use tauri::ipc::Response;
 
@@ -45,6 +46,22 @@ pub fn save_sources(list: Vec<Source>) -> Result<(), String> {
     std::fs::write(&path, text).map_err(|e| format!("写文件失败: {e}"))
 }
 
+/// 插件里的网络请求:统一带 UA
+fn plugin_fetch() -> Box<dyn Fn(&str) -> Option<String>> {
+    Box::new(|url: &str| {
+        ureq::get(url)
+            .timeout(std::time::Duration::from_secs(15))
+            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36")
+            .call()
+            .ok()
+            .and_then(|r| r.into_string().ok())
+    })
+}
+
+fn is_plugin(src: &Source) -> bool {
+    src.kind == "webox"
+}
+
 #[tauri::command]
 pub fn list_sources() -> Vec<Source> {
     load_sources()
@@ -52,6 +69,19 @@ pub fn list_sources() -> Vec<Source> {
 
 #[tauri::command]
 pub async fn list_items(source: Source, page: u32, classify: String) -> Result<Page, String> {
+    if is_plugin(&source) {
+        return blocking(move || {
+            let path = std::path::PathBuf::from(&source.url);
+            let arg = format!(
+                "{{\"page\":{},\"classify\":\"{}\"}}",
+                page,
+                classify.replace('"', "")
+            );
+            let out = plugin::run_file(&path, "list", &arg, plugin_fetch())?;
+            plugin::adapt::page_from_json(&out)
+        })
+        .await;
+    }
     blocking(move || Client::new(source).page(page, &classify)).await
 }
 
@@ -67,6 +97,34 @@ pub async fn detail(source: Source, id: String) -> Result<Detail, String> {
 
 #[tauri::command]
 pub async fn play(source: Source, episode_id: String) -> Result<Stream, String> {
+    if is_plugin(&source) {
+        return blocking(move || {
+            let path = std::path::PathBuf::from(&source.url);
+            let arg = format!("{{\"id\":\"{}\"}}", episode_id.replace('"', ""));
+            let out = plugin::run_file(&path, "play", &arg, plugin_fetch())?;
+            let v: serde_json::Value =
+                serde_json::from_str(&out).map_err(|e| format!("play 返回值不是 JSON: {e}"))?;
+            let url = v
+                .get("url")
+                .and_then(|x| x.as_str())
+                .ok_or("play 没返回 url")?
+                .to_string();
+            let mut headers = std::collections::BTreeMap::new();
+            if let Some(h) = v.get("headers").and_then(|x| x.as_object()) {
+                for (k, val) in h {
+                    if let Some(sv) = val.as_str() {
+                        headers.insert(k.clone(), sv.to_string());
+                    }
+                }
+            }
+            Ok(Stream {
+                url,
+                mime: "application/vnd.apple.mpegurl".into(),
+                headers,
+            })
+        })
+        .await;
+    }
     blocking(move || Client::new(source).stream(&episode_id)).await
 }
 
