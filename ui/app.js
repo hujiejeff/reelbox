@@ -1,5 +1,7 @@
-import { initTheme } from "./theme.js";
+import { initTheme, state as themeState, SEEDS, isDark } from "./theme.js";
 import { initPluginHost, callPlugin, isPluginSource } from "./plugin-host.js";
+import { buildSrcPanel } from "./src-panel.js";
+import { openSheet } from "./sheet.js";
 import {
   alertDialog,
   confirmDialog,
@@ -28,6 +30,8 @@ const S = {
   listError: null,      // 上一页/当前列表的失败信息(三态用:加载中 / 空 / 错误)
   detailItem: null,     // 最近打开的条目,详情失败时重试用
   detailGroups: [],     // 详情里的线路,播放失败"换线路"用
+  favs: {},             // 收藏:localStorage["reelbox.favs"],键 = 源id|片名
+  srcFilter: "all",     // 源管理页分段:all | vod | plugin | live
 };
 
 const $ = (id) => document.getElementById(id);
@@ -55,6 +59,7 @@ async function init() {
   });
   bindDebugToggle();
   bindWheelScroll();
+  S.srcFilter = prefGet("reelbox.srcFilter", "all");
   log("init start");
   initPluginHost({ invoke: invoke, log: log });
   {
@@ -680,29 +685,194 @@ function stateCard(o) {
   );
 }
 
-/** 出错时的"去换源":切到设置页的「源」分区 */
+/** 出错时的"去换源":切到设置页,并推入「源」二级页 */
 function openSourceManager() {
   showView("settings");
-  setSettingsSection("src");
-  const box = $("srcmgr");
-  if (box && box.scrollIntoView) box.scrollIntoView({ block: "nearest" });
+  openSetPage("src");
 }
 
 // ---------- 渲染 ----------
 
-function renderSources() {
-  const menu = $("srcMenu");
-  menu.innerHTML = S.sources
-    .map(
-      (s) =>
-        '<button role="menuitemradio" data-src="' + esc(s.id) + '" aria-checked="' +
-        (S.source && s.id === S.source.id ? "true" : "false") + '">' +
-        esc(s.name) + '<span class="m3e-icon">' +
-        (S.source && s.id === S.source.id ? "check" : "") + "</span></button>"
-    )
-    .join("");
+/* ---------- 顶栏切源:按类型分组 + 最近使用 + 搜索 ---------- */
+// <840 用 m3e bottom sheet(见 ui/sheet.js),≥840 挂进侧栏的弹出层(ui/src-panel.js
+// 是同一份内容)。当前源置顶到所属分组第一行;「最近使用」最多 3 个(LRU),
+// 允许与下方分组重复 —— 重复是有意的,为了缩短拇指行程。
+
+const RECENT_KEY = "reelbox.recentSources";
+const RECENT_MAX = 3;
+let srcMenuCloser = null; // 关掉当前这层容器(sheet.close / 去掉 data-open)
+
+function recentIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === "string") : [];
+  } catch (_) {
+    return [];
+  }
 }
 
+function saveRecent(list) {
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX))); } catch (_) {}
+}
+
+function pushRecent(id) {
+  if (!id) return;
+  saveRecent([id].concat(recentIds().filter((x) => x !== id)));
+}
+
+function dropRecent(id) {
+  saveRecent(recentIds().filter((x) => x !== id));
+}
+
+/** 健康状态 → 四态 + 文案(判定口径见 docs/DESIGN-SPEC-UI.md §2.5) */
+function fmtMs(ms) {
+  const n = Number(ms || 0);
+  return n >= 1000 ? (n / 1000).toFixed(1) + "s" : Math.round(n) + "ms";
+}
+
+function healthOf(src) {
+  if (src && src._testing) return { state: "testing", label: "测速中…" };
+  const h = src && src.health;
+  if (!h) return { state: "untested", label: "未测速" };
+  if (!h.ok) return { state: "fail", label: "连接失败" + (h.error ? " · " + h.error : "") };
+  const ms = Number(h.ms || 0);
+  if (ms < 800) return { state: "ok", label: "正常 · " + fmtMs(ms) };
+  if (ms <= 2000) return { state: "slow", label: "偏慢 · " + fmtMs(ms) };
+  return { state: "slow", label: "偏慢 · " + fmtMs(ms) };
+}
+
+function srcTypeIcon(s) {
+  const t = sourceType(s);
+  if (t === "plugin") return "extension";
+  if (t === "live") return "live_tv";
+  return "ondemand_video";
+}
+
+/** 组好切源面板需要的数据(分组、当前源置顶、最近使用、搜索过滤) */
+function srcPanelModel(query) {
+  const q = String(query || "").trim().toLowerCase();
+  const all = S.sources || [];
+  const hit = (s) => !q || (String(s.name) + " " + String(s.url)).toLowerCase().indexOf(q) >= 0;
+  const toRow = (s) => {
+    const h = healthOf(s);
+    return {
+      id: s.id,
+      name: s.name,
+      icon: srcTypeIcon(s),
+      current: !!(S.source && S.source.id === s.id),
+      state: h.state,
+      stateLabel: h.label,
+    };
+  };
+  const groups = [
+    ["vod", "点播"],
+    ["plugin", "插件"],
+    ["live", "直播"],
+  ].map(([key, label]) => {
+    const rows = all.filter((s) => sourceType(s) === key && hit(s)).map(toRow);
+    // 当前源置顶到所属分组第一行
+    rows.sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0));
+    return { key, label, rows };
+  });
+  const recent = recentIds()
+    .map((id) => all.find((s) => s.id === id))
+    .filter((s) => s && hit(s))
+    .slice(0, RECENT_MAX)
+    .map(toRow);
+  return { groups, recent, total: all.length, query: query || "", empty: !all.length };
+}
+
+/** 渲染 + 事件;host 可以是 sheet 内容容器,也可以是桌面弹出层 */
+function mountSrcPanel(host, query) {
+  const el = buildSrcPanel(srcPanelModel(query));
+  host.innerHTML = "";
+  host.appendChild(el);
+
+  el.addEventListener("click", (e) => {
+    if (e.target.closest('[data-act="manage"]')) {
+      closeSrcMenu();
+      openSourceManager();
+      return;
+    }
+    if (e.target.closest('[data-act="add"]')) {
+      closeSrcMenu();
+      editSource(null);
+      return;
+    }
+    const row = e.target.closest("[data-src]");
+    if (!row) return;
+    const src = (S.sources || []).find((s) => s.id === row.getAttribute("data-src"));
+    if (!src) return;
+    // 选中后立刻走关闭动效(149ms),不等它结束就开始切源
+    closeSrcMenu();
+    if (!S.source || src.id !== S.source.id) switchSource(src);
+  });
+
+  const input = el.querySelector('[data-act="query"]');
+  if (input) {
+    input.addEventListener("input", () => {
+      const v = input.value;
+      mountSrcPanel(host, v);
+      const again = host.querySelector('[data-act="query"]');
+      if (again) {
+        again.focus();
+        again.setSelectionRange(v.length, v.length);
+      }
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") return;
+      if (e.key === "Enter") {
+        const first = el.querySelector("[data-src]");
+        if (first) first.click();
+      }
+    });
+  }
+}
+
+function closeSrcMenu() {
+  if (srcMenuCloser) {
+    const fn = srcMenuCloser;
+    srcMenuCloser = null;
+    fn();
+  }
+  const menu = $("srcMenu");
+  if (menu) menu.removeAttribute("data-open");
+}
+
+function srcMenuOpen() {
+  const menu = $("srcMenu");
+  return !!(menu && menu.hasAttribute("data-open")) || !!srcMenuCloser;
+}
+
+/** 切源面板重画:只在它正开着的时候做事 */
+function renderSources() {
+  const menu = $("srcMenu");
+  if (!menu) return;
+  if (menu.hasAttribute("data-open")) mountSrcPanel(menu, "");
+  else if (srcMenuCloser) {
+    // sheet 开着:重新挂一份内容进同一个容器
+    const host = document.querySelector("#appSheet .m3e-bottom-sheet__content");
+    if (host) mountSrcPanel(host, "");
+  }
+}
+
+function openSrcMenu() {
+  const wide = window.matchMedia("(min-width: 840px)").matches;
+  const menu = $("srcMenu");
+  if (wide) {
+    mountSrcPanel(menu, "");
+    const r = $("srcBtn").getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.round(r.left)) + "px";
+    menu.style.top = Math.round(r.bottom + 6) + "px";
+    menu.setAttribute("data-open", "");
+    srcMenuCloser = () => menu.removeAttribute("data-open");
+    return;
+  }
+  const panel = document.createElement("div");
+  mountSrcPanel(panel, "");
+  const sheet = openSheet({ content: panel, label: "切换源" });
+  srcMenuCloser = () => sheet.close();
+}
 function renderParents() {
   const side = $("catlist");
   side.innerHTML =
@@ -918,38 +1088,36 @@ function uniqSources(list) {
   return out;
 }
 
-function sourceKindLabel(s) {
-  if (isPluginSource(s)) return "插件";
-  return String((s && s.kind) || "") === "xml" ? "XML" : "JSON";
+/** 三类源:v0.2 只跑得动点播(插件另走沙箱),直播只保存不播放 */
+function sourceType(s) {
+  if (!s) return "vod";
+  const kind = String(s.kind || s.type || "");
+  const url = String(s.url || "");
+  if (isPluginSource(s)) return "plugin";
+  if (kind === "live" || /\.m3u8?$/i.test(url.split(/[?#]/)[0])) return "live";
+  return "vod";
 }
 
-/** 设置页「当前源」下拉 */
-function renderCurrentSource() {
-  const sel = $("curSource");
-  if (!sel) return;
-  const list = S.sources || [];
-  sel.innerHTML = list.length
-    ? list
-        .map(
-          (s) =>
-            '<option value="' + esc(s.id) + '">' + esc(s.name) + " · " + sourceKindLabel(s) + "</option>"
-        )
-        .join("")
-    : '<option value="">(还没有源)</option>';
-  if (S.source) sel.value = S.source.id;
-  sel.disabled = !list.length;
+function sourceKindLabel(s) {
+  const t = sourceType(s);
+  if (t === "plugin") return "插件";
+  if (t === "live") return "直播";
+  return String((s && s.kind) || "") === "xml" ? "XML" : "JSON";
 }
 
 /** 源列表:m3e list item,每项 = 名称 / 类型 / 地址 + 右侧编辑与删除 */
 function renderSourceManager() {
   const box = $("srcmgr");
-  renderCurrentSource();
   if (!box) return;
-  const list = S.sources || [];
-  const count = $("srcCount");
-  if (count) count.textContent = list.length ? list.length + " 个" : "";
-  if (!list.length) {
+  const all = S.sources || [];
+  const list = S.srcFilter === "all" ? all : all.filter((s) => sourceType(s) === S.srcFilter);
+  if (!all.length) {
     box.innerHTML = '<p class="hint">还没有源。下面「添加源」或「网络导入」都行。</p>';
+    return;
+  }
+  if (!list.length) {
+    box.innerHTML =
+      '<p class="hint">这个类型下还没有源。点下面的「添加源」加一个,或者切回「全部」。</p>';
     return;
   }
   box.innerHTML = list
@@ -1331,28 +1499,147 @@ function syncPlaySettings() {
   if (r) r.checked = resumeOn();
 }
 
-/* ---------- 设置页:分区 + 各分区自己的绑定 ---------- */
+/* ---------- 设置:入口列表 + 二级页 ---------- */
+// 设置首页是入口列表(每行写"当前值"),点进去是整屏二级页。
+// ≥840 走 master-detail(左列 336 固定),<840 走 push(整屏 + 返回箭头)。
+// 二级页位置不记忆:每次进设置都回到入口列表(expanded 下默认落在「源」)。
 
-const SET_SECS = ["src", "play", "look", "debug", "about"];
+const SET_PAGES = [
+  { key: "src", icon: "dns", title: "源", group: 0 },
+  { key: "play", icon: "play_circle", title: "播放", group: 0 },
+  { key: "look", icon: "palette", title: "外观", group: 0 },
+  { key: "debug", icon: "terminal", title: "调试", group: 1 },
+  { key: "about", icon: "info", title: "关于", group: 1 },
+];
+
+const VARIANT_LABEL = {
+  tonal: "标准", vibrant: "鲜明", expressive: "表现型", neutral: "柔和", mono: "单色",
+};
+
 let APP_INFO = null;
+let setPage = "";
 
-/** 切换设置分区(左侧锚点 / 窄屏分段控件) */
-function setSettingsSection(key) {
-  if (SET_SECS.indexOf(key) < 0) key = "src";
-  setSec = key;
-  const nav = $("setNav");
-  if (nav) {
-    nav.querySelectorAll("[data-sec]").forEach((b) => {
-      b.setAttribute("aria-selected", b.getAttribute("data-sec") === key ? "true" : "false");
-    });
+function themeSeedLabel() {
+  const hit = SEEDS.find((s) => s.id === themeState.seed);
+  return hit ? hit.label : "自定义";
+}
+
+/** 设置首页每行的"当前值":写值,不写功能名 */
+function setSummary(key) {
+  if (key === "src") {
+    const list = S.sources || [];
+    if (!list.length) return "未添加,点进去加一个";
+    const live = list.filter((s) => sourceType(s) === "live").length;
+    const name = S.source ? S.source.name : "未选源";
+    return name + " · " + list.length + " 源" + (live ? " · 直播 " + live : "");
   }
-  document.querySelectorAll("#v-settings [data-panel]").forEach((p) => {
-    if (p.getAttribute("data-panel") === key) p.removeAttribute("hidden");
-    else p.setAttribute("hidden", "");
+  if (key === "play") {
+    return (qualityPref() === "high" ? "最高" : "自动") + " · 连播" + (autoplayOn() ? "开" : "关");
+  }
+  if (key === "look") {
+    const dark = isDark();
+    const mode = dark ? (themeState.pureBlack ? "纯黑" : "深色") : "浅色";
+    return mode + " · " + themeSeedLabel() + " · " + (VARIANT_LABEL[themeState.variant] || "标准");
+  }
+  if (key === "debug") {
+    return "日志" + (debugOn() ? "开" : "关") + " · 浮标" + (fabOn() ? "开" : "关");
+  }
+  if (key === "about") {
+    return APP_INFO ? "v" + APP_INFO.version + " · 契约 v1" : "读取中…";
+  }
+  return "";
+}
+
+function setEntryHtml(p) {
+  return (
+    '<button type="button" class="set-entry" data-page="' + p.key + '" data-sum="' + p.key + '">' +
+      '<span class="set-entry__icon"><span class="m3e-icon" aria-hidden="true">' + p.icon + "</span></span>" +
+      '<span class="set-entry__text">' +
+        '<span class="set-entry__title">' + esc(p.title) + "</span>" +
+        '<span class="set-entry__summary">' + esc(setSummary(p.key)) + "</span>" +
+      "</span>" +
+      '<span class="m3e-icon set-entry__chevron" aria-hidden="true">chevron_right</span>' +
+    "</button>"
+  );
+}
+
+/** 设置首页(compact / medium)+ 左列(expanded) */
+function renderSetHome() {
+  const main = $("setGroupMain");
+  const low = $("setGroupLow");
+  if (main) main.innerHTML = SET_PAGES.filter((p) => p.group === 0).map(setEntryHtml).join("");
+  if (low) low.innerHTML = SET_PAGES.filter((p) => p.group === 1).map(setEntryHtml).join("");
+
+  const master = $("setMaster");
+  if (master) {
+    master.innerHTML = SET_PAGES.map(
+      (p) =>
+        '<button type="button" class="set-navrow" role="tab" data-page="' + p.key +
+        '" aria-selected="' + (setPage === p.key ? "true" : "false") + '">' +
+          '<span class="m3e-icon" aria-hidden="true">' + p.icon + "</span>" +
+          '<span class="set-navrow__label">' + esc(p.title) + "</span>" +
+        "</button>"
+    ).join("");
+  }
+}
+
+/** 只刷新摘要行,不重建 DOM(避免点完一行丢焦点) */
+function syncSetSummaries() {
+  document.querySelectorAll("[data-sum]").forEach((el) => {
+    const key = el.getAttribute("data-sum");
+    const box = el.querySelector(".set-entry__summary");
+    if (box) box.textContent = setSummary(key);
   });
-  if (key === "src") renderSourceManager();
-  if (key === "about") fillAbout();
-  if (key === "debug") fillLogPath();
+}
+
+function wideSettings() {
+  return window.matchMedia("(min-width: 840px)").matches;
+}
+
+/** 打开二级页;key 为空 = 回到入口列表(<840 才有入口列表) */
+function openSetPage(key) {
+  const page = SET_PAGES.find((p) => p.key === key) ? key : "src";
+  setPage = page;
+  const shell = $("setShell");
+  if (shell) shell.setAttribute("data-page", page);
+  // <600 时二级页盖住 floating toolbar(既是 push 语义,也避免压住底栏)
+  if (!wideSettings()) document.body.setAttribute("data-setpage", "");
+  else document.body.removeAttribute("data-setpage");
+  document.querySelectorAll("#setDetail .set-page").forEach((el) => {
+    const on = el.getAttribute("data-page") === page;
+    if (on) {
+      el.setAttribute("data-on", "");
+      // push 进入的转场(宽屏并排时不做位移动画)
+      if (!wideSettings()) {
+        el.setAttribute("data-enter", "");
+        setTimeout(() => el.removeAttribute("data-enter"), 400);
+      }
+    } else {
+      el.removeAttribute("data-on");
+    }
+  });
+  document.querySelectorAll("#setMaster [data-page]").forEach((b) => {
+    b.setAttribute("aria-selected", b.getAttribute("data-page") === page ? "true" : "false");
+  });
+  if (page === "src") {
+    renderSrcSeg();
+    renderSourceManager();
+  }
+  if (page === "about") fillAbout();
+  if (page === "debug") fillLogPath();
+  const scroll = document.querySelector('.set-page[data-page="' + page + '"] .set-page__scroll');
+  if (scroll) scroll.scrollTop = 0;
+}
+
+/** 二级页 → 设置首页;expanded 下入口列表被左列替代,返回等同于落回「源」 */
+function closeSetPage() {
+  if (wideSettings()) return openSetPage("src");
+  setPage = "";
+  const shell = $("setShell");
+  if (shell) shell.removeAttribute("data-page");
+  document.body.removeAttribute("data-setpage");
+  document.querySelectorAll("#setDetail .set-page").forEach((el) => el.removeAttribute("data-on"));
+  renderSetHome();
 }
 
 function fillAbout() {
@@ -1362,6 +1649,7 @@ function fillAbout() {
   set("aboutBuild", APP_INFO.build);
   set("aboutEngine", APP_INFO.plugin_engine);
   set("aboutSources", APP_INFO.sources_path);
+  syncSetSummaries();
 }
 
 function fillLogPath() {
@@ -1382,31 +1670,114 @@ async function loadAppInfo() {
   }
 }
 
+/** 二级页 app bar:滚动超过 8dp 才加下边线 */
+function bindSetScrollLines() {
+  document.querySelectorAll(".set-page__scroll").forEach((scroll) => {
+    if (scroll.dataset.bound) return;
+    scroll.dataset.bound = "1";
+    scroll.addEventListener("scroll", () => {
+      const bar = scroll.parentElement.querySelector(".set-page__bar");
+      if (!bar) return;
+      if (scroll.scrollTop > 8) bar.setAttribute("data-scrolled", "");
+      else bar.removeAttribute("data-scrolled");
+    }, { passive: true });
+  });
+}
+
+/** 源管理页的分段:全部 / 点播 / 插件 / 直播;选择持久化到 localStorage */
+const SRC_FILTERS = [
+  { key: "all", label: "全部" },
+  { key: "vod", label: "点播" },
+  { key: "plugin", label: "插件" },
+  { key: "live", label: "直播" },
+];
+
+function srcCountByType(key) {
+  const list = S.sources || [];
+  return key === "all" ? list.length : list.filter((s) => sourceType(s) === key).length;
+}
+
+function renderSrcSeg() {
+  const box = $("srcSeg");
+  if (!box) return;
+  box.innerHTML = SRC_FILTERS.map(
+    (f) =>
+      '<button type="button" role="tab" data-filter="' + f.key + '" aria-selected="' +
+      (S.srcFilter === f.key ? "true" : "false") + '">' +
+        '<span class="m3e-icon seg__check" aria-hidden="true">check</span>' +
+        '<span class="seg__label">' + f.label + "</span>" +
+        '<span class="seg__count">' + srcCountByType(f.key) + "</span>" +
+      "</button>"
+  ).join("");
+}
+
+function bindSrcSeg() {
+  const box = $("srcSeg");
+  if (!box || box.dataset.bound) return;
+  box.dataset.bound = "1";
+  box.onclick = (e) => {
+    const b = e.target.closest("button[data-filter]");
+    if (!b) return;
+    setSrcFilter(b.getAttribute("data-filter"));
+  };
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const i = SRC_FILTERS.findIndex((f) => f.key === S.srcFilter);
+    const next = SRC_FILTERS[(i + (e.key === "ArrowRight" ? 1 : SRC_FILTERS.length - 1)) % SRC_FILTERS.length];
+    setSrcFilter(next.key);
+    const b = box.querySelector('button[data-filter="' + next.key + '"]');
+    if (b) b.focus();
+  });
+}
+
+function setSrcFilter(key) {
+  if (!SRC_FILTERS.some((f) => f.key === key)) return;
+  S.srcFilter = key;
+  prefSet("reelbox.srcFilter", key);
+  renderSrcSeg();
+  renderSourceManager();
+}
+
 let settingsBound = false;
 
 function bindSettings() {
   if (settingsBound) return;
   settingsBound = true;
 
-  const nav = $("setNav");
-  if (nav) {
-    nav.onclick = (e) => {
-      const b = e.target.closest("[data-sec]");
-      if (b) setSettingsSection(b.getAttribute("data-sec"));
+  const shell = $("setShell");
+  if (shell) {
+    shell.onclick = (e) => {
+      const nav = e.target.closest(".set-entry[data-page], .set-navrow[data-page]");
+      if (nav) return openSetPage(nav.getAttribute("data-page"));
+      if (e.target.closest("[data-back]")) return closeSetPage();
     };
   }
+  window.addEventListener("resize", () => {
+    // 断点切换时把形态摆正:expanded 一定有打开的页,compact 一定回到列表
+    if (wideSettings()) {
+      if (!setPage) openSetPage("src");
+    } else if (setPage && !document.querySelector('#setShell[data-page]')) {
+      closeSetPage();
+    }
+  });
 
-  // 源
-  const cur = $("curSource");
-  if (cur) {
-    cur.onchange = () => {
-      const src = (S.sources || []).find((x) => x.id === cur.value);
-      if (src && (!S.source || src.id !== S.source.id)) {
-        renderSources();
-        switchSource(src);
-      }
-    };
-  }
+  // Esc:二级页 → 设置首页 → 首页 tab(和返回箭头同一套语义)
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if ($("player") && !$("player").hidden) return;
+    if (document.querySelector("dialog[open]")) return;
+    if (setPage) {
+      e.preventDefault();
+      closeSetPage();
+    } else if ($("v-settings").hasAttribute("data-on")) {
+      e.preventDefault();
+      showView("home");
+    }
+  });
+
+  bindSrcSeg();
+  bindSetScrollLines();
   bindSourceManager();
 
   // 播放
@@ -1417,6 +1788,7 @@ function bindSettings() {
       if (!b) return;
       prefSet("reelbox.quality", b.getAttribute("data-q"));
       syncPlaySettings();
+      syncSetSummaries();
       toast(qualityPref() === "high" ? "清晰度:固定最高档" : "清晰度:自动");
     };
   }
@@ -1424,6 +1796,7 @@ function bindSettings() {
   if (swA) {
     swA.onchange = () => {
       prefSet("reelbox.autoplay", swA.checked ? "1" : "0");
+      syncSetSummaries();
       log("pref autoplay", swA.checked);
     };
   }
@@ -1439,7 +1812,7 @@ function bindSettings() {
   // 调试
   bindDebugToggle();
   const swF = $("swFab");
-  if (swF) swF.onchange = () => setFab(swF.checked);
+  if (swF) swF.onchange = () => { setFab(swF.checked); syncSetSummaries(); };
   const live = $("btnLiveLog");
   if (live) live.onclick = () => showDebugPanel(true);
   const open = $("btnOpenLog");
@@ -1456,10 +1829,19 @@ function bindSettings() {
     };
   }
 
+  // 外观改了(主题/种子色/风格)之后摘要要跟着变
+  ["segMode", "segBlack", "segVariant", "swatches"].forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("click", () => setTimeout(syncSetSummaries, 0));
+    el.addEventListener("input", () => setTimeout(syncSetSummaries, 0));
+  });
+
   syncPlaySettings();
   syncDebugButtons();
+  renderSetHome();
+  syncSetSummaries();
 }
-
 const PROG_KEY = "reelbox.progress";
 
 function progAll() {
@@ -2049,6 +2431,7 @@ function bindNav() {
 }
 
 function showView(key) {
+  currentView = key;
   document.querySelectorAll("[data-nav]").forEach((o) => {
     if (o.getAttribute("data-nav") === key) o.setAttribute("aria-current", "page");
     else o.removeAttribute("aria-current");
@@ -2069,35 +2452,34 @@ function showView(key) {
   if (onHome) renderParents();
   if (key === "settings") {
     bindSettings();
-    renderSourceManager();
-    setSettingsSection(setSec === "src" ? "src" : setSec);
+    // 进设置 = 回到入口列表(expanded 下左列常驻,默认落在「源」)
+    setPage = "";
+    const shell = $("setShell");
+    if (shell) shell.removeAttribute("data-page");
+    document.body.removeAttribute("data-setpage");
+    document.querySelectorAll("#setDetail .set-page").forEach((el) => el.removeAttribute("data-on"));
+    renderSetHome();
+    bindSetScrollLines();
+    if (wideSettings()) openSetPage("src");
   }
+  layoutControls();
 }
-
-// 设置页当前分区(切走再回来还停在同一处)
-let setSec = "src";
 
 function bindSourceMenu() {
   const btn = $("srcBtn");
-  const menu = $("srcMenu");
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
   btn.onclick = (e) => {
     e.stopPropagation();
-    if (menu.hasAttribute("data-open")) return menu.removeAttribute("data-open");
-    const r = btn.getBoundingClientRect();
-    menu.style.left = r.left + "px";
-    menu.style.top = r.bottom + 6 + "px";
-    menu.setAttribute("data-open", "");
+    if (srcMenuOpen()) return closeSrcMenu();
+    openSrcMenu();
   };
-  document.addEventListener("click", () => menu.removeAttribute("data-open"));
-  menu.addEventListener("click", (e) => {
-    const it = e.target.closest("button[data-src]");
-    if (!it) return;
-    const src = S.sources.find((s) => s.id === it.getAttribute("data-src"));
+  // 桌面弹出层:点外面关掉(sheet 有自己的 scrim)
+  document.addEventListener("click", (e) => {
+    const menu = $("srcMenu");
+    if (!menu || !menu.hasAttribute("data-open")) return;
+    if (e.target.closest("#srcMenu") || e.target.closest("#srcBtn")) return;
     menu.removeAttribute("data-open");
-    if (src && (!S.source || src.id !== S.source.id)) {
-      renderSources();
-      switchSource(src);
-    }
   });
 }
 
@@ -2262,13 +2644,17 @@ function esc(s) {
   })[c]);
 }
 
+let currentView = "home";
+
 function layoutControls() {
   const controls = $("controls");
   const wide = window.matchMedia("(min-width: 840px)").matches;
   const target = wide ? $("sideControls") : $("topbar");
   if (controls.parentElement !== target) target.appendChild(controls);
   controls.style.display = "";
-  $("topbar").style.display = wide ? "none" : "";
+  // 窄屏只有首页需要顶栏(源按钮 + 搜索);设置/喜欢/详情各用自己的 app bar
+  const showTop = wide ? false : currentView === "home";
+  $("topbar").style.display = showTop ? "" : "none";
   $("sideControls").style.display = wide ? "" : "none";
 }
 
