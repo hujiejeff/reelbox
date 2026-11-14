@@ -18,11 +18,37 @@
     font-family: system-ui, "Segoe UI", "PingFang SC", sans-serif; overflow: hidden;
   }
   .app { display: flex; flex-direction: column; height: 100vh; }
+  @media (max-width: 599px) { .scroll { padding-bottom: 104px; } }
   .body { display: flex; flex: 1; min-height: 0; }
 
   .rail { flex: none; display: none; }
   .rail__grow { flex: 1; }
-  .bottombar { flex: none; display: flex; }
+  /* 窄屏:悬浮胶囊(浮在内容上方) */
+  .float-tabs {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    display: flex; gap: 4px; padding: 6px; z-index: 30;
+    border-radius: 999px;
+    background: var(--m3e-sys-color-surface-container-high);
+    box-shadow: 0 8px 24px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.10);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
+  .ftab {
+    display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 18px;
+    flex: none; white-space: nowrap;
+    border: none; cursor: pointer; border-radius: 999px; background: transparent;
+    color: var(--m3e-sys-color-on-surface-variant);
+    font: 600 13px/1 system-ui, "PingFang SC", sans-serif;
+    transition: background-color .22s cubic-bezier(.2,.9,.3,1.05),
+                color .22s cubic-bezier(.2,.9,.3,1.05),
+                padding .22s cubic-bezier(.2,.9,.3,1.05);
+  }
+  .ftab .m3e-icon { font-size: 22px; flex: none; }
+  .ftab span:last-child { white-space: nowrap; }
+  .ftab[aria-current="page"] {
+    background: var(--m3e-sys-color-secondary-container);
+    color: var(--m3e-sys-color-on-secondary-container);
+  }
 
   /* 桌面:一列侧栏,导航和分类在同一列 */
   .side { flex: none; display: none; width: 232px; flex-direction: column;
@@ -107,7 +133,7 @@
 
   /* medium: rail 出现 */
   @media (min-width: 600px) {
-    .bottombar { display: none; }
+    .float-tabs { display: none; }
     .rail { display: flex; width: 84px; }
     .grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
     .scroll { padding-bottom: 32px; }
@@ -255,28 +281,10 @@
     </div>
   </div>
 
-  <nav class="m3e-navigation-bar bottombar" aria-label="主导航">
-      <button type="button" class="m3e-navigation-item" data-nav="home">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">home</span>
-          <span class="m3e-navigation-item__label">首页</span>
-        </span>
-      </button>
-      <button type="button" class="m3e-navigation-item" data-nav="fav">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">favorite</span>
-          <span class="m3e-navigation-item__label">喜欢</span>
-        </span>
-      </button>
-      <button type="button" class="m3e-navigation-item" data-nav="settings">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">settings</span>
-          <span class="m3e-navigation-item__label">设置</span>
-        </span>
-      </button>
+  <nav class="float-tabs" aria-label="主导航">
+    <button class="ftab" type="button" data-nav="home" aria-current="page"><span class="m3e-icon">home</span><span>首页</span></button>
+    <button class="ftab" type="button" data-nav="fav"><span class="m3e-icon">favorite</span><span>喜欢</span></button>
+    <button class="ftab" type="button" data-nav="settings"><span class="m3e-icon">settings</span><span>设置</span></button>
   </nav>
 </div>
 
