@@ -1,53 +1,53 @@
 {
-  "at": "2026-11-14T12:49:49.566Z",
+  "at": "2026-11-14T14:37:52.776Z",
   "exe": "reelbox --selftest",
   "source": {
     "name": "4k影视",
     "url": "C:\\Users\\hujie\\AppData\\Roaming\\reelbox\\plugins\\user-4kvm.webox.js"
   },
   "list": {
-    "ms": 539,
+    "ms": 951,
     "items": 30,
-    "first": "谷雨",
+    "first": "塔尔萨之王 第四季",
     "poster": true,
     "ok": true
   },
   "detail": {
-    "ms": 499,
-    "title": "谷雨",
-    "summary": 255,
+    "ms": 514,
+    "title": "塔尔萨之王 第四季",
+    "summary": 19,
     "groups": 1,
-    "episodes": 22,
+    "episodes": 5,
     "ok": true
   },
   "play": {
-    "ms": 8690,
+    "ms": 21131,
     "tries": 2,
     "passed": 2,
     "needed": 2,
     "attempts": [
       {
         "name": "第1集",
-        "id": "ch4s99p1u",
+        "id": "ch4rj1rfb",
         "ok": true,
-        "ms": 5499,
+        "ms": 5778,
         "from": 0,
         "readyState": 4,
         "videoWidth": 1920,
-        "videoHeight": 800,
-        "to": 1108.29,
+        "videoHeight": 1080,
+        "to": 0.54,
         "index": 1
       },
       {
         "name": "第2集",
-        "id": "ch4s99p2a",
+        "id": "ch4rj1rfr",
         "ok": true,
-        "ms": 3189,
+        "ms": 15351,
         "from": 0,
         "readyState": 4,
         "videoWidth": 1920,
-        "videoHeight": 800,
-        "to": 0.58,
+        "videoHeight": 1080,
+        "to": 0.55,
         "index": 2
       }
     ],
@@ -55,11 +55,11 @@
   },
   "cms": {
     "name": "电影天堂",
-    "ms": 14030,
+    "ms": 16226,
     "ok": true,
     "reason": ""
   },
   "result": "PASS",
   "reason": "",
-  "durationMs": 23772
+  "durationMs": 38854
 }
