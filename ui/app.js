@@ -2,6 +2,7 @@ import { initTheme, state as themeState, SEEDS, isDark } from "./theme.js";
 import { initPluginHost, callPlugin, isPluginSource } from "./plugin-host.js";
 import { buildSrcPanel } from "./src-panel.js";
 import { openSheet } from "./sheet.js";
+import { closeMenu, menuOpen, openMenu } from "./menu.js";
 import {
   alertDialog,
   confirmDialog,
@@ -412,6 +413,8 @@ async function runSelfTest() {
 async function switchSource(src) {
   log("switchSource", src && src.id);
   S.source = src;
+  // 最近使用靠这里喂:不接上「最近使用」永远是空的
+  pushRecent(src && src.id);
   S.parent = "";
   S.child = "";
   S.items = [];
@@ -427,6 +430,9 @@ async function switchSource(src) {
   if (!$("player").hidden) closePlayer();
   showView("home");
   await Promise.all([loadFilters(), loadItems()]);
+  // 当前源变了:源管理页的选中态与设置首页摘要都要跟着走
+  renderSourceManager();
+  syncSetSummaries();
 }
 
 /* ---------- 插件源:钩子在 sandbox iframe 里跑 ---------- */
@@ -618,7 +624,7 @@ function errText(e) {
 function isCrawlSource(src) {
   if (!src) return false;
   if (isPluginSource(src)) return false;
-  const kind = String(src.kind || "");
+  const kind = srcKind(src);
   if (kind === "xml" || kind === "webox") return false;
   const url = String(src.url || "").toLowerCase();
   if (!/^https?:/.test(url)) return false;
@@ -1088,24 +1094,48 @@ function uniqSources(list) {
   return out;
 }
 
+/** 源的 kind:后端序列化叫 type,早期前端写的是 kind,两个都认 */
+function srcKind(s) {
+  return String((s && (s.type || s.kind)) || "").toLowerCase();
+}
+
 /** 三类源:v0.2 只跑得动点播(插件另走沙箱),直播只保存不播放 */
 function sourceType(s) {
   if (!s) return "vod";
-  const kind = String(s.kind || s.type || "");
+  const kind = srcKind(s);
   const url = String(s.url || "");
   if (isPluginSource(s)) return "plugin";
   if (kind === "live" || /\.m3u8?$/i.test(url.split(/[?#]/)[0])) return "live";
   return "vod";
 }
 
+/** 徽标文案只说"这源怎么播":点播 / 插件 / 直播 */
 function sourceKindLabel(s) {
   const t = sourceType(s);
   if (t === "plugin") return "插件";
   if (t === "live") return "直播";
-  return String((s && s.kind) || "") === "xml" ? "XML" : "JSON";
+  return "点播";
 }
 
-/** 源列表:m3e list item,每项 = 名称 / 类型 / 地址 + 右侧编辑与删除 */
+/** 技术子类型不进徽标,只出现在「更多」菜单首行与编辑对话框 */
+function sourceTechLabel(s) {
+  const t = sourceType(s);
+  const path = String((s && s.url) || "").split(/[?#]/)[0].toLowerCase();
+  if (t === "plugin") return path.endsWith(".reelbox.js") ? ".reelbox.js" : ".webox.js";
+  if (t === "live") return path.endsWith(".m3u") ? "m3u" : "m3u8";
+  return srcKind(s) === "xml" ? "XML" : "JSON";
+}
+
+/** 状态点:形状 + 颜色双通道(样式见 index.html 的 .status-dot 四态) */
+function statusDotHtml(src) {
+  const h = healthOf(src);
+  return (
+    '<span class="status-dot" data-state="' + esc(h.state) + '" role="img" aria-label="' +
+      esc(h.label) + '" title="' + esc(h.label) + '"></span>'
+  );
+}
+
+/** 源列表:m3e list item,每项 = 名称 / 类型 / 地址 + 右侧状态点与「更多」 */
 function renderSourceManager() {
   const box = $("srcmgr");
   if (!box) return;
@@ -1138,17 +1168,99 @@ function renderSourceManager() {
             '<span class="m3e-list-item__supporting">' + esc(s.url) + "</span>" +
           "</span>" +
           '<span class="m3e-list-item__trailing">' +
-            '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="edit" data-id="' +
-              esc(s.id) + '" aria-label="编辑 ' + esc(s.name) + '">' +
-              '<span class="m3e-icon" aria-hidden="true">edit</span></button>' +
-            '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="del" data-id="' +
-              esc(s.id) + '" aria-label="删除 ' + esc(s.name) + '">' +
-              '<span class="m3e-icon" aria-hidden="true">delete</span></button>' +
+            statusDotHtml(s) +
+            '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="more" data-id="' +
+              esc(s.id) + '" aria-haspopup="menu" aria-label="更多 · ' + esc(s.name) + '">' +
+              '<span class="m3e-icon" aria-hidden="true">more_vert</span></button>' +
           "</span>" +
         "</div>"
       );
     })
     .join("");
+}
+
+/** 行「更多」菜单:编辑 / 测试连接 / 设为当前 / 置顶 / 复制地址 / 删除 */
+function openSourceRowMenu(src, anchor) {
+  const active = !!(S.source && S.source.id === src.id);
+  const firstInList = (S.sources || []).findIndex((s) => s.id === src.id) === 0;
+  return openMenu(
+    anchor,
+    [
+      { type: "label", label: sourceKindLabel(src) + " · " + sourceTechLabel(src) },
+      { id: "edit", label: "编辑", icon: "edit" },
+      {
+        id: "current",
+        label: active ? "已设为当前源" : "设为当前",
+        icon: "check",
+        checked: active,
+        disabled: active,
+      },
+      { id: "pin", label: "置顶", icon: "vertical_align_top", disabled: firstInList },
+      { id: "copy", label: "复制地址", icon: "content_copy" },
+      { divider: true },
+      { id: "del", label: "删除", icon: "delete", danger: true },
+    ],
+    (id) => onSourceRowAction(id, src)
+  );
+}
+
+async function onSourceRowAction(id, src) {
+  if (id === "edit") return editSource(src);
+  if (id === "current") return setCurrentSource(src);
+  if (id === "pin") return pinSource(src);
+  if (id === "copy") return copySourceUrl(src);
+  if (id === "del") return removeSource(src.id);
+}
+
+/** 设为当前:走统一的 switchSource(会写 recent 与 currentSource) */
+async function setCurrentSource(src) {
+  if (S.source && S.source.id === src.id) return;
+  await switchSource(src);
+  renderSourceManager();
+  toast("已切换到「" + src.name + "」");
+}
+
+/** 置顶 = 把它挪到列表第一个,顺序本身要落盘 */
+async function pinSource(src) {
+  const list = (S.sources || []).filter((s) => s.id !== src.id);
+  if (list.length === (S.sources || []).length) return;
+  S.sources = [src].concat(list);
+  await persistSources();
+  renderSourceManager();
+  renderSources();
+  toast("已置顶「" + src.name + "」");
+}
+
+async function copySourceUrl(src) {
+  const ok = await copyText(src.url);
+  if (ok) toast("地址已复制");
+  else alertDialog("复制失败", "这个环境的剪贴板不可用。地址是:" + src.url);
+}
+
+/** 复制到剪贴板:先试 navigator.clipboard,失败退回 textarea + execCommand */
+async function copyText(text) {
+  const s = String(text == null ? "" : text);
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch (_) {
+    /* 没权限:走下面的退路 */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = s;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return !!ok;
+  } catch (_) {
+    return false;
+  }
 }
 
 async function persistSources() {
@@ -1326,6 +1438,8 @@ async function importJsonFile(e) {
   }
 }
 
+let srcRowMenuAnchor = null; // 当前打开「更多」的按钮(再点同一个算收起)
+
 function bindSourceManager() {
   const box = $("srcmgr");
   if (box && !box.dataset.bound) {
@@ -1333,13 +1447,22 @@ function bindSourceManager() {
     box.onclick = (e) => {
       const b = e.target.closest("button[data-act]");
       if (b) {
+        const act = b.getAttribute("data-act");
         const id = b.getAttribute("data-id");
-        if (b.getAttribute("data-act") === "edit") {
-          const src = S.sources.find((x) => x.id === id);
-          if (src) editSource(src);
-        } else {
-          removeSource(id);
+        const src = (S.sources || []).find((x) => x.id === id);
+        if (!src) return;
+        // 再点同一个「更多」= 收起来
+        if (act === "more") {
+          if (menuOpen() && srcRowMenuAnchor === b) {
+            closeMenu();
+            return;
+          }
+          srcRowMenuAnchor = b;
+          openSourceRowMenu(src, b);
+          return;
         }
+        if (act === "edit") return editSource(src);
+        if (act === "del") return removeSource(id);
         return;
       }
       // 点整行 = 切到那个源

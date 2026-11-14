@@ -81,6 +81,23 @@
   }
   .srcmenu[data-open] { display: block; }
 
+  /* 弹出菜单(源行「更多」):m3e-menu 自带容器外观,这里只补定位与层级 */
+  .popmenu {
+    position: fixed; z-index: 240; max-height: min(70vh, 440px); overflow-y: auto;
+    animation: popmenuIn 130ms cubic-bezier(.2,0,0,1);
+  }
+  @keyframes popmenuIn { from { opacity: 0; transform: translateY(-4px) scale(.985); } }
+  .popmenu .m3e-menu__label {
+    color: var(--m3e-sys-color-on-surface-variant);
+    font: 600 12px/16px system-ui, "PingFang SC", sans-serif; letter-spacing: .03125rem;
+  }
+  .popmenu .m3e-menu__item[data-danger="1"] { --_m3e-menu-item-text: var(--m3e-sys-color-error); }
+  .popmenu .m3e-menu__item[aria-checked="true"] {
+    --_m3e-menu-item-leading: var(--m3e-sys-color-primary);
+  }
+  .popmenu .m3e-menu__item[disabled] { cursor: default; }
+  @media (prefers-reduced-motion: reduce) { .popmenu { animation: none; } }
+
   .src-panel { display: flex; flex-direction: column; }
   .src-panel__head {
     display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 8px 0 16px;
