@@ -74,6 +74,7 @@ function parseHTML(html) {
       if (key) attrs[key] = val;
     }
     var el = makeEl(name.toLowerCase(), attrs);
+    el.parent = top();
     top().children.push(el);
     if (!selfClose && name !== "br" && name !== "img" && name !== "meta" && name !== "link" && name !== "input") stack.push(el);
   }
@@ -87,33 +88,67 @@ function allText(el) {
 }
 
 function matches(el, sel) {
-  // 只支持:tag / .cls / #id / tag.cls / tag[attr]
-  var s = sel.trim();
+  if (!el || !el.tag) return false;
+  var s = String(sel).trim();
   if (!s) return false;
-  var attr = null;
-  var br = s.indexOf("[");
-  if (br >= 0) {
-    var brEnd = s.indexOf("]", br);
-    attr = s.slice(br + 1, brEnd).trim();
-    s = s.slice(0, br) + s.slice(brEnd + 1);
+  if (s === "*") return true;
+  // 先把所有 [attr] / [attr=value] 摘出来
+  var attrs = [], out = "", i = 0;
+  while (i < s.length) {
+    var c = s.charAt(i);
+    if (c === "[") {
+      var e = s.indexOf("]", i);
+      if (e < 0) break;
+      var body = s.slice(i + 1, e).trim();
+      var eq = body.indexOf("=");
+      if (eq < 0) {
+        attrs.push({ k: body, v: null });
+      } else {
+        var kk = body.slice(0, eq).trim();
+        var vv = body.slice(eq + 1).trim();
+        if ((vv.charAt(0) === '"' && vv.charAt(vv.length - 1) === '"') ||
+            (vv.charAt(0) === "'" && vv.charAt(vv.length - 1) === "'")) {
+          vv = vv.slice(1, -1);
+        }
+        attrs.push({ k: kk, v: vv });
+      }
+      i = e + 1;
+    } else {
+      out += c;
+      i++;
+    }
   }
-  var cls = null;
-  var dot = s.indexOf(".");
-  if (dot >= 0) {
-    cls = s.slice(dot + 1).trim();
-    s = s.slice(0, dot);
+  var tag = "", classes = [], id = null, buf = "", kind = "tag";
+  function flush() {
+    if (!buf) return;
+    if (kind === "cls") classes.push(buf);
+    else if (kind === "id") id = buf;
+    else tag = buf.toLowerCase();
+    buf = "";
   }
-  var id = null;
-  var hash = s.indexOf("#");
-  if (hash >= 0) {
-    id = s.slice(hash + 1).trim();
-    s = s.slice(0, hash);
+  for (var j = 0; j < out.length; j++) {
+    var ch = out.charAt(j);
+    if (ch === "." || ch === "#") {
+      flush();
+      kind = ch === "." ? "cls" : "id";
+    } else if (ch !== " " && ch !== "\n" && ch !== "\t") {
+      buf += ch;
+    }
   }
-  var tag = s.trim().toLowerCase();
-  if (tag && el.tag !== tag) return false;
+  flush();
+  if (tag && tag !== "*" && el.tag !== tag) return false;
   if (id && el.attrs.id !== id) return false;
-  if (cls && (el.attrs["class"] || "").split(" ").indexOf(cls) < 0) return false;
-  if (attr && el.attrs[attr] === undefined) return false;
+  if (classes.length) {
+    var have = String(el.attrs["class"] || "").split(" ");
+    for (var m = 0; m < classes.length; m++) {
+      if (have.indexOf(classes[m]) < 0) return false;
+    }
+  }
+  for (var n = 0; n < attrs.length; n++) {
+    var v = el.attrs[attrs[n].k];
+    if (v === undefined) return false;
+    if (attrs[n].v !== null && String(v) !== attrs[n].v) return false;
+  }
   return true;
 }
 
@@ -163,7 +198,55 @@ function wrap(list) {
       return list.length ? allText(list[0]) : "";
     },
     eq: function (i) {
-      return wrap([list[i]]);
+      return wrap(list[i] ? [list[i]] : []);
+    },
+    find: function (sel) {
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        var hits = selectAll(list[i], sel);
+        for (var h = 0; h < hits.length; h++) if (out.indexOf(hits[h]) < 0) out.push(hits[h]);
+      }
+      return wrap(out);
+    },
+    closest: function (sel) {
+      var node = list[0];
+      while (node && node.tag !== "#root") {
+        if (matches(node, sel)) return wrap([node]);
+        node = node.parent;
+      }
+      return wrap([]);
+    },
+    is: function (sel) {
+      return !!(list[0] && matches(list[0], sel));
+    },
+    first: function () {
+      return wrap(list.length ? [list[0]] : []);
+    },
+    last: function () {
+      return wrap(list.length ? [list[list.length - 1]] : []);
+    },
+    parent: function () {
+      var p = list[0] && list[0].parent;
+      return wrap(p ? [p] : []);
+    },
+    children: function () {
+      return wrap(list[0] ? list[0].children.slice() : []);
+    },
+    map: function (fn) {
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        var r = fn(i, list[i]);
+        if (r === null || r === undefined) continue;
+        if (r instanceof Array) {
+          for (var k = 0; k < r.length; k++) out.push(r[k]);
+        } else {
+          out.push(r);
+        }
+      }
+      return wrap(out);
+    },
+    get: function (i) {
+      return i === undefined ? list.slice() : list[i];
     },
   };
   api[0] = list[0];
@@ -179,17 +262,77 @@ function makePage(html, url) {
   return { $: $, url: url, html: html };
 }
 
+
+
+function __withQuery(u, query) {
+  var s = String(u || "");
+  if (!query) return s;
+  var parts = [];
+  for (var k in query) {
+    if (!Object.prototype.hasOwnProperty.call(query, k)) continue;
+    if (query[k] === undefined || query[k] === null || query[k] === "") continue;
+    parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(String(query[k])));
+  }
+  if (!parts.length) return s;
+  return s + (s.indexOf("?") >= 0 ? "&" : "?") + parts.join("&");
+}
+
+// URL 工具:boa 没有全局 URL,手写一个够用的
+function __urlResolve(raw, base) {
+  if (raw === null || raw === undefined) return "";
+  var s = String(raw);
+  if (/^[a-zA-Z][a-zA-Z0-9+.\-]*:\/\//.test(s)) return s;
+  var b = String(base || "");
+  var m = /^([a-zA-Z][a-zA-Z0-9+.\-]*:)?\/\/([^\/?#]+)([^?#]*)/.exec(b);
+  if (!m) return s;
+  var scheme = m[1] || "https:";
+  var host = m[2];
+  if (s.indexOf("//") === 0) return scheme + s;
+  if (s.charAt(0) === "/") return scheme + "//" + host + s;
+  var path = m[3] || "/";
+  var dir = path.replace(/[^\/]*$/, "");
+  return scheme + "//" + host + dir + s;
+}
+function __urlOrigin(u) {
+  var m = /^([a-zA-Z][a-zA-Z0-9+.\-]*:)?\/\/([^\/?#]+)/.exec(String(u || ""));
+  if (!m) return "";
+  return (m[1] || "https:") + "//" + m[2];
+}
+
 var ctx = {
   http: {
-    get: function (u) {
-      return __fetch_text(u);
+    // 返回 String 对象(可以当字符串用),同时带 status / data / url,两种插件都兼容
+    get: function (u, opts) {
+      var url = __withQuery(u, opts && opts.query);
+      var text = __fetch_text(url);
+      if (text === null || text === undefined) {
+        throw new Error("请求失败: " + url);
+      }
+      var body = String(text);
+      var res = new String(body);
+      res.status = 200;
+      res.url = url;
+      res.data = body;
+      res.headers = {};
+      return res;
     },
   },
   html: {
-    load: function (u) {
-      var body = __fetch_text(u);
-      var html = body === null || body === undefined ? "" : String(body);
-      return Promise.resolve(makePage(html, u));
+    // 传 HTML 文本就直接解析,传 URL 就去抓;返回的 $ 可以当函数调用
+    load: function (input) {
+      var raw = input === undefined || input === null ? "" : String(input);
+      var html = raw, url = "";
+      if (raw.indexOf("<") < 0) {
+        url = __withQuery(raw, null);
+        var body = __fetch_text(url);
+        html = body === null || body === undefined ? "" : String(body);
+      }
+      var page = makePage(html, url);
+      var $ = page.$;
+      $.$ = $;
+      $.url = url;
+      $.html = html;
+      return $;
     },
   },
   utils: {
@@ -197,6 +340,24 @@ var ctx = {
       return Date.now();
     },
   },
+  // 插件常用的 URL 工具
+  url: {
+    resolve: function (raw, base) {
+      return __urlResolve(raw, base);
+    },
+    origin: function (u) {
+      return __urlOrigin(u);
+    },
+  },
+  // 宿主没有取消机制,给个空实现,别让插件崩
+  signal: {
+    aborted: false,
+    throwIfAborted: function () {},
+    addEventListener: function () {},
+    removeEventListener: function () {},
+  },
+  // 插件设置:暂不支持自定义,先给空对象
+  settings: {},
 };
 
 // 分类错误:network / parse / auth / unsupported

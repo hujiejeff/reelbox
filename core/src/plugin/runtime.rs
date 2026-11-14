@@ -83,9 +83,9 @@ globalThis.__R = undefined; globalThis.__E = undefined;
     var arg = Object.assign({{}}, ctx, {arg_json});
     Promise.resolve(f.call(globalThis.__DEFINE, arg, arg)).then(
       function (v) {{ try {{ globalThis.__R = JSON.stringify(v); }} catch (e) {{ globalThis.__R = String(v); }} }},
-      function (e) {{ globalThis.__E = String(e && e.message ? e.message : e); }}
+      function (e) {{ globalThis.__E = e && e.message ? String(e.message) : String(e); }}
     );
-  }} catch (e) {{ globalThis.__E = String(e && e.message ? e.message : e); }}
+  }} catch (e) {{ globalThis.__E = e && e.message ? String(e.message) : String(e); }}
 }})();
 "#
         );

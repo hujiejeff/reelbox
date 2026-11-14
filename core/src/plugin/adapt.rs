@@ -48,9 +48,9 @@ pub fn page_from_json(text: &str) -> Result<Page, String> {
         });
     }
 
-    let next = v
-        .get("next")
-        .and_then(|x| x.as_str())
+    let next = ["next", "nextCursor", "cursor"]
+        .iter()
+        .find_map(|k| v.get(*k).and_then(|x| x.as_str()))
         .unwrap_or("")
         .to_string();
     Ok(Page { items, next })

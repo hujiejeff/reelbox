@@ -72,10 +72,12 @@ pub async fn list_items(source: Source, page: u32, classify: String) -> Result<P
     if is_plugin(&source) {
         return blocking(move || {
             let path = std::path::PathBuf::from(&source.url);
+            // 两种契约都喂:page(WeBox) + cursor(filters 版本插件) + filters
+            let c = classify.replace('"', "");
+            let cursor = if page <= 1 { "null".to_string() } else { format!("\"{}\"", page) };
             let arg = format!(
-                "{{\"page\":{},\"classify\":\"{}\"}}",
-                page,
-                classify.replace('"', "")
+                "{{\"page\":{},\"classify\":\"{}\",\"cursor\":{},\"filters\":{{\"classify\":\"{}\"}}}}",
+                page, c, cursor, c
             );
             let out = plugin::run_file(&path, "list", &arg, plugin_fetch())?;
             plugin::adapt::page_from_json(&out)

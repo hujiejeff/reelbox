@@ -523,17 +523,28 @@
   .dbg-fab[hidden] { display: none; }
   .dbg-fab:hover { background: rgba(32,32,38,.92); }
   .dbg-fab .m3e-icon { font-size: 20px; }
-  /* 桌面端滚动条:平时隐藏,悬停时出现细条 */
-  .scroll:hover, .side__scroll:hover, .chips:hover, .cattabs:hover, #v-detail:hover { scrollbar-width: thin; }
-  .scroll:hover::-webkit-scrollbar, .side__scroll:hover::-webkit-scrollbar,
-  .chips:hover::-webkit-scrollbar, .cattabs:hover::-webkit-scrollbar,
-  #v-detail:hover::-webkit-scrollbar { width: 8px; height: 8px; }
+  /* 滚动条常驻占位:宽度一直在(8px),只切换颜色 —— 悬停时不会挤动布局 */
+  .scroll, .side__scroll, .chips, .cattabs, #v-detail {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    scrollbar-gutter: stable;
+  }
+  .scroll::-webkit-scrollbar, .side__scroll::-webkit-scrollbar,
+  .chips::-webkit-scrollbar, .cattabs::-webkit-scrollbar,
+  #v-detail::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scroll::-webkit-scrollbar-thumb, .side__scroll::-webkit-scrollbar-thumb,
+  .chips::-webkit-scrollbar-thumb, .cattabs::-webkit-scrollbar-thumb,
+  #v-detail::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+  .scroll::-webkit-scrollbar-track, .side__scroll::-webkit-scrollbar-track,
+  .chips::-webkit-scrollbar-track, .cattabs::-webkit-scrollbar-track,
+  #v-detail::-webkit-scrollbar-track { background: transparent; }
+  /* 悬停/滚动时才上色 */
+  .scroll:hover, .side__scroll:hover, .chips:hover, .cattabs:hover, #v-detail:hover {
+    scrollbar-color: var(--m3e-sys-color-outline-variant) transparent;
+  }
   .scroll:hover::-webkit-scrollbar-thumb, .side__scroll:hover::-webkit-scrollbar-thumb,
   .chips:hover::-webkit-scrollbar-thumb, .cattabs:hover::-webkit-scrollbar-thumb,
-  #v-detail:hover::-webkit-scrollbar-thumb {
-    background: var(--m3e-sys-color-outline-variant); border-radius: 4px;
-  }
-  .scroll:hover::-webkit-scrollbar-track, .chips:hover::-webkit-scrollbar-track { background: transparent; }
+  #v-detail:hover::-webkit-scrollbar-thumb { background: var(--m3e-sys-color-outline-variant); }
 
   /* 小分类的勾:字体字形有基线偏移,这里对齐 */
   .m3e-filter-chip__leading { display: inline-flex; align-items: center; justify-content: center; }
