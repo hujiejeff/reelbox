@@ -7,7 +7,9 @@ rust-version = "1.77"
 
 [lib]
 name = "reelbox_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# MinGW 链接 cdylib 时会因导出序号超限失败;桌面只需要 rlib。
+# 以后做移动端再按需加回 staticlib/cdylib。
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -4,17 +4,16 @@
   "version": "0.1.0",
   "identifier": "dev.reelbox.app",
   "build": {
-    "frontendDist": "../ui",
-    "devUrl": "http://localhost:1420"
+    "frontendDist": "../ui"
   },
   "app": {
     "windows": [
       {
         "title": "Reelbox",
-        "width": 1280,
-        "height": 860,
-        "minWidth": 900,
-        "minHeight": 580,
+        "width": 1000,
+        "height": 640,
+        "minWidth": 760,
+        "minHeight": 500,
         "resizable": true
       }
     ],
@@ -25,6 +24,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": ["icons/icon.ico", "icons/icon.png"]
   }
 }

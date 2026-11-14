@@ -8,50 +8,54 @@
 
 ```
 reelbox/
-  ui/            前端(Tauri 直接吃这个目录)
-  src-tauri/     Rust 外壳
+  ui/            前端(Tauri 直接内嵌这个目录)
+  src-tauri/     Rust 外壳(Tauri 2)
+  core/          Rust 后端核心:模型 + 源适配器(不依赖 Tauri,可独立测试)
   docs/SPEC.md   源契约 —— 这个项目的核心资产
 ```
 
-## 现在能做什么
+## 工具链(全部在 D 盘,免管理员)
 
-外壳和占位页已经就位,**还差 Rust 工具链**才能 `tauri dev`:
+这台机器上 Visual Studio Build Tools 装不了(没有管理员),所以走 MinGW:
+
+```
+D:\rust\rustup        Rust 1.100,默认工具链 x86_64-pc-windows-gnu
+D:\rust\cargo         crates(走清华镜像)
+D:\rust\w64devkit     MinGW-w64 GCC 16.2
+D:\rt                  编译产物
+```
+
+新开终端后需要:
 
 ```bash
-# 需要一次性安装(约 2–4 GB):
-#   1) Rust:        https://rustup.rs
-#   2) MSVC 构建工具: Visual Studio Build Tools + "使用 C++ 的桌面开发"
-# 装好后:
-pnpm install
-pnpm dev
+export RUSTUP_HOME='D:\rust\rustup'
+export CARGO_HOME='D:\rust\cargo'
+export PATH="/d/rust/cargo/bin:/d/rust/w64devkit/bin:$PATH"
+
+cargo test -p reelbox-core          # 6 个测试,离线
+REELBOX_NET=1 cargo test -p reelbox-core -- --nocapture   # 打真站点
+cargo build -p reelbox --target x86_64-pc-windows-gnu
+D:/rt/x86_64-pc-windows-gnu/debug/reelbox.exe
 ```
 
-## 后端走哪条路(待定)
+## 踩过的坑(都已写进配置)
 
-**A. Tauri + 现有 Go 后端(边车)**
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `link.exe: extra operand` | 机器上只有 Git 的 `link.exe` | 用 GNU 工具链 |
+| `cannot find -lgcc_eh` | w64devkit 不带这个库 | 复制 `libgcc.a` 为 `libgcc_eh.a` |
+| `windres` 报 `No such file` | 路径 `D:\AI WorkSpace` 有空格 | `target-dir` 设到 `D:/rt` |
+| `export ordinal too large` | MinGW 不支持大 cdylib | `crate-type = ["rlib"]` |
+| 界面被放大、错位 | exe 没有 DPI 清单 | `build.rs` 里自定义 PerMonitorV2 清单 |
 
-```
-Tauri 窗口 ──HTTP──► 127.0.0.1:8787(Go:插件宿主 / 苹果 CMS / HLS 反代)
-```
+## 现在能做什么
 
-- 解析层一行不用重写,mygo-wox 里那套直接编译成边车
-- 前端把 `fetch("/api/list")` 换成绝对地址即可
-- 代价:包里多一个 20MB 的 Go 进程
+- Rust 核心:苹果 CMS(JSON + XML)的 列表 / 搜索 / 详情 / 取流 / 分类
+- Tauri 窗口能起来,加载内嵌的 `ui/`(现在是占位页)
 
-**B. Tauri + Rust 后端**
+## 下一步
 
-- 解析层重写成 Rust(reqwest + scraper + 一个 JS 运行时)
-- 包体最小,单进程
-- 代价:重写约 1500 行,且 JS 运行时(跑 `.webox.js`)要自己选
-
-## 已经验证过的结论(从上一版搬来的,不用再试)
-
-- 苹果 CMS 的 `t=` 只认**二级分类**,传一级返回 0 条
-- `ac=list` 不带封面,列表要用 `ac=detail`
-- 部分源的封面是 `.webp`,Windows 原生控件解不了 → 走本地代理转 jpeg
-- Windows 的 WebView 不认 m3u8,需要 hls.js + 本地反代(带 UA/Referer、改写分片地址)
-- 隐藏的 WebView 能当脚本沙箱,且自带 WebAssembly
-
-## 许可
-
-自用。
+1. Tauri 命令层:`list_sources` / `list_items` / `detail` / `play` / `filters`
+2. 前端:先用最简页面调通数据,再做海报墙
+3. 播放:HLS 反代 + hls.js(Windows 的 WebView 不认 m3u8)
+4. 插件源 `.webox.js`:Rust 侧嵌 JS 运行时(最硬的一块,放最后)
