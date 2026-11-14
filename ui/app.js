@@ -32,6 +32,7 @@ const S = {
   listError: null,      // 上一页/当前列表的失败信息(三态用:加载中 / 空 / 错误)
   detailItem: null,     // 最近打开的条目,详情失败时重试用
   detailGroups: [],     // 详情里的线路,播放失败"换线路"用
+  detailFrom: "home",   // 详情页是从哪个视图点进来的:返回要回原处(首页 / 喜欢)
   favs: {},             // 收藏:localStorage["reelbox.favs"],键 = 源id|片名
   srcFilter: "all",     // 源管理页分段:all | vod | plugin | live
   reqSeq: 0,            // 请求代际:切源/换分类时 +1,回来的迟到的响应一律丢掉
@@ -686,6 +687,8 @@ async function doSearch() {
 async function openDetail(item) {
   log("openDetail", item && item.title);
   if (item) S.detailItem = item;
+  // 记下来源视图:从「喜欢」进来的详情,返回该回「喜欢」,不是永远甩回首页(第 6 组)
+  if (currentView !== "detail") S.detailFrom = currentView;
   showView("detail");
   $("v-detail").innerHTML = DETAIL_SKELETON;
   try {
@@ -698,6 +701,12 @@ async function openDetail(item) {
     showDetailError(errorInfo("detail", e), item);
     throw e;
   }
+}
+
+/** 详情页返回:回到点进来的那个视图(收藏 → 喜欢,首页 → 首页) */
+function closeDetail() {
+  const back = S.detailFrom && S.detailFrom !== "detail" ? S.detailFrom : "home";
+  showView(back);
 }
 
 // ---------- 三态:加载(骨架屏)/ 空 / 错误 ----------
@@ -1420,7 +1429,7 @@ function renderDetail(d) {
       (groups || '<p class="noep">这个源没给剧集列表</p>') +
     "</div>";
 
-  $("btnBack").onclick = () => showView("home");
+  $("btnBack").onclick = () => closeDetail();
 
   const btnFav = $("btnFav");
   if (btnFav) {
@@ -3652,7 +3661,7 @@ function showDetailError(info, item) {
         raw: info.raw,
       }) +
     "</div>";
-  $("btnBack").onclick = () => showView("home");
+  $("btnBack").onclick = () => closeDetail();
   const retryBtn = box.querySelector('[data-act="retry"]');
   if (retryBtn) retryBtn.onclick = () => openDetail(item || S.detailItem).catch(() => {});
   const sw = box.querySelector('[data-act="switch"]');
