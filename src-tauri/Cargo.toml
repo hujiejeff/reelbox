@@ -1,4 +1,5 @@
 [package]
+license = "MIT"
 name = "reelbox"
 version = "0.1.0"
 description = "Reelbox — 全平台影视资源解析播放器"

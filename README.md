@@ -68,3 +68,7 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 ## 状态
 
 开发中。已覆盖点播(三类源、播放、收藏、源管理);直播源在路线图 v0.3。
+
+## 许可
+
+MIT,见 [LICENSE](LICENSE)。
