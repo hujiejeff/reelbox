@@ -23,6 +23,11 @@ const $ = (id) => document.getElementById(id);
 // ---------- 数据 ----------
 
 async function init() {
+  $("pBack").onclick = closePlayer;
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("player").hidden) closePlayer();
+  });
+
   try {
     S.sources = await invoke("list_sources");
   } catch (e) {
@@ -303,14 +308,54 @@ function renderDetail(d) {
   });
 }
 
+let hls = null;
+
+function closePlayer() {
+  const box = $("player");
+  const v = $("video");
+  if (hls) { hls.destroy(); hls = null; }
+  try { v.pause(); } catch (_) {}
+  v.removeAttribute("src");
+  v.load();
+  box.hidden = true;
+  box.classList.remove("dim");
+}
+
+function openPlayer(url, name) {
+  const box = $("player");
+  const v = $("video");
+  box.hidden = false;
+  $("pTitle").textContent = name || "";
+  $("pState").textContent = "加载中…";
+  if (hls) { hls.destroy(); hls = null; }
+
+  const isHls = url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
+  if (window.Hls && Hls.isSupported() && isHls) {
+    hls = new Hls({ maxBufferLength: 30, enableWorker: true });
+    hls.loadSource(url);
+    hls.attachMedia(v);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      $("pState").textContent = "";
+      v.play().catch(() => {});
+    });
+    hls.on(Hls.Events.ERROR, (_e, d) => {
+      if (d && d.fatal) { $("pState").textContent = "播放失败:" + d.details; window.__err && window.__err("hls: " + d.details); }
+    });
+  } else {
+    v.src = url;
+    v.play().catch(() => {});
+  }
+  v.onplaying = () => { $("pState").textContent = ""; };
+}
+
 async function playEpisode(id, name) {
+  openPlayer("", name);
   try {
-    const st = await invoke("play", { source: S.source, episode_id: id });
-    $("v-detail").querySelector(".eps").innerHTML =
-      '<div class="placeholder"><b>' + esc(name) + "</b><span>" + esc(st.mime) + "</span><span class=\"mono\">" +
-      esc(st.url) + "</span></div>";
+    const st = await invoke("play", { source: S.source, episodeId: id });
+    const local = await invoke("player_url", { stream: st });
+    openPlayer(local, name);
   } catch (e) {
-    alert("取流失败:" + e);
+    $("pState").textContent = "取流失败:" + e;
   }
 }
 

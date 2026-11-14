@@ -152,7 +152,8 @@ impl Client {
         if parts.len() != 3 || !parts[2].starts_with("http") {
             return Err("INVALID_RESPONSE: 剧集标识无效".into());
         }
-        let media = parts[2];
+        let (media_owned, referer) = resolve_media(parts[2]);
+        let media = media_owned.as_str();
         let mime = if media.to_lowercase().contains(".mp4") {
             "video/mp4"
         } else {
@@ -160,6 +161,9 @@ impl Client {
         };
         let mut headers = BTreeMap::new();
         headers.insert("User-Agent".to_string(), DEFAULT_UA.to_string());
+        if let Some(r) = referer {
+            headers.insert("Referer".to_string(), r);
+        }
         Ok(Stream {
             url: media.to_string(),
             mime: mime.to_string(),
@@ -465,4 +469,90 @@ mod tests {
         assert!(!filters.is_empty(), "没读到分类");
         println!("分类 {} 个", filters[0].options.len());
     }
+}
+
+/// 有些源给的是一张分享页(HTML),真正的 m3u8 藏在页面里。
+/// 取一次页面把地址抽出来,同时把页面地址当 Referer 带回去。
+fn resolve_media(url: &str) -> (String, Option<String>) {
+    let lower = url.to_lowercase();
+    if lower.contains(".m3u8") || lower.contains(".mp4") {
+        return (url.to_string(), None);
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(12))
+        .build();
+    let resp = match agent
+        .get(url)
+        .set("User-Agent", DEFAULT_UA)
+        .set("Referer", url)
+        .call()
+    {
+        Ok(r) => r,
+        Err(_) => return (url.to_string(), None),
+    };
+    let ct = resp.header("content-type").unwrap_or("").to_lowercase();
+    if ct.contains("mpegurl") || ct.contains("video/") {
+        return (url.to_string(), None);
+    }
+    let mut body = String::new();
+    use std::io::Read as _;
+    if resp
+        .into_reader()
+        .take(4 << 20)
+        .read_to_string(&mut body)
+        .is_err()
+    {
+        return (url.to_string(), None);
+    }
+    match extract_m3u8(&body, url) {
+        Some(media) => (media, Some(url.to_string())),
+        None => (url.to_string(), None),
+    }
+}
+
+fn extract_m3u8(body: &str, base: &str) -> Option<String> {
+    let bs = char::from_u32(92).unwrap();
+    let text = body.replace(&format!("{bs}/"), "/");
+    let lower = text.to_lowercase();
+    let bytes = text.as_bytes();
+    let idx = lower.find(".m3u8")?;
+    let mut l = idx;
+    while l > 0 && !is_boundary(bytes[l - 1]) {
+        l -= 1;
+    }
+    let mut r = idx + 5;
+    while r < bytes.len() && !is_boundary(bytes[r]) {
+        r += 1;
+    }
+    Some(absolute(&text[l..r], base))
+}
+
+fn is_boundary(c: u8) -> bool {
+    let ch = c as char;
+    ch == '\'' || ch == '"' || ch == '<' || ch == '>' || ch == ')' || ch == '(' || ch == ',' || ch == ';'
+        || ch.is_whitespace()
+}
+
+/// 把相对地址补成绝对地址
+fn absolute(u: &str, base: &str) -> String {
+    if u.starts_with("http") {
+        return u.to_string();
+    }
+    if u.starts_with("//") {
+        return format!("https:{u}");
+    }
+    let Some(p) = base.find("://") else {
+        return u.to_string();
+    };
+    let rest = &base[p + 3..];
+    let host_end = rest.find('/').map(|i| p + 3 + i).unwrap_or(base.len());
+    let origin = &base[..host_end];
+    if u.starts_with('/') {
+        return format!("{origin}{u}");
+    }
+    let dir = match base.rfind('/') {
+        Some(i) if i > host_end => &base[..=i],
+        _ => return format!("{origin}/{u}"),
+    };
+    format!("{dir}{u}")
 }

@@ -1,6 +1,7 @@
 // Reelbox 的 Tauri 外壳:窗口 + 命令注册。
 
 mod commands;
+mod proxy;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -12,6 +13,7 @@ pub fn run() {
             commands::search,
             commands::detail,
             commands::play,
+            commands::player_url,
             commands::filters,
             commands::poster,
         ])

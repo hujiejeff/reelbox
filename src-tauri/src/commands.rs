@@ -55,3 +55,15 @@ pub async fn poster(url: String) -> Result<Response, String> {
     .await?;
     Ok(Response::new(bytes))
 }
+
+/// 把真实流地址包成本地代理地址(带 UA/Referer,并改写 m3u8 内部分片)
+#[tauri::command]
+pub fn player_url(stream: Stream) -> String {
+    let list: Vec<Vec<String>> = stream
+        .headers
+        .iter()
+        .map(|(k, v)| vec![k.clone(), v.clone()])
+        .collect();
+    let h = serde_json::to_string(&list).unwrap_or_else(|_| "[]".into());
+    crate::proxy::wrap(&stream.url, &h)
+}

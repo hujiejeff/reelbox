@@ -157,7 +157,7 @@
   }
   .searchbox input::placeholder { color: var(--m3e-sys-color-on-surface-variant); }
   #v-detail { overflow-y: auto; }
-  .detail-wrap { max-width: 780px; margin: 0 auto; padding: 8px 22px 44px; }
+  .detail-wrap { width: 100%; max-width: 780px; margin-inline: auto; padding: 8px 22px 44px; }
   .back {
     width: 40px; height: 40px; margin: 2px 0 6px -8px; border: none; border-radius: 50%;
     display: grid; place-items: center; cursor: pointer; color: inherit; background: transparent;
@@ -186,7 +186,7 @@
     margin: 0 0 10px; font-size: 12px; font-weight: 700; letter-spacing: .04em;
     color: var(--m3e-sys-color-on-surface-variant);
   }
-  .epgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+  .epgrid { display: grid; grid-template-columns: repeat(auto-fill, 92px); gap: 8px; justify-content: start; }
   .noep { font-size: 13px; color: var(--m3e-sys-color-on-surface-variant); }
   .chip-ep {
     height: 38px; padding: 0 10px; border-radius: 12px; cursor: pointer;
@@ -205,7 +205,7 @@
     .detail-top h2 { font-size: 17px; margin-bottom: 8px; }
     .detail-top p { font-size: 12.5px; -webkit-line-clamp: 3; }
     .epgroup { margin-top: 18px; }
-    .epgrid { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; }
+    .epgrid { grid-template-columns: repeat(auto-fill, 72px); gap: 6px; }
     .chip-ep { height: 34px; border-radius: 10px; font-size: 12px; }
   }
   .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11px; word-break: break-all; max-width: 100%; }
@@ -325,6 +325,29 @@
   /* 有图之后去掉底色,避免圆角处透出一圈亮边 */
   .poster.has-img { background: transparent; }
   .poster img { display: block; }
+  /* 播放器:整屏覆盖 */
+  .player { position: fixed; inset: 0; z-index: 100; background: #000; display: flex; }
+  .player[hidden] { display: none; }
+  .player video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .player-head {
+    position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; color: #fff; background: linear-gradient(180deg, rgba(0,0,0,.72), transparent);
+    transition: opacity .25s; pointer-events: none;
+  }
+  .player-head > * { pointer-events: auto; }
+  .player.dim .player-head { opacity: 0; }
+  .pbtn {
+    width: 38px; height: 38px; flex: none; display: grid; place-items: center; cursor: pointer;
+    border: none; border-radius: 50%; background: rgba(255,255,255,.14); color: #fff;
+  }
+  .pbtn:hover { background: rgba(255,255,255,.26); }
+  .ptitle { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pstate {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    color: #fff; font-size: 13px; background: rgba(0,0,0,.55); padding: 10px 18px; border-radius: 999px;
+  }
+  .pstate:empty { display: none; }
+
   @media (max-width: 599px) {
     /* 窄屏三列:放在最后,确保压过基础栅格 */
     .grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 16px 10px; }
@@ -332,6 +355,29 @@
     .meta { padding-top: 7px; }
     .meta b { font-size: 12px; }
   }
+  /* 播放器:整屏覆盖 */
+  .player { position: fixed; inset: 0; z-index: 100; background: #000; display: flex; }
+  .player[hidden] { display: none; }
+  .player video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .player-head {
+    position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; color: #fff; background: linear-gradient(180deg, rgba(0,0,0,.72), transparent);
+    transition: opacity .25s; pointer-events: none;
+  }
+  .player-head > * { pointer-events: auto; }
+  .player.dim .player-head { opacity: 0; }
+  .pbtn {
+    width: 38px; height: 38px; flex: none; display: grid; place-items: center; cursor: pointer;
+    border: none; border-radius: 50%; background: rgba(255,255,255,.14); color: #fff;
+  }
+  .pbtn:hover { background: rgba(255,255,255,.26); }
+  .ptitle { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pstate {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    color: #fff; font-size: 13px; background: rgba(0,0,0,.55); padding: 10px 18px; border-radius: 999px;
+  }
+  .pstate:empty { display: none; }
+
 </style>
 </head>
 <body>
@@ -466,6 +512,18 @@
     window.__err("reject: " + (e.reason && e.reason.message ? e.reason.message : e.reason));
   });
 </script>
+  <div class="player" id="player" hidden>
+    <video id="video" playsinline controls autoplay></video>
+    <div class="player-head">
+      <button class="pbtn" id="pBack" aria-label="返回">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>
+      </button>
+      <div class="ptitle" id="pTitle"></div>
+    </div>
+    <div class="pstate" id="pState"></div>
+  </div>
+
+  <script src="vendor/hls.min.js"></script>
 <script type="module" src="app.js" onerror="window.__err('module app.js 加载失败')"></script>
 </body>
 </html>
