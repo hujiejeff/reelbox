@@ -839,11 +839,23 @@ function healthOf(src) {
   if (src && src._testing) return { state: "testing", label: "测速中…" };
   const h = src && src.health;
   if (!h) return { state: "untested", label: "未测速" };
-  if (!h.ok) return { state: "fail", label: "连接失败" + (h.error ? " · " + h.error : "") };
+  // 后端 Health 的备注字段叫 note;老数据/老前端写过 error,两个都认
+  const note = h.note || h.error || "";
+  if (!h.ok) return { state: "fail", label: "连接失败" + (note ? " · " + note : "") };
   const ms = Number(h.ms || 0);
   if (ms < 800) return { state: "ok", label: "正常 · " + fmtMs(ms) };
-  if (ms <= 2000) return { state: "slow", label: "偏慢 · " + fmtMs(ms) };
   return { state: "slow", label: "偏慢 · " + fmtMs(ms) };
+}
+
+/** UTC ISO8601 秒精度,和 Rust 的 now_iso() 同一个形状(health.checked_at) */
+function nowIso() {
+  return new Date().toISOString().replace(/\.\d+Z$/, "Z");
+}
+
+/** 失败原因留前 40 字:状态点的 tooltip 放不下整段 blame */
+function shortNote(text) {
+  const s = String(text == null ? "" : text).replace(/\s+/g, " ").trim();
+  return s.length > 40 ? s.slice(0, 40) + "…" : s;
 }
 
 function srcTypeIcon(s) {
@@ -976,8 +988,16 @@ function openSrcMenu() {
   }
   const panel = document.createElement("div");
   mountSrcPanel(panel, "");
-  const sheet = openSheet({ content: panel, label: "切换源" });
-  srcMenuCloser = () => sheet.close();
+  // 拖拽 / 点遮罩 / Esc 关掉 sheet 时要顺手清掉 closer,否则 srcMenuOpen() 一直是 true,
+  // 下一次点源按钮的第一下会被当成"关闭"(I3 的另一半)
+  let closer = null;
+  const sheet = openSheet({
+    content: panel,
+    label: "切换源",
+    onClose: () => { if (srcMenuCloser === closer) srcMenuCloser = null; },
+  });
+  closer = () => sheet.close();
+  srcMenuCloser = closer;
 }
 function renderParents() {
   const side = $("catlist");
@@ -1797,6 +1817,10 @@ function renderSourceManager() {
           "</span>" +
           '<span class="m3e-list-item__trailing">' +
             statusDotHtml(s) +
+            // 「进去看」= 真的进这个源的首页;点行只切源、留在源页,两件事分开(I5)
+            '<button type="button" class="m3e-icon-button m3e-icon-button--standard src-row__go"' +
+              ' data-act="home" data-idx="' + idx + '" title="进去看" aria-label="进去看 · ' + esc(s.name) + '">' +
+              '<span class="m3e-icon" aria-hidden="true">arrow_forward</span></button>' +
             '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="more" data-idx="' +
               idx + '" aria-haspopup="menu" aria-label="更多 · ' + esc(s.name) + '">' +
               '<span class="m3e-icon" aria-hidden="true">more_vert</span></button>' +
@@ -1840,12 +1864,42 @@ async function onSourceRowAction(id, src) {
   if (id === "del") return removeSource(src);
 }
 
-/** 设为当前:走统一的 switchSource(会写 recent 与 currentSource) */
-async function setCurrentSource(src) {
-  if (S.source && S.source.id === src.id) return;
-  await switchSource(src);
+/** 当前是不是正站在设置页上(决定切源之后要不要留在这一页) */
+function onSettingsView() {
+  const v = $("v-settings");
+  return !!(v && v.hasAttribute("data-on"));
+}
+
+/**
+ * 设为当前:走统一的 switchSource(会写 recent 与 currentSource)。
+ * opts.stay = 留在源管理页(点行就是这条路,见 I5);3 秒内可撤销。
+ */
+async function setCurrentSource(src, opts) {
+  if (!src) return;
+  const stay = !!(opts && opts.stay);
+  if (S.source && S.source.id === src.id) {
+    if (stay) toast("「" + src.name + "」已经是当前源");
+    return;
+  }
+  const prev = S.source;
+  const done = await switchSource(src, { stay: stay });
+  if (done === false) return; // 播放中确认框被取消:什么都没变
   renderSourceManager();
-  toast("已切换到「" + src.name + "」");
+  toast("已切到「" + src.name + "」", prev ? {
+    actionLabel: "撤销",
+    timeout: 3000, // 3 秒内可撤销
+    onAction: () => undoSwitchSource(prev, stay),
+  } : undefined);
+}
+
+/** 撤销切源:切回上一个源,人在源页就继续留在源页 */
+async function undoSwitchSource(prev, stay) {
+  if (!prev) return;
+  if (!(S.sources || []).some((s) => s.id === prev.id)) return;
+  const done = await switchSource(prev, { stay: stay || onSettingsView() });
+  if (done === false) return;
+  renderSourceManager();
+  toast("已切回「" + prev.name + "」");
 }
 
 /** 置顶 = 把它挪到列表第一个,顺序本身要落盘 */
@@ -1913,6 +1967,85 @@ async function applySources(list) {
   renderSourceManager();
   renderSources();
   syncSetSummaries();
+}
+
+/* ---------- 全部测速(I6) ---------- */
+// 对每个源跑一次列表首页,把耗时写回 Source.health 并落盘,状态点立刻变。
+// 「首字节」在 invoke 这一层拿不到:这里量的是「发出请求 → 列表解析完」的往返,
+// 口径比首字节略大,但同口径可比(四态阈值见 docs/DESIGN-SPEC-UI.md §2.5)。
+
+let testingAll = false;
+
+function syncTestAllBtn() {
+  const b = $("btnTestAll");
+  if (!b) return;
+  b.disabled = testingAll;
+  b.setAttribute("aria-busy", testingAll ? "true" : "false");
+  b.textContent = testingAll ? "测速中…" : "全部测速";
+}
+
+/** 单源探测:点播/XML 走 Rust 的 list_items,插件源走沙箱(和首页同一个请求) */
+async function probeSource(src) {
+  const t0 = performance.now();
+  const spent = () => Math.round(performance.now() - t0);
+  try {
+    if (isPluginSource(src)) {
+      await callPlugin(src.url, "list", { page: 1, cursor: null, filters: { classify: "" } });
+    } else {
+      await invoke("list_items", { source: src, page: 1, classify: "" });
+    }
+    return { ok: true, ms: spent(), checked_at: nowIso(), note: "" };
+  } catch (e) {
+    log("PROBE FAIL", src && src.name, errText(e));
+    return { ok: false, ms: spent(), checked_at: nowIso(), note: shortNote(errText(e)) };
+  }
+}
+
+/**
+ * 全部测速:串行跑(并发会把首字节时间搅成一团),每测完一个就重画一次,
+ * 用户能看着状态点一个个亮起来。结束后汇总「n/m 可用」。
+ */
+async function testAllSources() {
+  if (testingAll) return;
+  const all = (S.sources || []).slice();
+  if (!all.length) {
+    toast("还没有源可测");
+    return;
+  }
+  // 直播源没有列表接口(要等直播播放做出来),不谎报"连接失败",跳过并在汇总里说清楚
+  const targets = all.filter((s) => sourceType(s) !== "live");
+  const skipped = all.length - targets.length;
+  if (!targets.length) {
+    toast("只有直播源,直播还没有列表接口可测");
+    return;
+  }
+
+  testingAll = true;
+  syncTestAllBtn();
+  targets.forEach((s) => { s._testing = true; });
+  renderSourceManager();
+  renderSources();
+
+  let okCount = 0;
+  for (const src of targets) {
+    const health = await probeSource(src);
+    if (health.ok) okCount++;
+    delete src._testing;
+    src.health = health;
+    renderSourceManager();
+    renderSources(); // 切源面板里的状态点也一起变
+  }
+
+  testingAll = false;
+  syncTestAllBtn();
+  await persistSources();
+  renderSourceManager();
+  renderSources();
+  const msg =
+    "测速完成:" + okCount + "/" + targets.length + " 可用" +
+    (skipped ? "(直播源未测 " + skipped + " 个)" : "");
+  log("test all", "ok=" + okCount, "n=" + targets.length, "skip_live=" + skipped);
+  toast(msg);
 }
 
 /** 类型下拉跟着地址走:认出来了就锁死并说明,认不出来才放开手选 */
@@ -2171,11 +2304,11 @@ function bindSourceManager() {
         if (act === "home") return showView("home");
         return;
       }
-      // 点整行 = 设为当前源,但留在源页(I5)
+      // 点整行 = 设为当前源,但留在源页 + toast + 3s 撤销(I5)
       const row = e.target.closest(".m3e-list-item[data-idx]");
       if (!row) return;
       const src = srcAt(row);
-      if (src && S.source !== src) setCurrentSource(src, { stay: true });
+      if (src) setCurrentSource(src, { stay: true });
     };
   }
   if ($("srcAdd") && !$("srcAdd").dataset.bound) {
@@ -2187,6 +2320,9 @@ function bindSourceManager() {
     $("srcPlugin").onclick = () => $("pluginFile").click();
     $("pluginFile").onchange = importPluginFile;
     $("srcFile").onchange = importJsonFile;
+    // 全部测速:之前 onclick 是空的,点了一点反应都没有(I6)
+    if ($("btnTestAll")) $("btnTestAll").onclick = () => testAllSources();
+    syncTestAllBtn();
   }
 }
 
@@ -3306,12 +3442,14 @@ function bindSourceMenu() {
     if (srcMenuOpen()) return closeSrcMenu();
     openSrcMenu();
   };
-  // 桌面弹出层:点外面关掉(sheet 有自己的 scrim)
+  // 桌面弹出层:点外面关掉(sheet 有自己的 scrim)。
+  // 必须走 closeSrcMenu():直接摘 data-open 会留下 srcMenuCloser,
+  // 于是 srcMenuOpen() 仍是 true,下一次点源按钮会被当成"关闭"(I3)
   document.addEventListener("click", (e) => {
     const menu = $("srcMenu");
     if (!menu || !menu.hasAttribute("data-open")) return;
     if (e.target.closest("#srcMenu") || e.target.closest("#srcBtn")) return;
-    menu.removeAttribute("data-open");
+    closeSrcMenu();
   });
 }
 
