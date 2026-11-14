@@ -6,3 +6,6 @@ src-tauri/gen/
 *.exe
 *.log
 .DS_Store
+docs/dev/
+.reelbox-scratch/
+*.tmp
