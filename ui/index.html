@@ -351,7 +351,29 @@
   }
   .p-icon:hover { background: rgba(255,255,255,.24); }
   .p-icon:active { transform: scale(.94); }
-  .p-icon .m3e-icon { font-size: 20px; }
+  .p-icon .m3e-icon {
+    font-size: 21px; line-height: 1; display: block;
+    /* Material Symbols 字形本身有基线偏移,这里做光学居中 */
+    transform: translateY(0.5px);
+  }
+  .p-icon:disabled, .p-icon[aria-disabled="true"] { opacity: .32; pointer-events: none; }
+
+  .p-volwrap { position: relative; display: flex; }
+  .p-vol {
+    position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%);
+    padding: 10px 12px; border-radius: 18px; opacity: 0; pointer-events: none;
+    background: rgba(20,19,24,.86); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    transition: opacity .16s;
+  }
+  .p-volwrap:hover .p-vol, .p-vol:focus-within { opacity: 1; pointer-events: auto; }
+  .p-vol input[type="range"] {
+    -webkit-appearance: none; appearance: none; width: 96px; height: 4px; border-radius: 2px;
+    background: rgba(255,255,255,.28); outline: none; cursor: pointer;
+  }
+  .p-vol input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--m3e-sys-color-primary); border: none; cursor: pointer;
+  }
   #pQuality { width: auto; padding: 0 14px; border-radius: 19px; font: 600 12px/1 system-ui, sans-serif; }
 
   .p-levels {
@@ -375,7 +397,8 @@
     background: rgba(0,0,0,.42); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     transition: opacity .2s, transform .2s;
   }
-  .p-big .m3e-icon { font-size: 40px; }
+  .p-big .m3e-icon { font-size: 42px; line-height: 1; display: block; transform: translateY(1px); }
+  .player.playing .p-big { display: none; }
   .p-big:hover { transform: translate(-50%, -50%) scale(1.06); }
 
   .p-bottom {
@@ -610,14 +633,23 @@
         <div class="p-knob" id="knob"></div>
       </div>
       <div class="p-row">
+        <button class="p-icon" id="pPrev" aria-label="上一集">
+          <span class="m3e-icon">skip_previous</span>
+        </button>
         <button class="p-icon" id="pPlay" aria-label="播放/暂停">
           <span class="m3e-icon" id="pPlayIcon">play_arrow</span>
         </button>
+        <button class="p-icon" id="pNext" aria-label="下一集">
+          <span class="m3e-icon">skip_next</span>
+        </button>
         <span class="p-time" id="pTime">0:00 / 0:00</span>
         <span class="p-gap"></span>
-        <button class="p-icon" id="pMute" aria-label="静音">
-          <span class="m3e-icon" id="pMuteIcon">volume_up</span>
-        </button>
+        <div class="p-volwrap">
+          <button class="p-icon" id="pMute" aria-label="静音">
+            <span class="m3e-icon" id="pMuteIcon">volume_up</span>
+          </button>
+          <div class="p-vol"><input id="vol" type="range" min="0" max="100" value="100" aria-label="音量"></div>
+        </div>
         <button class="p-icon" id="pFull" aria-label="全屏">
           <span class="m3e-icon">fullscreen</span>
         </button>

@@ -388,9 +388,16 @@ function pSync() {
   const playing = !v.paused && !v.ended;
   $("pPlayIcon").textContent = playing ? "pause" : "play_arrow";
   $("pBigIcon").textContent = playing ? "pause" : "play_arrow";
-  $("pBig").style.opacity = playing ? "0" : "1";
-  $("pBig").style.pointerEvents = playing ? "none" : "auto";
-  $("pMuteIcon").textContent = v.muted || v.volume === 0 ? "volume_off" : "volume_up";
+  $("player").classList.toggle("playing", playing);
+  const vol = v.muted ? 0 : v.volume;
+  const volEl2 = $("vol");
+  if (volEl2 && document.activeElement !== volEl2) volEl2.value = String(Math.round(vol * 100));
+  $("pMuteIcon").textContent = vol === 0 ? "volume_off" : vol < 0.5 ? "volume_down" : "volume_up";
+  const pv = $("pPrev"), nx = $("pNext");
+  const list = (playCtx && playCtx.list) || [];
+  const idx = playCtx ? playCtx.index : -1;
+  pv.setAttribute("aria-disabled", idx <= 0 ? "true" : "false");
+  nx.setAttribute("aria-disabled", !list.length || idx < 0 || idx >= list.length - 1 ? "true" : "false");
 }
 
 function pSeekTo(clientX) {
@@ -444,7 +451,38 @@ function bindPlayer() {
   $("pPlay").onclick = pTogglePlay;
   v.onclick = pTogglePlay;
 
-  $("pMute").onclick = () => { v.muted = !v.muted; pSync(); };
+  $("pMute").onclick = () => {
+    v.muted = !v.muted;
+    if (!v.muted && v.volume === 0) v.volume = 0.6;
+    $("vol").value = String(Math.round((v.muted ? 0 : v.volume) * 100));
+    saveVolume();
+    pSync();
+  };
+  // 浏览器可能为了自动播放把视频静音,首次点击播放器时恢复声音
+  $("player").addEventListener("pointerdown", () => {
+    const vv = $("video");
+    if (vv.muted) {
+      vv.muted = false;
+      if (!vv.volume) vv.volume = 0.8;
+      $("vol").value = String(Math.round(vv.volume * 100));
+      saveVolume();
+      pSync();
+    }
+  }, true);
+
+  const volEl = $("vol");
+  volEl.value = String(Math.round(loadVolume() * 100));
+  v.volume = loadVolume();
+  volEl.oninput = () => {
+    const val = Number(volEl.value) / 100;
+    v.volume = val;
+    v.muted = val === 0;
+    saveVolume();
+    pSync();
+  };
+
+  $("pPrev").onclick = () => jumpEpisode(-1);
+  $("pNext").onclick = () => jumpEpisode(1);
   $("pFull").onclick = () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else if (box.requestFullscreen) box.requestFullscreen();
@@ -475,6 +513,38 @@ function bindPlayer() {
     if (v.paused) return;
     idleTimer = setTimeout(() => box.classList.add("idle"), 2600);
   };
+}
+
+/* 浏览器自动播放策略会把视频静音,拿到播放权限后立刻恢复 */
+function tryUnmute(v) {
+  if (!v.muted) return;
+  v.muted = false;
+  if (!v.volume) v.volume = 0.8;
+  const vol = $("vol");
+  if (vol) vol.value = String(Math.round(v.volume * 100));
+  saveVolume();
+  pSync();
+}
+
+function jumpEpisode(delta) {
+  const ctx = playCtx;
+  if (!ctx || !ctx.list || !ctx.list.length) return;
+  const i = ctx.index + delta;
+  if (i < 0 || i >= ctx.list.length) return;
+  const ep = ctx.list[i];
+  playEpisode(ep.id, ep.name);
+}
+
+function loadVolume() {
+  try {
+    const v = Number(localStorage.getItem("reelbox.volume"));
+    // 0 视作"没设过":静音是临时状态,不该被持久成默认值
+    if (!isFinite(v) || v <= 0 || v > 1) return 0.8;
+    return v;
+  } catch (_) { return 0.8; }
+}
+function saveVolume() {
+  try { localStorage.setItem("reelbox.volume", String($("video").volume)); } catch (_) {}
 }
 
 function closePlayer() {
@@ -563,7 +633,8 @@ function openPlayer(url, name) {
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       $("pState").textContent = "";
       renderLevels();
-      v.play().catch(() => {});
+      v.volume = loadVolume();
+      v.play().then(() => tryUnmute(v)).catch(() => {});
     });
     hls.on(Hls.Events.LEVEL_SWITCHED, renderLevels);
     hls.on(Hls.Events.ERROR, (_e, d) => {
@@ -575,7 +646,8 @@ function openPlayer(url, name) {
   } else {
     $("pQuality").hidden = true;
     v.src = url;
-    v.play().catch(() => {});
+    v.volume = loadVolume();
+    v.play().then(() => tryUnmute(v)).catch(() => {});
   }
 }
 
