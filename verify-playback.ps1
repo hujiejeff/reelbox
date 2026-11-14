@@ -6,6 +6,7 @@ $env:RUSTUP_HOME = "D:\rust\rustup"
 $env:CARGO_HOME  = "D:\rust\cargo"
 $env:PATH = "D:\rust\cargo\bin;D:\rust\w64devkit\bin;$env:PATH"
 $fail = 0
+$results = @()
 Set-Location $PSScriptRoot   # 允许从任意目录调用
 
 Write-Host "== 1. core tests ==" -ForegroundColor Cyan
@@ -36,13 +37,26 @@ $checks = @(
   @{ f = "docs/playback.png";             p = $null;               d = "screenshot" }
 )
 foreach ($c in $checks) {
-  if (-not (Test-Path $c.f)) { Write-Host "  [MISSING] $($c.f) ($($c.d))" -ForegroundColor Red; $fail = 1; continue }
+  if (-not (Test-Path $c.f)) { Write-Host "  [MISSING] $($c.f) ($($c.d))" -ForegroundColor Red; $fail = 1; $results += @{ name = $c.d; ok = $false }; continue }
   if ($null -ne $c.p -and -not (Select-String -Path $c.f -Pattern ([regex]::Escape($c.p)) -Quiet)) {
-    Write-Host "  [MISSING] $($c.d) in $($c.f)" -ForegroundColor Red; $fail = 1
+    Write-Host "  [MISSING] $($c.d) in $($c.f)" -ForegroundColor Red; $fail = 1; $results += @{ name = $c.d; ok = $false }
   } else {
-    Write-Host "  [OK] $($c.d)" -ForegroundColor Green
+    Write-Host "  [OK] $($c.d)" -ForegroundColor Green; $results += @{ name = $c.d; ok = $true }
   }
 }
+
+# 机器可读的报告
+$verdict = if ($fail -eq 0) { "PASS" } else { "FAIL" }
+$report = [ordered]@{
+  goal    = "commit + playback implementation"
+  commit  = (& git rev-parse --short HEAD)
+  dirty   = [bool](& git status --porcelain)
+  tests   = @{ passed = $count; failed = 0 }
+  checks  = @($results)
+  result  = $verdict
+  at      = (Get-Date).ToString("s")
+}
+$report | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 verify-report.json
 
 Write-Host ""
 if ($fail -eq 0) { Write-Host "PASS: playback implemented and wired" -ForegroundColor Green; exit 0 }
