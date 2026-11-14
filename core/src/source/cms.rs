@@ -69,8 +69,20 @@ impl Client {
         if self.src.format() == "xml" {
             page_xml(&body, page)
         } else {
-            page_json(&body, page)
+            page_json(&body, page).map_err(|e| self.blame(e, &body))
         }
+    }
+
+    /// 把解析失败说清楚:哪个源、返回了什么
+    fn blame(&self, e: String, body: &str) -> String {
+        let head: String = body.trim().chars().take(60).collect();
+        let looks_xml = head.starts_with("<");
+        format!(
+            "{e} | 源={} | 返回前 60 字={:?}{}",
+            self.src.name,
+            head,
+            if looks_xml { "(看起来是 XML,把源的地址改成 .../at/xml 试试)" } else { "" }
+        )
     }
 
     /// 用关键词查询。
@@ -84,7 +96,7 @@ impl Client {
         if self.src.format() == "xml" {
             page_xml(&body, page)
         } else {
-            page_json(&body, page)
+            page_json(&body, page).map_err(|e| self.blame(e, &body))
         }
     }
 
@@ -97,7 +109,7 @@ impl Client {
         let raw = if self.src.format() == "xml" {
             detail_xml(&body)?
         } else {
-            detail_json(&body)?
+            detail_json(&body).map_err(|e| self.blame(e, &body))?
         };
         let names: Vec<&str> = raw.from.split("$$$").collect();
         let mut groups = Vec::new();

@@ -20,10 +20,15 @@ pub struct Source {
 impl Source {
     /// 归一化类型名。
     pub fn format(&self) -> &str {
-        if self.kind.is_empty() {
-            "vod"
+        if !self.kind.is_empty() {
+            return &self.kind;
+        }
+        // 手动加的源通常没填类型,地址能看出来就按地址判
+        let u = self.url.to_lowercase();
+        if u.contains("/at/xml") || u.contains("ac=xml") || u.ends_with(".xml") {
+            "xml"
         } else {
-            &self.kind
+            "vod"
         }
     }
 }
