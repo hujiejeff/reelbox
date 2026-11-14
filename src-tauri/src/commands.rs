@@ -153,6 +153,14 @@ pub async fn play(source: Source, episode_id: String) -> Result<Stream, String> 
 
 #[tauri::command]
 pub async fn filters(source: Source) -> Vec<Filter> {
+    if is_plugin(&source) {
+        return tauri::async_runtime::spawn_blocking(move || {
+            let path = std::path::PathBuf::from(&source.url);
+            plugin::plugin_filters(&path, plugin_fetch())
+        })
+        .await
+        .unwrap_or_default();
+    }
     tauri::async_runtime::spawn_blocking(move || Client::new(source).filters())
         .await
         .unwrap_or_default()

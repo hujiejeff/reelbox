@@ -18,6 +18,11 @@ fn pick<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
     None
 }
 
+/// 把 HTML 实体里最常见的两种还原
+fn unescape(s: &str) -> String {
+    s.replace("&amp;", "&").replace("&#38;", "&")
+}
+
 /// 插件返回的列表:`{ list: [...] }`(WeBox)、`{ items: [...] }`(原生) 或直接数组
 pub fn page_from_json(text: &str) -> Result<Page, String> {
     let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("不是 JSON: {e}"))?;
@@ -43,7 +48,7 @@ pub fn page_from_json(text: &str) -> Result<Page, String> {
             id,
             title,
             kind: pick(it, &["kind", "type", "vod_type"]).unwrap_or("").to_string(),
-            poster: pick(it, &["poster", "pic", "cover", "vod_pic"]).unwrap_or("").to_string(),
+            poster: unescape(pick(it, &["poster", "pic", "cover", "vod_pic"]).unwrap_or("")),
             subtitle: pick(it, &["note", "subtitle", "remarks", "vod_remarks"]).unwrap_or("").to_string(),
         });
     }

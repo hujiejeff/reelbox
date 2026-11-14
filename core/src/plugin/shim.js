@@ -322,8 +322,10 @@ var ctx = {
     load: function (input) {
       var raw = input === undefined || input === null ? "" : String(input);
       var html = raw, url = "";
-      if (raw.indexOf("<") < 0) {
-        url = __withQuery(raw, null);
+      var slashes = String.fromCharCode(47, 47);
+      var isUrl = (raw.indexOf("http://") === 0 || raw.indexOf("https://") === 0 || raw.indexOf(slashes) === 0) && raw.indexOf("<") < 0;
+      if (isUrl) {
+        url = raw;
         var body = __fetch_text(url);
         html = body === null || body === undefined ? "" : String(body);
       }
