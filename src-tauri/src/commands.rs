@@ -92,7 +92,7 @@ pub async fn import_index(url: String) -> Result<ImportReport, String> {
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
                 .collect();
             let n = report.sources.len() + 1;
-            report.sources.push(Source { id: format!("{}-{}", slug.trim_matches('-'), n), name, kind, url });
+            report.sources.push(Source { id: format!("{}-{}", slug.trim_matches('-'), n), name, kind, url, health: None });
         }
         Ok(report)
     })

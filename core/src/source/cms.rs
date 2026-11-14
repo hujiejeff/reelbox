@@ -466,6 +466,7 @@ mod tests {
             name: "非凡资源".into(),
             kind: "vod".into(),
             url: "https://cj.ffzyapi.com/api.php/provide/vod/from/ffm3u8".into(),
+            health: None,
         });
         let p = c.page(1, "").expect("列表失败");
         assert!(!p.items.is_empty(), "列表为空");
