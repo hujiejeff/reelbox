@@ -116,6 +116,7 @@ powershell -ExecutionPolicy Bypass -File verify-playback.ps1
 
 ## 进度记忆
 
-- 存储:localStorage 的 ,键是 - 值:, 是秒
-- 每 5 秒写一次(且只在不小于 3 秒时写),关闭播放器时强制写一次
-- 再次打开同一集,自动跳到上次位置;详情页顶部出现"继续观看"
+- 存储:localStorage 的 `reelbox.progress`,键是 `<源ID>|<片名>`
+- 值:`{ id, name, t, at }`,`t` 是秒
+- 每 5 秒写一次(且只在 ≥3 秒时写),关闭播放器时强制写一次
+- 再打开同一集自动跳到上次位置;详情页顶部出现「继续观看 · 集名 · 时间」
