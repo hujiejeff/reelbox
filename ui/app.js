@@ -1344,6 +1344,13 @@ function openPlayer(url, name, mime, kind) {
   const hlsByHint = /mpegurl|m3u8/i.test(hint) || url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
   const isHls = kind === "file" ? false : (kind === "hls" || hlsByHint);
   log("play mode " + (isHls ? "hls" : "native") + " kind=" + (kind || "?") + " hint=" + hint);
+  // 探测说"既不是清单也不是媒体"时别硬塞给 hls.js,否则只会得到 manifestParsingError
+  if (kind === "unknown") {
+    log("play abort kind=unknown head=" + ((playCtx && playCtx.probe && playCtx.probe.head) || ""));
+    pStatus("这条线路返回的是网页,不是播放流 —— 换一条线路试试");
+    return;
+  }
+
   if (window.Hls && Hls.isSupported() && isHls) {
     hls = new Hls({ maxBufferLength: 30, enableWorker: true });
     // 事件要先挂上再 loadSource,否则早期的清单错误会漏记
