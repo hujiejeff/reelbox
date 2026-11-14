@@ -384,6 +384,157 @@ let tickTimer = 0;
 let dragging = false;
 
 /* ---------- 播放进度 ---------- */
+
+/* ---------- 源管理 ---------- */
+let editingId = "";
+
+function normSource(raw) {
+  const url = (raw.url || raw.api || "").trim();
+  const name = (raw.name || raw.key || "").trim();
+  if (!url || !name) return null;
+  const kindRaw = raw.kind || raw.type;
+  const kind = kindRaw === "xml" || kindRaw === 1 ? "xml" : "vod";
+  const id = (raw.id || name).toString().toLowerCase().replace(/[^a-z0-9_-]+/gi, "-").slice(0, 24) || "src";
+  return { id: id, name: name, kind: kind, url: url };
+}
+
+function uniqSources(list) {
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const src = normSource(item);
+    if (!src) continue;
+    const key = src.url;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(src);
+  }
+  return out;
+}
+
+function renderSourceManager() {
+  const box = $("srcmgr");
+  if (!box) return;
+  box.innerHTML = (S.sources || [])
+    .map(
+      (s) =>
+        '<div class="srcrow" data-id="' + esc(s.id) + '">' +
+        '<span class="nm">' + esc(s.name) + "</span>" +
+        '<span class="kd">' + (s.kind === "xml" ? "XML" : "JSON") + "</span>" +
+        '<span class="ul">' + esc(s.url) + "</span>" +
+        '<button data-act="edit" data-id="' + esc(s.id) + '">编辑</button>' +
+        '<button data-act="del" data-id="' + esc(s.id) + '">删除</button>' +
+        "</div>"
+    )
+    .join("") || '<p class="hint">还没有源</p>';
+}
+
+function openSrcForm(src) {
+  const form = $("srcForm");
+  if (!form) return;
+  editingId = src ? src.id : "";
+  $("sfName").value = src ? src.name : "";
+  $("sfUrl").value = src ? src.url : "";
+  $("sfKind").value = src && src.kind === "xml" ? "xml" : "vod";
+  form.hidden = false;
+  $("sfName").focus();
+}
+
+function closeSrcForm() {
+  const form = $("srcForm");
+  if (form) form.hidden = true;
+  editingId = "";
+}
+
+async function persistSources() {
+  try {
+    await invoke("save_sources", { list: S.sources });
+    log("sources saved", String(S.sources.length));
+  } catch (e) {
+    log("SOURCES SAVE FAIL", e);
+  }
+}
+
+async function saveSrcForm() {
+  const name = $("sfName").value.trim();
+  const url = $("sfUrl").value.trim();
+  const kind = $("sfKind").value;
+  if (!name || !url) return;
+  const src = normSource({ name: name, url: url, kind: kind });
+  if (!src) return;
+  const list = S.sources.slice();
+  if (editingId) {
+    const i = list.findIndex((x) => x.id === editingId);
+    if (i >= 0) list[i] = Object.assign({}, src, { id: editingId });
+    else list.push(src);
+  } else {
+    if (list.some((x) => x.url === src.url)) return;
+    list.push(src);
+  }
+  S.sources = list;
+  await persistSources();
+  renderSourceManager();
+  renderSources();
+  closeSrcForm();
+}
+
+async function removeSource(id) {
+  const list = S.sources.filter((x) => x.id !== id);
+  if (!list.length) return;
+  S.sources = list;
+  await persistSources();
+  renderSourceManager();
+  renderSources();
+  if (S.source && S.source.id === id) await switchSource(list[0]);
+}
+
+function bindSourceManager() {
+  const box = $("srcmgr");
+  if (box && !box.dataset.bound) {
+    box.dataset.bound = "1";
+    box.onclick = (e) => {
+      const b = e.target.closest("button[data-act]");
+      if (!b) return;
+      const id = b.getAttribute("data-id");
+      if (b.getAttribute("data-act") === "edit") {
+        const src = S.sources.find((x) => x.id === id);
+        if (src) openSrcForm(src);
+      } else if (confirm("删除这个源?")) {
+        removeSource(id);
+      }
+    };
+  }
+  if ($("srcAdd") && !$("srcAdd").dataset.bound) {
+    $("srcAdd").dataset.bound = "1";
+    $("srcAdd").onclick = () => openSrcForm(null);
+    $("sfSave").onclick = saveSrcForm;
+    $("sfCancel").onclick = closeSrcForm;
+    $("srcImport").onclick = () => $("srcFile").click();
+    $("srcFile").onchange = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const data = JSON.parse(text);
+        const raw = Array.isArray(data) ? data : data.sites || data.sources || [];
+        const merged = uniqSources(S.sources.concat(raw.map(normSource).filter(Boolean)));
+        if (!merged.length) throw new Error("没有识别到可用的源");
+        S.sources = merged;
+        await persistSources();
+        renderSourceManager();
+        renderSources();
+        log("sources imported", String(merged.length));
+        alert("已导入,当前共 " + merged.length + " 个源");
+      } catch (err) {
+        log("IMPORT FAIL", err && err.message);
+        alert("导入失败:" + (err && err.message ? err.message : err));
+      } finally {
+        e.target.value = "";
+      }
+    };
+  }
+}
+
 /* ---------- 日志:内存环形缓冲 + 落盘 ---------- */
 const LOG_MAX = 300;
 const LOG_BUF = [];
@@ -840,7 +991,11 @@ function showView(key) {
   if (list) list.style.display = onHome ? "" : "none";
   if (divider) divider.style.display = onHome ? "" : "none";
   if (onHome) renderParents();
-  if (key === "settings") bindDebugToggle();
+  if (key === "settings") {
+    bindDebugToggle();
+    bindSourceManager();
+    renderSourceManager();
+  }
 }
 
 function bindSourceMenu() {

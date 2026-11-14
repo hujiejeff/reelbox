@@ -14,9 +14,40 @@ where
         .map_err(|e| format!("TASK: {e}"))?
 }
 
+/// 源的持久化位置:%APPDATA%/reelbox/sources.json
+fn sources_path() -> std::path::PathBuf {
+    let base = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("reelbox").join("sources.json")
+}
+
+/// 读源列表:文件不存在或解析失败时回落到内置三个
+pub fn load_sources() -> Vec<Source> {
+    let path = sources_path();
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        if let Ok(list) = serde_json::from_str::<Vec<Source>>(&text) {
+            if !list.is_empty() {
+                return list;
+            }
+        }
+    }
+    source::defaults()
+}
+
+#[tauri::command]
+pub fn save_sources(list: Vec<Source>) -> Result<(), String> {
+    let path = sources_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败: {e}"))?;
+    }
+    let text = serde_json::to_string_pretty(&list).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&path, text).map_err(|e| format!("写文件失败: {e}"))
+}
+
 #[tauri::command]
 pub fn list_sources() -> Vec<Source> {
-    source::defaults()
+    load_sources()
 }
 
 #[tauri::command]

@@ -539,6 +539,46 @@
   .m3e-filter-chip__leading { display: inline-flex; align-items: center; justify-content: center; }
   .m3e-filter-chip__check { display: inline-flex; align-items: center; justify-content: center; }
   .m3e-filter-chip__check svg { display: block; }
+  /* 源管理 */
+  .srcmgr { display: flex; flex-direction: column; gap: 6px; }
+  .srcrow {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-radius: 14px; background: var(--m3e-sys-color-surface-container);
+  }
+  .srcrow .nm { font-size: 13.5px; font-weight: 600; }
+  .srcrow .kd {
+    font-size: 11px; padding: 2px 8px; border-radius: 8px;
+    background: var(--m3e-sys-color-surface-container-highest);
+    color: var(--m3e-sys-color-on-surface-variant);
+  }
+  .srcrow .ul {
+    flex: 1; min-width: 0; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--m3e-sys-color-on-surface-variant); text-align: right;
+  }
+  .srcrow button {
+    flex: none; border: none; background: transparent; cursor: pointer; color: inherit;
+    font: 600 12px/1 system-ui, sans-serif; padding: 6px 8px; border-radius: 8px;
+  }
+  .srcrow button:hover { background: var(--m3e-sys-color-surface-container-high); }
+  .srcmgr-bar { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-soft {
+    height: 38px; padding: 0 16px; border-radius: 19px; cursor: pointer;
+    border: 1px solid var(--m3e-sys-color-outline-variant);
+    background: transparent; color: inherit;
+    font: 600 13px/1 system-ui, "PingFang SC", sans-serif;
+  }
+  .btn-soft:hover { background: var(--m3e-sys-color-surface-container-high); }
+  .srcform { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .srcform[hidden] { display: none; }
+  .srcform input, .srcform select {
+    height: 40px; padding: 0 14px; border-radius: 12px;
+    border: 1px solid var(--m3e-sys-color-outline-variant);
+    background: var(--m3e-sys-color-surface-container-low);
+    color: inherit; font: 500 13px/1 system-ui, "PingFang SC", sans-serif; outline: none;
+  }
+  .srcform input:focus, .srcform select:focus { border-color: var(--m3e-sys-color-primary); }
+  .srcform-bar { display: flex; gap: 8px; }
+
 </style>
 </head>
 <body>
@@ -622,6 +662,26 @@
             <button data-v="mono">单色</button>
           </div>
           <p class="hint">配色由种子色实时生成,和 Android 的 Material You 是同一套算法</p>
+
+          <h3>源管理</h3>
+          <div class="srcmgr" id="srcmgr"></div>
+          <div class="srcmgr-bar">
+            <button class="btn-soft" id="srcAdd">添加源</button>
+            <button class="btn-soft" id="srcImport">导入 JSON</button>
+            <input type="file" id="srcFile" accept=".json,application/json" hidden>
+          </div>
+          <div class="srcform" id="srcForm" hidden>
+            <input id="sfName" placeholder="名称,例如 我的源">
+            <input id="sfUrl" placeholder="接口地址,例如 https://xxx/api.php/provide/vod">
+            <select id="sfKind">
+              <option value="vod">JSON(vod)</option>
+              <option value="xml">XML</option>
+            </select>
+            <div class="srcform-bar">
+              <button class="btn-soft" id="sfSave">保存</button>
+              <button class="btn-soft" id="sfCancel">取消</button>
+            </div>
+          </div>
 
           <h3>开发者</h3>
           <div class="seg" id="segDebug">
