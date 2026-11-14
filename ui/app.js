@@ -105,7 +105,7 @@ async function init() {
     bindSourceMenu();
     return;
   }
-  S.source = S.sources[0];
+  S.source = startSource(S.sources);
   renderSources();
   bindNav();
   bindSourceMenu();
@@ -410,11 +410,50 @@ async function runSelfTest() {
   }
 }
 
+/* ---------- 记忆:上次用的源与分类 ---------- */
+// 只记四个键(点播/直播各记一个源;分类记上次停在哪一级)。
+// 存的源被删掉、存的分类在新源里不存在,都回退到第一个可用值,不报错。
+
+const LS = {
+  currentSource: "reelbox.currentSource",
+  currentLiveSource: "reelbox.currentLiveSource", // 直播 tab(v0.3)用,现在只写不读
+  lastClass: "reelbox.lastClass",
+  lastChild: "reelbox.lastChild",
+};
+
+/** 启动时用哪个源:上次用的那个,找不到就第一个 */
+function startSource(list) {
+  const want = prefGet(LS.currentSource, "");
+  return (want && (list || []).find((s) => s.id === want)) || (list || [])[0];
+}
+
+/** 把上次的分类先摆上;返回"有没有存过分类"(没存过就不用串行等 filters) */
+function seedCategory() {
+  const cls = prefGet(LS.lastClass, "");
+  const kid = prefGet(LS.lastChild, "");
+  S.parent = cls || "";
+  S.child = cls && kid ? kid : "";
+  return !!(S.parent || S.child);
+}
+
+function rememberSource(src) {
+  if (!src || !src.id) return;
+  prefSet(LS.currentSource, src.id);
+  // 直播源单独记一份,将来直播 tab 直接用它
+  if (sourceType(src) === "live") prefSet(LS.currentLiveSource, src.id);
+}
+
+function rememberCategory() {
+  prefSet(LS.lastClass, S.parent || "");
+  prefSet(LS.lastChild, S.child || "");
+}
+
 async function switchSource(src) {
   log("switchSource", src && src.id);
   S.source = src;
   // 最近使用靠这里喂:不接上「最近使用」永远是空的
   pushRecent(src && src.id);
+  rememberSource(src);
   S.parent = "";
   S.child = "";
   S.items = [];
@@ -429,7 +468,15 @@ async function switchSource(src) {
   S.listError = null;
   if (!$("player").hidden) closePlayer();
   showView("home");
-  await Promise.all([loadFilters(), loadItems()]);
+  const seeded = seedCategory();
+  if (seeded) {
+    // 存的分类要先让 loadFilters 校验一遍(新源里可能没有这个分类),再取列表,
+    // 否则会拿一个不存在的分类去请求。没存过分类时保持并行,不多等一个来回。
+    await loadFilters();
+    await loadItems();
+  } else {
+    await Promise.all([loadFilters(), loadItems()]);
+  }
   // 当前源变了:源管理页的选中态与设置首页摘要都要跟着走
   renderSourceManager();
   syncSetSummaries();
@@ -506,6 +553,18 @@ async function loadFilters() {
   for (const o of opts) {
     if (!o.parent) continue;
     (S.children[o.parent] = S.children[o.parent] || []).push(o);
+  }
+  // 记忆下来的分类可能在换源后不存在了:清掉,退回「全部」。
+  // 分类接口本身失败( opts 为空)时不动记忆,免得网络抖一下就把它抹掉。
+  if (opts.length) {
+    if (S.parent && !S.parents.some((p) => p.value === S.parent)) {
+      S.parent = "";
+      S.child = "";
+      rememberCategory();
+    } else if (S.child && !(S.children[S.parent] || []).some((c) => c.value === S.child)) {
+      S.child = "";
+      rememberCategory();
+    }
   }
   renderParents();
   renderChildren();
@@ -1338,6 +1397,7 @@ async function removeSource(id) {
     return;
   }
   S.sources = list;
+  dropRecent(id); // 删掉的源不该再出现在「最近使用」里
   await persistSources();
   renderSourceManager();
   renderSources();
@@ -2613,6 +2673,7 @@ document.addEventListener("click", (e) => {
     S.parent = p;
     const kids = S.children[p] || [];
     S.child = kids.length ? kids[0].value : "";
+    rememberCategory();
     renderParents();
     renderChildren();
     return loadItems();
@@ -2622,6 +2683,7 @@ document.addEventListener("click", (e) => {
     const next = chip.getAttribute("data-child");
     if (next === S.child) return;
     S.child = next;
+    rememberCategory();
     renderChildren();
     return loadItems();
   }
