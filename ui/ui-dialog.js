@@ -156,6 +156,8 @@ export function formDialog(opts) {
     icon: opts.icon,
     headline: opts.headline,
     content: body,
+    // 表单里的联动(按地址自动选类型那种)从 onOpen 拿 DOM 自己接
+    onOpen: opts.onOpen,
     actions: [
       { label: "取消", value: null },
       {

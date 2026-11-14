@@ -1283,14 +1283,59 @@ let dragging = false;
 /* ---------- 设置 → 源 ---------- */
 const INDEX_URL = "https://ddgksf2013.top/webox/index.json";
 
+/** 类型下拉的四个取值;title 是给人看的说法 */
+const KIND_OPTIONS = [
+  { value: "vod", label: "点播(JSON)", title: "苹果 CMS 的 /api.php/provide/vod" },
+  { value: "xml", label: "点播(XML)", title: "…/at/xml 或 .xml" },
+  { value: "live", label: "直播(m3u/m3u8)", title: "频道列表,v0.3 才播放" },
+  { value: "webox", label: "插件(.webox.js)", title: "本地插件文件" },
+];
+
+function kindTitle(kind) {
+  const hit = KIND_OPTIONS.find((o) => o.value === kind);
+  return hit ? hit.label : kind;
+}
+
+/**
+ * 地址 → 类型。认不出来的返回 ""(只有这时才让用户手选)。
+ *   .m3u8 / .m3u                          → live
+ *   .webox.js / 地址里带 webox             → webox
+ *   provide/vod、api.php、ac=list/detail   → vod
+ *   /at/xml、ac=xml、.xml                  → xml
+ */
+function guessSourceKind(url) {
+  const raw = String(url || "").trim().toLowerCase();
+  if (!raw) return "";
+  const path = raw.split(/[?#]/)[0];
+  if (/\.m3u8?$/.test(path)) return "live";
+  if (path.endsWith(".webox.js") || path.endsWith(".reelbox.js") || raw.indexOf("webox") >= 0) {
+    return "webox";
+  }
+  if (/\/at\/xml$/.test(path) || /[?&]ac=xml\b/.test(raw) || path.endsWith(".xml")) return "xml";
+  if (/provide\/vod/.test(path) || /\/api\.php/.test(path) || /[?&]ac=(list|detail)\b/.test(raw)) {
+    return "vod";
+  }
+  return "";
+}
+
+/** 把各种历史写法归一到 vod / xml / live / webox */
+function normKind(kindRaw, url) {
+  const k = String(kindRaw == null ? "" : kindRaw).toLowerCase();
+  if (k === "1" || k === "xml") return "xml";
+  if (k === "json" || k === "vod") return "vod";
+  if (k === "live" || k === "m3u" || k === "m3u8") return "live";
+  if (k === "webox" || k === "plugin" || k === "js") return "webox";
+  return guessSourceKind(url) || "vod";
+}
+
 function normSource(raw) {
   const url = (raw.url || raw.api || "").trim();
   const name = (raw.name || raw.key || "").trim();
   if (!url || !name) return null;
-  const kindRaw = raw.kind || raw.type;
-  const kind = kindRaw === "xml" || kindRaw === 1 ? "xml" : "vod";
+  const kind = normKind(raw.kind || raw.type, url);
   const id = (raw.id || name).toString().toLowerCase().replace(/[^a-z0-9_-]+/gi, "-").slice(0, 24) || "src";
-  return { id: id, name: name, kind: kind, url: url };
+  // 后端把 kind 序列化成 type,这里跟着用 type,免得存回去时丢类型
+  return { id: id, name: name, type: kind, url: url };
 }
 
 function uniqSources(list) {
@@ -1486,32 +1531,62 @@ async function persistSources() {
   }
 }
 
-/** 新增 / 编辑源:一个 m3e 对话框,三个字段 */
-async function editSource(src) {
+/** 类型下拉跟着地址走:认出来了就锁死并说明,认不出来才放开手选 */
+function wireKindGuess(d, src) {
+  const url = d.querySelector("#dlg-url");
+  const sel = d.querySelector("#dlg-kind");
+  if (!url || !sel) return;
+  const field = sel.closest(".dlg-field");
+  const hint = field ? field.querySelector(".dlg-field__hint") : null;
+  const apply = () => {
+    const k = guessSourceKind(url.value);
+    if (k) {
+      sel.value = k;
+      sel.disabled = true;
+      if (hint) hint.textContent = "已按地址识别为「" + kindTitle(k) + "」。";
+    } else {
+      sel.disabled = false;
+      if (hint) hint.textContent = "地址认不出类型,手动选一个。";
+    }
+  };
+  url.addEventListener("input", apply);
+  url.addEventListener("change", apply);
+  apply();
+  // 对话框自己会在 30ms 后聚焦第一个输入框;新增源时用户第一件事是贴地址,
+  // 所以这里稍晚一点把焦点要回地址栏
+  if (!src) setTimeout(() => { try { url.focus(); } catch (_) {} }, 60);
+}
+
+/**
+ * 新增 / 编辑源:一个 m3e 对话框,三个字段。
+ * preset.url 用来「从剪贴板」预填;preset.note 换掉底部说明。
+ */
+async function editSource(src, preset) {
+  const p = preset || {};
+  const startUrl = src ? src.url : (p.url || "");
   const res = await formDialog({
     icon: "dns",
     headline: src ? "编辑源" : "添加源",
     okText: "保存",
     fields: [
-      { id: "name", label: "名称", value: src ? src.name : "", placeholder: "例如 我的源" },
+      { id: "name", label: "名称", value: src ? src.name : (p.name || ""), placeholder: "例如 我的源" },
       {
         id: "url",
         label: "接口地址",
-        value: src ? src.url : "",
+        value: startUrl,
         placeholder: "https://xxx/api.php/provide/vod",
       },
       {
         id: "kind",
         label: "类型",
         type: "select",
-        value: src && String(src.kind) === "xml" ? "xml" : "vod",
-        options: [
-          { value: "vod", label: "JSON(vod)" },
-          { value: "xml", label: "XML" },
-        ],
+        value: src ? normKind(srcKind(src), src.url) : (guessSourceKind(startUrl) || "vod"),
+        hint: "粘贴地址后会自动选好。",
+        options: KIND_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
       },
     ],
-    note: "地址以 .json 结尾的多半是 HTML 爬取配置,不是点播接口,取不到数据。",
+    note: p.note || "地址能看出类型就自动选好;认不出来时才需要手动选。以 .json 结尾的多半是 HTML 爬取配置,取不到数据。",
+    onOpen: (d) => wireKindGuess(d, src),
   });
   if (!res) return;
   const src2 = normSource({ name: res.name, url: res.url, kind: res.kind });
@@ -1533,6 +1608,34 @@ async function editSource(src) {
   renderSourceManager();
   renderSources();
   toast(src ? "已保存「" + src2.name + "」" : "已添加「" + src2.name + "」");
+}
+
+/**
+ * 从剪贴板添加源。
+ * Tauri 侧没有装剪贴板插件(离线环境引新依赖有风险),所以先走 WebView 的
+ * navigator.clipboard.readText();读不到就退化成"打开对话框 + 提示粘贴",
+ * 用户按 Ctrl+V 一样能贴进来。
+ */
+async function addFromClipboard() {
+  let text = "";
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      text = String((await navigator.clipboard.readText()) || "").trim();
+    }
+  } catch (_) {
+    text = "";
+  }
+  const looksUrl = /^(https?:\/\/|[\w]:[\\/]|\/)/i.test(text);
+  if (text && looksUrl) {
+    await editSource(null, { url: text });
+    return;
+  }
+  await editSource(null, {
+    url: "",
+    note: text
+      ? "剪贴板里不是地址,把它粘进来(Ctrl+V)或用上面的「添加源」。"
+      : "这个环境读不到剪贴板。把地址粘进来(Ctrl+V),类型会按地址自动选好。",
+  });
 }
 
 async function removeSource(id) {
@@ -1613,7 +1716,7 @@ async function importPluginFile(e) {
     const res = await invoke("save_plugin", { fileName: f.name, text: text });
     const exists = S.sources.some((x) => x.id === res.id);
     if (!exists) {
-      S.sources = S.sources.concat([{ id: res.id, name: res.name, kind: "webox", url: res.path }]);
+      S.sources = S.sources.concat([{ id: res.id, name: res.name, type: "webox", url: res.path }]);
       await persistSources();
     }
     renderSourceManager();
@@ -1692,6 +1795,7 @@ function bindSourceManager() {
   if ($("srcAdd") && !$("srcAdd").dataset.bound) {
     $("srcAdd").dataset.bound = "1";
     $("srcAdd").onclick = () => editSource(null);
+    if ($("srcClip")) $("srcClip").onclick = () => addFromClipboard();
     $("srcIndex").onclick = importFromIndex;
     $("srcImport").onclick = () => $("srcFile").click();
     $("srcPlugin").onclick = () => $("pluginFile").click();
