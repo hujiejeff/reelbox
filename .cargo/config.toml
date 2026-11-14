@@ -1,0 +1,5 @@
+# Windows 上用 MinGW(GNU) 工具链:D 盘自带,免管理员。
+# 如果以后装了 Visual Studio,把 target 换回 msvc 即可。
+[target.x86_64-pc-windows-gnu]
+linker = "D:/rust/w64devkit/bin/gcc.exe"
+ar = "D:/rust/w64devkit/bin/ar.exe"

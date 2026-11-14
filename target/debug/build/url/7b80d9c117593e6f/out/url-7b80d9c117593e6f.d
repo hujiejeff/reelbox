@@ -1,0 +1,11 @@
+D:\AI WorkSpace\reelbox\target\debug\build\url/7b80d9c117593e6f\out\url-7b80d9c117593e6f.d: D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\lib.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\host.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\origin.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\parser.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\path_segments.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\slicing.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\quirks.rs
+
+D:\AI WorkSpace\reelbox\target\debug\build\url/7b80d9c117593e6f\out\liburl-7b80d9c117593e6f.rmeta: D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\lib.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\host.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\origin.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\parser.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\path_segments.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\slicing.rs D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\quirks.rs
+
+D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\lib.rs:
+D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\host.rs:
+D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\origin.rs:
+D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\parser.rs:
+D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\path_segments.rs:
+D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\slicing.rs:
+D:\rust\cargo\registry\src\mirrors.tuna.tsinghua.edu.cn-4dc01642fd091eda\url-2.5.8\src\quirks.rs:
