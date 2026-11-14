@@ -1,7 +1,7 @@
 ﻿{
     "goal":  "commit + playback implementation",
-    "commit":  "f017b73",
-    "dirty":  false,
+    "commit":  "fa56092",
+    "dirty":  true,
     "tests":  {
                   "passed":  10,
                   "failed":  0
@@ -61,5 +61,5 @@
                    }
                ],
     "result":  "PASS",
-    "at":  "2026-11-14T15:04:35"
+    "at":  "2026-11-14T15:07:28"
 }
