@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine as _;
-use tiny_http::{Header, Response, Server};
+use tiny_http::{Header, Method, Response, Server};
 
 use crate::logging;
 
@@ -109,6 +109,14 @@ fn handle(req: tiny_http::Request) {
         .collect();
     let header_note = describe_headers(&pairs);
 
+    // 播放器拖动进度条时会带 Range:必须原样透传,否则每次拖动都要从头下载整个文件
+    let range = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Range"))
+        .map(|h| h.value.as_str().to_string());
+    let is_head = req.method() == &Method::Head;
+
     let mut call = ureq::get(&target)
         .timeout(Duration::from_secs(20))
         .set("User-Agent", AGENT_UA)
@@ -116,6 +124,9 @@ fn handle(req: tiny_http::Request) {
         .set("Accept-Encoding", "identity");
     for (k, v) in &pairs {
         call = call.set(k, v);
+    }
+    if let Some(r) = &range {
+        call = call.set("Range", r);
     }
 
     let resp = match call.call() {
@@ -147,6 +158,44 @@ fn handle(req: tiny_http::Request) {
         .unwrap_or("application/octet-stream")
         .to_string();
     let ce = resp.header("content-encoding").unwrap_or("").to_string();
+    let len = resp
+        .header("content-length")
+        .and_then(|v| v.parse::<usize>().ok());
+    let content_range = resp.header("content-range").map(|v| v.to_string());
+    let accept_ranges = resp.header("accept-ranges").map(|v| v.to_string());
+
+    // 真正的媒体文件(不是清单)直接流式转发:不占内存、不截断、支持 Range
+    if range.is_some() || is_media_body(&ct, &target) {
+        let n = SEG_LOGGED.fetch_add(1, Ordering::Relaxed);
+        if n < SEG_LOG_FIRST || status >= 400 {
+            logging::event(&format!(
+                "PROXY media status={status} ct={ct} len={:?} range={:?} target={}",
+                len,
+                range,
+                short(&target, 120)
+            ));
+        }
+        let mut headers = cors(&ct);
+        headers.push(Header::from_bytes(&b"Accept-Ranges"[..], accept_ranges.as_deref().unwrap_or("bytes").as_bytes()).unwrap());
+        if let Some(cr) = content_range {
+            headers.push(Header::from_bytes(&b"Content-Range"[..], cr.as_bytes()).unwrap());
+        }
+        if is_head {
+            let _ = req.respond(Response::empty(status).with_status_code(status));
+            return;
+        }
+        let out = Response::new(
+            tiny_http::StatusCode(status),
+            headers,
+            resp.into_reader(),
+            len,
+            None,
+        );
+        let _ = req.respond(out);
+        return;
+    }
+
+    // 剩下的按"可能是清单"处理:读进内存才能改写里面的相对地址
     let (body, _) = read_body(resp);
     if body.is_empty() {
         logging::event(&format!(
@@ -157,41 +206,39 @@ fn handle(req: tiny_http::Request) {
         return;
     }
 
-    let is_playlist = target.contains(".m3u8")
-        || body.starts_with(b"#EXTM3U")
-        || ct.contains("mpegurl");
-    if is_playlist {
-        let extm3u = body.starts_with(b"#EXTM3U");
+    if body.starts_with(b"#EXTM3U") {
         logging::event(&format!(
-            "PROXY m3u8 status={status} bytes={} ct={ct} ce={ce} extm3u={} target={} {header_note}",
+            "PROXY m3u8 status={status} bytes={} ct={ct} ce={ce} target={} {header_note}",
             body.len(),
-            if extm3u { "yes" } else { "NO" },
             short(&target, 160)
         ));
-        if !extm3u {
-            // 这就是 hls.js 报 manifestParsingError 的直接证据:拿到的根本不是清单
-            logging::event(&format!(
-                "PROXY NOT-M3U8 target={} head={}",
-                short(&target, 160),
-                logging::one_line(&String::from_utf8_lossy(&body[..body.len().min(400)]), 160)
-            ));
-            send_status(req, status, body, &ct);
-            return;
-        }
         let text = String::from_utf8_lossy(&body).to_string();
         let out = rewrite(&text, &target, &headers);
         send(req, out.into_bytes(), "application/vnd.apple.mpegurl");
     } else {
-        let n = SEG_LOGGED.fetch_add(1, Ordering::Relaxed);
-        if n < SEG_LOG_FIRST || status != 200 {
+        // 不是清单:这就是 hls.js 报 manifestParsingError 的直接证据,原样回给播放器
+        if ct.contains("mpegurl") || target.contains(".m3u8") {
             logging::event(&format!(
-                "PROXY seg status={status} bytes={} ct={ct} target={}",
+                "PROXY NOT-M3U8 status={status} ct={ct} bytes={} target={} head={}",
                 body.len(),
-                short(&target, 120)
+                short(&target, 160),
+                logging::one_line(&String::from_utf8_lossy(&body[..body.len().min(400)]), 160)
             ));
         }
-        send(req, body, &ct);
+        send_status(req, status, body, &ct);
     }
+}
+
+/// 源站给的就是媒体本体(不是 m3u8 清单)时,直接透传
+fn is_media_body(ct: &str, target: &str) -> bool {
+    let c = ct.to_ascii_lowercase();
+    if c.starts_with("video/") || c.starts_with("audio/") || c.starts_with("image/") {
+        return true;
+    }
+    let path = target.split('?').next().unwrap_or(target).to_ascii_lowercase();
+    [".mp4", ".m4v", ".ts", ".m4s", ".flv", ".mkv", ".mp3", ".m4a", ".aac"]
+        .iter()
+        .any(|ext| path.ends_with(ext))
 }
 
 fn read_body(resp: ureq::Response) -> (Vec<u8>, String) {

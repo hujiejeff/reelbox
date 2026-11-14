@@ -435,6 +435,109 @@ pub fn player_url(stream: Stream) -> Result<String, String> {
     Ok(crate::proxy::wrap(&stream.url, &h))
 }
 
+/// 播放前探一眼真实内容。
+/// 插件按地址后缀猜 mime,可签名地址没有后缀:4k影视 有些集给的是 mp4 却写成
+/// `application/vnd.apple.mpegurl`,丢给 hls.js 就是 manifestParsingError。
+/// 这里只看头几个字节,让前端按事实选 hls.js 还是原生 <video>。
+#[derive(Debug, serde::Serialize)]
+pub struct StreamProbe {
+    /// hls / file / unknown
+    pub kind: String,
+    pub status: u16,
+    pub mime: String,
+    pub bytes: usize,
+    pub head: String,
+}
+
+#[tauri::command]
+pub async fn stream_kind(stream: Stream) -> Result<StreamProbe, String> {
+    let allowed = allowed_streams()
+        .lock()
+        .map(|s| s.contains(&stream.url))
+        .unwrap_or(false);
+    if !allowed {
+        return Err("这个地址不在本次会话的播放白名单里".into());
+    }
+    blocking(move || probe_stream(&stream)).await
+}
+
+fn probe_stream(stream: &Stream) -> Result<StreamProbe, String> {
+    use std::io::Read as _;
+    let mut call = ureq::get(&stream.url)
+        .timeout(Duration::from_secs(15))
+        .set("User-Agent", FETCH_UA)
+        .set("Accept-Encoding", "identity")
+        .set("Range", "bytes=0-4095");
+    for (k, v) in &stream.headers {
+        if k.eq_ignore_ascii_case("host") || k.eq_ignore_ascii_case("range") {
+            continue;
+        }
+        call = call.set(k, v);
+    }
+    let (status, mime, head) = match call.call() {
+        Ok(r) => {
+            let status = r.status();
+            let mime = r.header("content-type").unwrap_or("").to_string();
+            let mut head = Vec::new();
+            let _ = r.into_reader().take(4096).read_to_end(&mut head);
+            (status, mime, head)
+        }
+        Err(ureq::Error::Status(code, r)) => {
+            let mime = r.header("content-type").unwrap_or("").to_string();
+            let mut head = Vec::new();
+            let _ = r.into_reader().take(1024).read_to_end(&mut head);
+            (code, mime, head)
+        }
+        Err(e) => return Err(format!("探测播放地址失败: {e}")),
+    };
+    let kind = classify_stream(&mime, &head).to_string();
+    crate::logging::event(&format!(
+        "PROBE kind={kind} status={status} mime={mime} bytes={} url={}",
+        head.len(),
+        stream.url.chars().take(120).collect::<String>()
+    ));
+    Ok(StreamProbe {
+        kind,
+        status,
+        mime,
+        bytes: head.len(),
+        head: crate::logging::one_line(&String::from_utf8_lossy(&head[..head.len().min(120)]), 120),
+    })
+}
+
+/// 按实际字节判断:hls 清单 / 媒体文件本体 / 看不出来
+fn classify_stream(mime: &str, head: &[u8]) -> &'static str {
+    if head.starts_with(b"#EXTM3U") {
+        return "hls";
+    }
+    if let Some(text) = std::str::from_utf8(head).ok() {
+        let s = text.trim_start_matches('\u{feff}').trim_start();
+        if s.starts_with("#EXTM3U") {
+            return "hls";
+        }
+    }
+    if head.len() >= 8 {
+        // ISO BMFF: [size][ftyp|moov|mdat|free|skip|wide|styp]
+        let tag = &head[4..8];
+        let boxes: [&[u8]; 7] = [b"ftyp", b"moov", b"mdat", b"free", b"skip", b"wide", b"styp"];
+        if boxes.iter().any(|b| tag == *b) {
+            return "file";
+        }
+    }
+    let m = mime.to_ascii_lowercase();
+    if m.starts_with("video/") || m.starts_with("audio/") {
+        return "file";
+    }
+    // MPEG-TS 的同步字节
+    if !head.is_empty() && head[0] == 0x47 && !m.contains("text") {
+        return "file";
+    }
+    if m.contains("mpegurl") {
+        return "hls";
+    }
+    "unknown"
+}
+
 /// 前端日志落盘:写到 %APPDATA%/reelbox/reelbox.log(和反代日志同一个文件)
 #[tauri::command]
 pub fn append_log(line: String) {

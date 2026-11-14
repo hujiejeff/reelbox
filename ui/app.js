@@ -1267,7 +1267,7 @@ function saveProgress(force) {
   progSet(playCtx.key, { id: playCtx.id, name: playCtx.name, group: playCtx.group || "", t: t, at: now });
 }
 
-function openPlayer(url, name, mime) {
+function openPlayer(url, name, mime, kind) {
   const box = $("player");
   const v = $("video");
   box.hidden = false;
@@ -1311,9 +1311,13 @@ function openPlayer(url, name, mime) {
     );
   };
 
-  // 本地反代地址把真实地址 base64 掉了,看不出扩展名,所以以 mime 为准
+  // 本地反代地址把真实地址 base64 掉了,看不出扩展名,所以以 mime 为准;
+  // 但插件是按地址后缀猜 mime 的(签名的 mp4 地址没有后缀,会被写成 mpegurl),
+  // 所以 playEpisode 先探到的真实类型 kind 优先。
   const hint = mime || (playCtx && playCtx.mime) || "";
-  const isHls = /mpegurl|m3u8/i.test(hint) || url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
+  const hlsByHint = /mpegurl|m3u8/i.test(hint) || url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
+  const isHls = kind === "file" ? false : (kind === "hls" || hlsByHint);
+  log("play mode " + (isHls ? "hls" : "native") + " kind=" + (kind || "?") + " hint=" + hint);
   if (window.Hls && Hls.isSupported() && isHls) {
     hls = new Hls({ maxBufferLength: 30, enableWorker: true });
     // 事件要先挂上再 loadSource,否则早期的清单错误会漏记
@@ -1405,6 +1409,20 @@ async function playEpisode(id, name, groupId) {
     }
     const local = await invoke("player_url", { stream: st });
     lastLocalUrl = local;
+    // 探一眼真实内容:插件会把没有后缀的 mp4 地址写成 mpegurl,
+    // 丢给 hls.js 只会得到 manifestParsingError
+    let kind = "";
+    try {
+      const probe = await invoke("stream_kind", { stream: st });
+      kind = (probe && probe.kind) || "";
+      log(
+        "probe kind=" + kind + " code=" + ((probe && probe.status) || 0) +
+        " ct=" + ((probe && probe.mime) || "") + " bytes=" + ((probe && probe.bytes) || 0) +
+        (kind === "unknown" ? " head=" + ((probe && probe.head) || "") : "")
+      );
+    } catch (e) {
+      log("probe fail", String(e && e.message ? e.message : e));
+    }
     // 多清晰度:每档都给一个代理地址
     const opts = [];
     if (st.options && st.options.length > 1) {
@@ -1417,7 +1435,7 @@ async function playEpisode(id, name, groupId) {
     }
     if (playCtx) playCtx.options = opts;
     log("stream " + st.mime + " local=" + shortUrl(local, 90) + " opts=" + opts.length);
-    openPlayer(local, name, st.mime);
+    openPlayer(local, name, st.mime, kind);
   } catch (e) {
     log("STREAM FAIL", e);
     pStatus("取流失败:" + e);

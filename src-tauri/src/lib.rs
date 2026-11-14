@@ -29,6 +29,7 @@ pub fn run() {
             commands::detail,
             commands::play,
             commands::player_url,
+            commands::stream_kind,
             commands::filters,
             commands::poster,
             commands::append_log,
