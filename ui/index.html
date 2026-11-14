@@ -392,12 +392,14 @@
 
   .p-big {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    width: 76px; height: 76px; display: grid; place-items: center; cursor: pointer;
-    border: none; border-radius: 50%; color: #fff; z-index: 2;
-    background: rgba(0,0,0,.42); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    width: 78px; height: 78px; display: grid; place-items: center; cursor: pointer;
+    border: 1px solid rgba(255,255,255,.16); border-radius: 50%; color: #fff; z-index: 2;
+    background: rgba(0,0,0,.66); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
     transition: opacity .2s, transform .2s;
   }
-  .p-big .m3e-icon { font-size: 42px; line-height: 1; display: block; transform: translateY(1px); }
+  /* 播放三角字形偏右,做光学左移才看起来居中 */
+  .p-big .m3e-icon { font-size: 44px; line-height: 1; display: block; color: #fff;
+    transform: translate(-2px, 0); filter: drop-shadow(0 1px 2px rgba(0,0,0,.45)); }
   .player.playing .p-big { display: none; }
   .p-big:hover { transform: translate(-50%, -50%) scale(1.06); }
 
@@ -476,6 +478,31 @@
     font: 600 13px/1 system-ui, "PingFang SC", sans-serif;
   }
   .resume:hover { filter: brightness(.96); }
+  /* 详情骨架屏 */
+  .skel-hero { display: flex; gap: 20px; padding: 4px 0 22px; }
+  .skel-hero .sk { width: 148px; aspect-ratio: 2/3; border-radius: 18px; }
+  .skel-hero .sk-lines { flex: 1; display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
+  .skel-hero .sk-lines i { height: 14px; border-radius: 8px; display: block; }
+  .skel-hero .sk-lines i:nth-child(1) { height: 22px; width: 46%; }
+  .skel-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+  .skel-chips i { width: 92px; height: 38px; border-radius: 12px; display: block; }
+  .sk, .skel-hero .sk-lines i, .skel-chips i {
+    background: var(--m3e-sys-color-surface-container-high);
+    animation: skel 1.8s ease-in-out infinite;
+  }
+  .skel-chips i:nth-child(3n) { animation-delay: .3s; }
+  .skel-chips i:nth-child(4n) { animation-delay: .6s; }
+
+  /* 加载指示器 */
+  .spin {
+    width: 18px; height: 18px; flex: none; border-radius: 50%;
+    border: 2.5px solid rgba(255,255,255,.26); border-top-color: #fff;
+    animation: spin .85s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .p-state { display: flex; align-items: center; gap: 10px; }
+  .detail-loading { display: flex; align-items: center; gap: 10px; padding: 32px 0; color: var(--m3e-sys-color-on-surface-variant); }
+  .detail-loading .spin { border-color: var(--m3e-sys-color-outline-variant); border-top-color: var(--m3e-sys-color-primary); }
 </style>
 </head>
 <body>

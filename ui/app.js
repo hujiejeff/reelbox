@@ -150,7 +150,12 @@ async function doSearch() {
 
 async function openDetail(item) {
   showView("detail");
-  $("v-detail").innerHTML = '<div class="placeholder"><b>加载中…</b></div>';
+  $("v-detail").innerHTML =
+    '<div class="detail-wrap">' +
+      '<div class="skel-hero"><div class="sk"></div>' +
+        '<div class="sk-lines"><i></i><i></i><i></i><i></i></div></div>' +
+      '<div class="skel-chips">' + "<i></i>".repeat(14) + "</div>" +
+    "</div>";
   try {
     const d = await invoke("detail", { source: S.source, id: item.id });
     renderDetail(d);
@@ -373,6 +378,12 @@ function fmtTime(sec) {
 function detailKey() { return S.source && S.detailTitle ? S.source.id + "|" + S.detailTitle : ""; }
 
 /* ---------- 播放器界面 ---------- */
+function pStatus(msg) {
+  const el = $("pState");
+  if (!msg) { el.innerHTML = ""; return; }
+  el.innerHTML = '<span class="spin"></span><span>' + esc(msg) + "</span>";
+}
+
 function pSync() {
   const v = $("video");
   const dur = isFinite(v.duration) ? v.duration : 0;
@@ -389,6 +400,7 @@ function pSync() {
   $("pPlayIcon").textContent = playing ? "pause" : "play_arrow";
   $("pBigIcon").textContent = playing ? "pause" : "play_arrow";
   $("player").classList.toggle("playing", playing);
+  if (!playing) $("player").classList.remove("idle");
   const vol = v.muted ? 0 : v.volume;
   const volEl2 = $("vol");
   if (volEl2 && document.activeElement !== volEl2) volEl2.value = String(Math.round(vol * 100));
@@ -599,8 +611,11 @@ function openPlayer(url, name) {
   const v = $("video");
   box.hidden = false;
   box.classList.remove("idle");
-  $("pTitle").textContent = name || "";
-  $("pState").textContent = url ? "加载中…" : "取流中…";
+  const full = S.detailTitle && name && name !== S.detailTitle
+    ? S.detailTitle + " · " + name
+    : name || S.detailTitle || "";
+  $("pTitle").textContent = full;
+  pStatus(url ? "加载中…" : "取流中…");
   if (hls) { hls.destroy(); hls = null; }
   if (!url) return;
 
@@ -614,7 +629,7 @@ function openPlayer(url, name) {
     pSync();
   };
   v.ontimeupdate = () => saveProgress(false);
-  v.onplaying = () => { $("pState").textContent = ""; pSync(); };
+  v.onplaying = () => { pStatus(""); pSync(); };
   v.onpause = pSync;
   v.onended = () => {
     const ctx = playCtx;
@@ -622,7 +637,7 @@ function openPlayer(url, name) {
     if (!ctx || !ctx.list || !ctx.list.length) return;
     const next = ctx.list[ctx.index + 1];
     if (next) playEpisode(next.id, next.name);
-    else $("pState").textContent = "已经是最后一集";
+    else pStatus("已经是最后一集");
   };
 
   const isHls = url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
@@ -631,7 +646,7 @@ function openPlayer(url, name) {
     hls.loadSource(url);
     hls.attachMedia(v);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      $("pState").textContent = "";
+      pStatus("");
       renderLevels();
       v.volume = loadVolume();
       v.play().then(() => tryUnmute(v)).catch(() => {});
@@ -639,7 +654,7 @@ function openPlayer(url, name) {
     hls.on(Hls.Events.LEVEL_SWITCHED, renderLevels);
     hls.on(Hls.Events.ERROR, (_e, d) => {
       if (d && d.fatal) {
-        $("pState").textContent = "播放失败:" + d.details;
+        pStatus("播放失败:" + d.details);
         window.__err && window.__err("hls: " + d.details);
       }
     });
@@ -670,7 +685,7 @@ async function playEpisode(id, name) {
     const local = await invoke("player_url", { stream: st });
     openPlayer(local, name);
   } catch (e) {
-    $("pState").textContent = "取流失败:" + e;
+    pStatus("取流失败:" + e);
   }
 }
 
