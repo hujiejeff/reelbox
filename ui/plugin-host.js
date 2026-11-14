@@ -1,0 +1,171 @@
+// 插件宿主(父页一侧):一个 sandbox iframe + postMessage 桥。
+//
+// 为什么要 iframe:
+//   * 插件是不可信代码(第三方 .webox.js),不能让它直接拿到 Tauri 的 invoke
+//   * `sandbox="allow-scripts"` 且 **不加** `allow-same-origin` → iframe 变成
+//     unique origin,读不到父页的 localStorage / cookie,也拿不到 __TAURI_INTERNALS__
+//   * 插件要联网时只能 postMessage 求父页,由父页调 `plugin_fetch`(Rust 侧还会挡内网)
+//
+// 协议:
+//   iframe → 父页  {id, kind:"http.get", url, headers}
+//    父页  → iframe  {id, kind:"rpc.result", ok, data|error}
+//   iframe → 父页  {kind:"ready"} / {kind:"log", msg}
+//   父页  → iframe  {id, kind:"run", path, source, hook, arg}
+//   iframe → 父页  {id, kind:"run.result", ok, data|error}
+
+import { sandboxMain } from "./plugin-sandbox.js";
+
+const TAG = "reelbox-plugin";
+
+let frame = null;
+let readyPromise = null;
+let markReady = null;
+let readyFlag = false;
+let callSeq = 0;
+let invokeFn = null;
+let logFn = function () {};
+
+const calls = new Map(); // 父页发起的钩子调用
+const rpcs = new Map(); // 沙箱发起的宿主调用(http.get)
+
+/** 这个源是不是插件源(kind 或扩展名任一命中) */
+export function isPluginSource(src) {
+  if (!src) return false;
+  const kind = String(src.kind || src.type || "");
+  const url = String(src.url || "").toLowerCase();
+  return kind === "webox" || url.endsWith(".webox.js") || url.endsWith(".reelbox.js");
+}
+
+/** 建宿主 iframe。app.js 在 init() 里调一次即可。 */
+export function initPluginHost(opts) {
+  const options = opts || {};
+  if (options.invoke) invokeFn = options.invoke;
+  if (options.log) logFn = options.log;
+  if (frame) return readyPromise;
+  if (!invokeFn) throw new Error("initPluginHost 需要 invoke");
+
+  readyPromise = new Promise(function (resolve) {
+    markReady = resolve;
+  });
+
+  const box = document.createElement("iframe");
+  box.setAttribute("sandbox", "allow-scripts"); // 关键:绝对不要加 allow-same-origin
+  box.setAttribute("aria-hidden", "true");
+  box.setAttribute("tabindex", "-1");
+  box.title = "plugin sandbox";
+  box.style.cssText =
+    "position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none";
+  const boot = "(" + sandboxMain.toString() + ")();";
+  box.srcdoc =
+    '<!doctype html><meta charset="utf-8"><body><script>' + boot + "<\/script>";
+  window.addEventListener("message", onMessage);
+  document.body.appendChild(box);
+  frame = box;
+
+  // 兜底:10 秒还没 ready 就别让界面一直转圈
+  setTimeout(function () {
+    if (!readyFlag) {
+      readyFlag = true;
+      logFn("sandbox: 没有收到 ready,继续尝试调用");
+      if (markReady) { markReady(); markReady = null; }
+    }
+  }, 10000);
+
+  return readyPromise;
+}
+
+function onMessage(ev) {
+  if (!frame || ev.source !== frame.contentWindow) return;
+  const d = ev.data;
+  if (!d || d.__rb !== TAG) return;
+  if (d.kind === "ready") {
+    readyFlag = true;
+    logFn("sandbox ready");
+    if (markReady) { markReady(); markReady = null; }
+    return;
+  }
+  if (d.kind === "log") {
+    logFn("sandbox| " + d.msg);
+    return;
+  }
+  if (d.kind === "http.get") {
+    handleHttp(d);
+    return;
+  }
+  if (d.kind === "run.result") {
+    const job = calls.get(d.id);
+    if (!job) return;
+    calls.delete(d.id);
+    clearTimeout(job.timer);
+    if (d.ok) job.resolve(d.data);
+    else job.reject(new Error(d.error || "插件调用失败"));
+    return;
+  }
+  if (d.kind === "rpc.result") {
+    const job = rpcs.get(d.id);
+    if (!job) return;
+    rpcs.delete(d.id);
+    clearTimeout(job.timer);
+    if (d.ok) job.resolve(d.data);
+    else job.reject(new Error(d.error || "宿主请求失败"));
+  }
+}
+
+function postToSandbox(msg) {
+  msg.__rb = TAG;
+  if (frame && frame.contentWindow) frame.contentWindow.postMessage(msg, "*");
+}
+
+async function handleHttp(d) {
+  const id = d.id;
+  const reply = { kind: "rpc.result", id: id, ok: false, error: "" };
+  try {
+    const res = await invokeFn("plugin_fetch", {
+      url: d.url,
+      headers: d.headers || null,
+    });
+    reply.ok = true;
+    reply.data = res;
+  } catch (e) {
+    reply.ok = false;
+    reply.error = String(e && e.message ? e.message : e);
+    logFn("http.get 失败 " + String(d.url).slice(0, 80) + " → " + reply.error);
+  }
+  postToSandbox(reply);
+}
+
+function timeoutFor(hook) {
+  return hook === "play" ? 60000 : 30000;
+}
+
+/**
+ * 在沙箱里跑一个插件钩子。
+ * @param {string} path 插件文件路径(同时做插件实例的缓存键)
+ * @param {string} hook filters / list / search / detail / play
+ * @param {object} arg  钩子参数
+ */
+export async function callPlugin(path, hook, arg) {
+  if (!frame) throw new Error("插件宿主还没初始化");
+  await readyPromise;
+  let source = sourceCache.get(path);
+  if (!source) {
+    source = await invokeFn("plugin_read", { path: path });
+    sourceCache.set(path, source);
+  }
+  const id = "c" + (callSeq += 1);
+  return new Promise(function (resolve, reject) {
+    const timer = setTimeout(function () {
+      calls.delete(id);
+      reject(new Error("插件 " + hook + " 超时"));
+    }, timeoutFor(hook));
+    calls.set(id, { resolve: resolve, reject: reject, timer: timer });
+    postToSandbox({ kind: "run", id: id, path: path, source: source, hook: hook, arg: arg || {} });
+  });
+}
+
+const sourceCache = new Map();
+
+/** 插件文件被重新导入后,丢掉旧源码缓存 */
+export function forgetPlugin(path) {
+  sourceCache.delete(path);
+}

@@ -1,6 +1,8 @@
 import { initTheme } from "./theme.js";
+import { initPluginHost, callPlugin, isPluginSource } from "./plugin-host.js";
 
 // Reelbox 前端:所有数据都从 Tauri 命令拿。
+// 插件源例外:钩子在 ui/plugin-host.js 的 sandbox iframe 里跑,这里只做数据搬运。
 const { invoke } = window.__TAURI__.core;
 
 const S = {
@@ -44,6 +46,7 @@ async function init() {
   bindDebugToggle();
   bindWheelScroll();
   log("init start");
+  initPluginHost({ invoke: invoke, log: log });
   {
     const d = document.getElementById("dbg");
     const fab = document.getElementById("dbgFab");
@@ -80,6 +83,79 @@ async function init() {
   bindNav();
   bindSourceMenu();
   await switchSource(S.source);
+
+  // reelbox.exe --selftest:无人值守跑一遍 列表 → 详情 → 播放,结果写日志
+  try {
+    if (await invoke("selftest_mode")) await runSelfTest();
+  } catch (e) {
+    log("SELFTEST CRASH", String(e));
+  }
+}
+
+/* ---------- 自检:reelbox.exe --selftest ---------- */
+
+function waitFor(check, ms) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const tick = () => {
+      let ok = false;
+      try { ok = !!check(); } catch (_) {}
+      if (ok) return resolve(true);
+      if (Date.now() - started > ms) return resolve(false);
+      setTimeout(tick, 250);
+    };
+    tick();
+  });
+}
+
+/** 全流程验收:插件源 列表 → 详情 → 播放(视频真的在走) */
+async function runSelfTest() {
+  const say = (m) => log("SELFTEST " + m);
+  const stop = (m) => { say("FAIL " + m); say("DONE"); };
+  try {
+    const src =
+      S.sources.find((s) => isPluginSource(s) && /4k/i.test(String(s.name) + String(s.url))) ||
+      S.sources.find((s) => isPluginSource(s));
+    if (!src) return stop("没有插件源");
+    say("source " + src.name);
+
+    const t0 = Date.now();
+    await switchSource(src);
+    const items = S.items || [];
+    const first = items[0] || {};
+    say(
+      "list ms=" + (Date.now() - t0) + " n=" + items.length +
+      " first=" + JSON.stringify(first.title || "") + " poster=" + (first.poster ? "yes" : "no")
+    );
+    if (!items.length) return stop("列表为空");
+    if (!/[\u4e00-\u9fa5]/.test(first.title || "")) return stop("首个条目没有中文片名");
+
+    const t1 = Date.now();
+    const d = await openDetail(first);
+    const eps = S.detailEps || [];
+    say(
+      "detail ms=" + (Date.now() - t1) + " title=" + JSON.stringify(d.title || "") +
+      " summary=" + (d.summary || "").length + " groups=" + d.groups.length + " eps=" + eps.length
+    );
+    if (!d.title) return stop("详情没有标题");
+    if (!eps.length) return stop("详情没有分集");
+
+    const t2 = Date.now();
+    await playEpisode(eps[0].id, eps[0].name, eps[0].group || "");
+    const v = $("video");
+    // 自检不需要声音:静音播放在任何策略下都能起来
+    try { v.muted = true; v.play().catch(() => {}); } catch (_) {}
+    const moved = await waitFor(() => v.currentTime > 0.05 && !v.paused, 25000);
+    say(
+      "play ms=" + (Date.now() - t2) + " readyState=" + v.readyState +
+      " t=" + Number(v.currentTime || 0).toFixed(2) + " playing=" + moved
+    );
+    if (!moved) return stop("视频没有真正播起来");
+    say("PASS");
+    say("DONE");
+  } catch (e) {
+    stop(e && e.message ? e.message : String(e));
+  }
 }
 
 async function switchSource(src) {
@@ -94,17 +170,78 @@ async function switchSource(src) {
   // 切源等于换了片库:详情页上的剧集已失效,先回首页
   S.detailTitle = "";
   S.detailEps = [];
+  S.detailId = "";
   if (!$("player").hidden) closePlayer();
   showView("home");
   await Promise.all([loadFilters(), loadItems()]);
 }
 
+/* ---------- 插件源:钩子在 sandbox iframe 里跑 ---------- */
+
+function pluginMode() {
+  return isPluginSource(S.source);
+}
+
+/** 列表:插件源走沙箱(ui/plugin-host.js),内置源走 Rust */
+async function fetchPage(page, classify) {
+  if (!pluginMode()) return invoke("list_items", { source: S.source, page, classify });
+  const res = await callPlugin(S.source.url, "list", {
+    page: page,
+    cursor: page > 1 ? String(page) : null,
+    filters: { classify: classify || "" },
+  });
+  return {
+    items: (res && (res.items || res.list)) || [],
+    nextCursor: (res && (res.nextCursor || res.next)) || "",
+  };
+}
+
+async function fetchSearch(keyword, page) {
+  if (!pluginMode()) return invoke("search", { source: S.source, keyword, page });
+  const res = await callPlugin(S.source.url, "search", {
+    query: keyword,
+    cursor: page > 1 ? String(page) : null,
+  });
+  return {
+    items: (res && (res.items || res.list)) || [],
+    nextCursor: (res && (res.nextCursor || res.next)) || "",
+  };
+}
+
+async function fetchFilters() {
+  if (!pluginMode()) return invoke("filters", { source: S.source });
+  return callPlugin(S.source.url, "filters", {});
+}
+
+async function fetchDetail(id) {
+  if (!pluginMode()) return invoke("detail", { source: S.source, id });
+  const d = (await callPlugin(S.source.url, "detail", { id })) || {};
+  const groups = Array.isArray(d.groups) ? d.groups : [];
+  return {
+    id: d.id || id,
+    title: d.title || "",
+    poster: d.poster || "",
+    summary: d.summary || "",
+    groups: groups
+      .map((g, i) => {
+        const gid = g.id || "g" + i;
+        const eps = (Array.isArray(g.episodes) ? g.episodes : [])
+          .filter((e) => e && e.id)
+          .map((e, k) => ({ id: String(e.id), name: e.name || "第 " + (k + 1) + " 集", group: gid }));
+        return { id: gid, name: g.name || "线路 " + (i + 1), episodes: eps };
+      })
+      .filter((g) => g.episodes.length),
+  };
+}
+
 async function loadFilters() {
   let fs = [];
   try {
-    fs = await invoke("filters", { source: S.source });
-  } catch (_) {}
-  const opts = (fs[0] && fs[0].options) || [];
+    fs = await fetchFilters();
+  } catch (e) {
+    log("filters fail", e);
+  }
+  const opts = (fs && fs[0] && fs[0].options) || [];
   S.parents = opts.filter((o) => !o.parent && o.value);
   S.children = {};
   for (const o of opts) {
@@ -120,11 +257,7 @@ async function loadItems() {
   S.loading = true;
   setStatus();
   try {
-    const page = await invoke("list_items", {
-      source: S.source,
-      page: 1,
-      classify: S.child,
-    });
+    const page = await fetchPage(1, S.child);
     S.items = page.items || [];
     S.page = 1;
     S.next = page.nextCursor || "";
@@ -142,11 +275,7 @@ async function loadMore() {
   if (S.loading || !S.next) return;
   S.loading = true;
   try {
-    const page = await invoke("list_items", {
-      source: S.source,
-      page: Number(S.next),
-      classify: S.child,
-    });
+    const page = await fetchPage(Number(S.next), S.child);
     const before = S.items.length;
     S.items = S.items.concat(page.items || []);
     S.next = page.nextCursor || "";
@@ -163,7 +292,7 @@ async function doSearch() {
   S.loading = true;
   setStatus();
   try {
-    const page = await invoke("search", { source: S.source, keyword: q, page: 1 });
+    const page = await fetchSearch(q, 1);
     S.items = page.items || [];
     S.next = "";
     resetGrid();
@@ -186,10 +315,13 @@ async function openDetail(item) {
       '<div class="skel-chips">' + "<i></i>".repeat(14) + "</div>" +
     "</div>";
   try {
-    const d = await invoke("detail", { source: S.source, id: item.id });
+    const d = await fetchDetail(item.id);
+    S.detailId = d.id || item.id;
     renderDetail(d);
+    return d;
   } catch (e) {
     $("v-detail").innerHTML = '<div class="placeholder"><b>详情失败</b><span>' + esc(String(e)) + "</span></div>";
+    throw e;
   }
 }
 
@@ -308,7 +440,9 @@ function renderDetail(d) {
   const summary = (d.summary || "").replace(/[\s\u3000]+/g, " ").trim();
   S.detailTitle = d.title;
   S.detailEps = [];
-  d.groups.forEach((g) => g.episodes.forEach((e) => S.detailEps.push({ id: e.id, name: e.name })));
+  d.groups.forEach((g) =>
+    g.episodes.forEach((e) => S.detailEps.push({ id: e.id, name: e.name, group: e.group || g.id }))
+  );
   const rec = progGet(detailKey());
   const resumeBtn =
     rec && rec.id
@@ -321,7 +455,11 @@ function renderDetail(d) {
         esc(/[\u4e00-\u9fa5]/.test(g.name) ? g.name : "线路 " + (gi + 1)) +
         '</h4><div class="epgrid">' +
         g.episodes
-          .map((e) => '<button class="chip-ep" data-id="' + esc(e.id) + '">' + esc(e.name) + "</button>")
+          .map(
+            (e) =>
+              '<button class="chip-ep" data-id="' + esc(e.id) + '" data-group="' +
+              esc(e.group || g.id) + '">' + esc(e.name) + "</button>"
+          )
           .join("") +
         "</div></section>"
     )
@@ -350,7 +488,7 @@ function renderDetail(d) {
   if (btnResume)
     btnResume.onclick = () => {
       const r = progGet(detailKey());
-      if (r && r.id) playEpisode(r.id, r.name);
+      if (r && r.id) playEpisode(r.id, r.name, r.group || "");
     };
 
   const more = $("btnMore");
@@ -373,7 +511,8 @@ function renderDetail(d) {
   }
 
   $("v-detail").querySelectorAll(".chip-ep").forEach((b) => {
-    b.onclick = () => playEpisode(b.getAttribute("data-id"), b.textContent);
+    b.onclick = () =>
+      playEpisode(b.getAttribute("data-id"), b.textContent, b.getAttribute("data-group") || "");
   });
 }
 
@@ -862,7 +1001,7 @@ function jumpEpisode(delta) {
   const i = ctx.index + delta;
   if (i < 0 || i >= ctx.list.length) return;
   const ep = ctx.list[i];
-  playEpisode(ep.id, ep.name);
+  playEpisode(ep.id, ep.name, ep.group || "");
 }
 
 function loadVolume() {
@@ -910,7 +1049,7 @@ function refreshResume() {
     wrap.insertBefore(btn, anchor || null);
   }
   btn.textContent = "继续观看 · " + (rec.name || "") + " · " + fmtTime(rec.t);
-  btn.onclick = () => playEpisode(rec.id, rec.name);
+  btn.onclick = () => playEpisode(rec.id, rec.name, rec.group || "");
 }
 
 function saveProgress(force) {
@@ -921,10 +1060,10 @@ function saveProgress(force) {
   const now = Date.now();
   if (!force && now - (playCtx.saved || 0) < 5000) return;
   playCtx.saved = now;
-  progSet(playCtx.key, { id: playCtx.id, name: playCtx.name, t: t, at: now });
+  progSet(playCtx.key, { id: playCtx.id, name: playCtx.name, group: playCtx.group || "", t: t, at: now });
 }
 
-function openPlayer(url, name) {
+function openPlayer(url, name, mime) {
   const box = $("player");
   const v = $("video");
   box.hidden = false;
@@ -954,11 +1093,13 @@ function openPlayer(url, name) {
     pSync();
     if (!ctx || !ctx.list || !ctx.list.length) return;
     const next = ctx.list[ctx.index + 1];
-    if (next) playEpisode(next.id, next.name);
+    if (next) playEpisode(next.id, next.name, next.group || "");
     else pStatus("已经是最后一集");
   };
 
-  const isHls = url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
+  // 本地反代地址把真实地址 base64 掉了,看不出扩展名,所以以 mime 为准
+  const hint = mime || (playCtx && playCtx.mime) || "";
+  const isHls = /mpegurl|m3u8/i.test(hint) || url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
   if (window.Hls && Hls.isSupported() && isHls) {
     hls = new Hls({ maxBufferLength: 30, enableWorker: true });
     hls.loadSource(url);
@@ -985,7 +1126,32 @@ function openPlayer(url, name) {
   }
 }
 
-async function playEpisode(id, name) {
+/** 插件源的 play 钩子:返回 {sources:[{id,name,url,mime,headers}]},换成内部 Stream 形状 */
+async function pluginStream(groupId, episodeId) {
+  const res = await callPlugin(S.source.url, "play", {
+    contentId: S.detailId || "",
+    groupId: groupId || "",
+    episodeId: episodeId,
+    purpose: "playback",
+  });
+  const list = (res && (res.sources || res.streams)) || (res && res.url ? [res] : []);
+  const usable = list.filter((s) => s && typeof s.url === "string" && /^https?:\/\//i.test(s.url));
+  if (!usable.length) throw new Error(res && res.error ? String(res.error) : "插件没有给出可播放的地址");
+  // 登记进服务端白名单:player_url 只认本次会话 play 出来的地址
+  await invoke("plugin_stream_allow", { urls: usable.map((s) => s.url) });
+  const first = usable[0];
+  return {
+    url: first.url,
+    mime: first.mime || "application/vnd.apple.mpegurl",
+    headers: first.headers || {},
+    options: usable.map((s, i) => ({
+      quality: s.name || s.quality || "档 " + (i + 1),
+      url: s.url,
+    })),
+  };
+}
+
+async function playEpisode(id, name, groupId) {
   log("playEpisode", name);
   const key = detailKey();
   const rec = progGet(key);
@@ -995,13 +1161,18 @@ async function playEpisode(id, name) {
     key: key,
     id: id,
     name: name,
+    group: groupId || "",
+    mime: "",
     list: list,
     index: idx,
     resume: rec && rec.id === id ? rec.t || 0 : 0,
   };
   openPlayer("", name);
   try {
-    const st = await invoke("play", { source: S.source, episodeId: id });
+    const st = pluginMode()
+      ? await pluginStream(groupId, id)
+      : await invoke("play", { source: S.source, episodeId: id });
+    if (playCtx) playCtx.mime = st.mime || "";
     const local = await invoke("player_url", { stream: st });
     // 多清晰度:每档都给一个代理地址
     const opts = [];
@@ -1015,7 +1186,7 @@ async function playEpisode(id, name) {
     }
     if (playCtx) playCtx.options = opts;
     log("stream", st.mime, String(local).slice(0, 60));
-    openPlayer(local, name);
+    openPlayer(local, name, st.mime);
   } catch (e) {
     log("STREAM FAIL", e);
     pStatus("取流失败:" + e);
