@@ -4,6 +4,7 @@
 //! 但"这个插件叫什么、走哪个接口、有哪几个分类"这类信息全在 define() 的字面量里,
 //! 不需要跑代码就能拿到 —— 先支持"只读清单"的插件。
 
+pub mod adapt;
 pub mod runtime;
 
 use std::collections::BTreeMap;
