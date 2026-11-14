@@ -1,3 +1,5 @@
+import { initTheme } from "./theme.js";
+
 // Reelbox 前端:所有数据都从 Tauri 命令拿。
 const { invoke } = window.__TAURI__.core;
 
@@ -391,55 +393,6 @@ function esc(s) {
   })[c]);
 }
 
-function applyTheme(t) {
-  document.documentElement.setAttribute("data-theme", t);
-  const icon = $("btnTheme").querySelector(".m3e-icon");
-  if (icon) icon.textContent = t === "dark" ? "light_mode" : "dark_mode";
-  try { localStorage.setItem("reelbox.theme", t); } catch (_) {}
-}
-
-function initTheme() {
-  let t = "dark";
-  try { t = localStorage.getItem("reelbox.theme") || "dark"; } catch (_) {}
-  applyTheme(t);
-  $("btnTheme").onclick = () =>
-    applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
-}
-
-const ACCENTS = [
-  { id: "", label: "紫", color: "#6750a4" },
-  { id: "blue", label: "蓝", color: "#1a5fd0" },
-  { id: "green", label: "绿", color: "#2e6b3e" },
-  { id: "orange", label: "橙", color: "#a4420a" },
-  { id: "rose", label: "玫红", color: "#a83b62" },
-];
-
-function applyAccent(id) {
-  if (id) document.documentElement.setAttribute("data-accent", id);
-  else document.documentElement.removeAttribute("data-accent");
-  document.querySelectorAll(".accent").forEach((el) => {
-    el.setAttribute("aria-selected", el.getAttribute("data-accent") === id ? "true" : "false");
-  });
-  try { localStorage.setItem("reelbox.accent", id); } catch (_) {}
-}
-
-function renderAccents() {
-  const box = $("accents");
-  if (!box) return;
-  box.innerHTML = ACCENTS.map(
-    (a) =>
-      '<button class="accent" data-accent="' + a.id + '" title="' + a.label +
-      '" aria-selected="false" style="background:' + a.color + '"></button>'
-  ).join("");
-  box.onclick = (e) => {
-    const b = e.target.closest(".accent");
-    if (b) applyAccent(b.getAttribute("data-accent"));
-  };
-  let cur = "";
-  try { cur = localStorage.getItem("reelbox.accent") || ""; } catch (_) {}
-  applyAccent(cur);
-}
-
 function layoutControls() {
   const controls = $("controls");
   const wide = window.matchMedia("(min-width: 840px)").matches;
@@ -462,5 +415,4 @@ $("scroll").addEventListener("scroll", () => {
 });
 
 initTheme();
-renderAccents();
 init();
