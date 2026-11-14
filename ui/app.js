@@ -23,17 +23,17 @@ const $ = (id) => document.getElementById(id);
 // ---------- 数据 ----------
 
 async function init() {
-  $("pBack").onclick = closePlayer;
+  bindPlayer();
   document.addEventListener("keydown", (e) => {
     const box = $("player");
     if (box.hidden) return;
     const v = $("video");
-    if (e.key === "Escape") return closePlayer();
-    if (e.key === " " || e.code === "Space") {
-      e.preventDefault();
-      v.paused ? v.play().catch(() => {}) : v.pause();
+    if (e.key === "Escape") {
+      if ($("pLevels").hidden) return closePlayer();
+      $("pLevels").hidden = true;
       return;
     }
+    if (e.key === " " || e.code === "Space") { e.preventDefault(); return pTogglePlay(); }
     if (e.key === "ArrowRight") { v.currentTime = Math.min(v.duration || 1e9, v.currentTime + 10); return; }
     if (e.key === "ArrowLeft") { v.currentTime = Math.max(0, v.currentTime - 10); return; }
     if (e.key === "f" || e.key === "F") {
@@ -346,6 +346,8 @@ function renderDetail(d) {
 let hls = null;
 let playCtx = null;
 let idleTimer = 0;
+let tickTimer = 0;
+let dragging = false;
 
 /* ---------- 播放进度 ---------- */
 const PROG_KEY = "reelbox.progress";
@@ -353,43 +355,144 @@ const PROG_KEY = "reelbox.progress";
 function progAll() {
   try { return JSON.parse(localStorage.getItem(PROG_KEY) || "{}"); } catch (_) { return {}; }
 }
-
 function progGet(key) { return key ? progAll()[key] : null; }
-
 function progSet(key, val) {
   if (!key) return;
   const all = progAll();
   all[key] = val;
   try { localStorage.setItem(PROG_KEY, JSON.stringify(all)); } catch (_) {}
 }
-
 function fmtTime(sec) {
   sec = Math.max(0, Math.round(sec || 0));
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
+  const secs = sec % 60;
   const mm = h ? String(m).padStart(2, "0") : String(m);
-  return (h ? h + ":" : "") + mm + ":" + String(s).padStart(2, "0");
+  return (h ? h + ":" : "") + mm + ":" + String(secs).padStart(2, "0");
 }
-
 function detailKey() { return S.source && S.detailTitle ? S.source.id + "|" + S.detailTitle : ""; }
 
-/* ---------- 播放器 ---------- */
+/* ---------- 播放器界面 ---------- */
+function pSync() {
+  const v = $("video");
+  const dur = isFinite(v.duration) ? v.duration : 0;
+  $("pTime").textContent = fmtTime(v.currentTime) + " / " + fmtTime(dur);
+  const pct = dur ? (v.currentTime / dur) * 100 : 0;
+  $("played").style.width = pct + "%";
+  if (!dragging) $("knob").style.left = pct + "%";
+  let buffered = 0;
+  try {
+    if (v.buffered.length && dur) buffered = (v.buffered.end(v.buffered.length - 1) / dur) * 100;
+  } catch (_) {}
+  $("buf").style.width = Math.min(100, buffered) + "%";
+  const playing = !v.paused && !v.ended;
+  $("pPlayIcon").textContent = playing ? "pause" : "play_arrow";
+  $("pBigIcon").textContent = playing ? "pause" : "play_arrow";
+  $("pBig").style.opacity = playing ? "0" : "1";
+  $("pBig").style.pointerEvents = playing ? "none" : "auto";
+  $("pMuteIcon").textContent = v.muted || v.volume === 0 ? "volume_off" : "volume_up";
+}
+
+function pSeekTo(clientX) {
+  const v = $("video");
+  const r = $("seek").getBoundingClientRect();
+  const ratio = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+  $("played").style.width = ratio * 100 + "%";
+  $("knob").style.left = ratio * 100 + "%";
+  if (isFinite(v.duration)) v.currentTime = ratio * v.duration;
+}
+
+function pTogglePlay() {
+  const v = $("video");
+  if (v.paused) v.play().catch(() => {});
+  else v.pause();
+}
+
+function renderLevels() {
+  const btn = $("pQuality");
+  const menu = $("pLevels");
+  if (!hls || !hls.levels || hls.levels.length < 2) {
+    btn.hidden = true;
+    menu.hidden = true;
+    return;
+  }
+  btn.hidden = false;
+  const cur = hls.currentLevel < 0 ? hls.loadLevel : hls.currentLevel;
+  const lv = hls.levels[cur];
+  btn.textContent = lv && lv.height ? lv.height + "P" : "自动";
+  menu.innerHTML =
+    hls.levels
+      .map((l, i) => '<button data-lv="' + i + '">' + (l.height ? l.height + "P" : "档位 " + (i + 1)) + "</button>")
+      .join("") + '<button data-lv="-1">自动</button>';
+  menu.querySelectorAll("button").forEach((b) => {
+    const n = Number(b.getAttribute("data-lv"));
+    if ((n === -1 && hls.currentLevel === -1) || n === cur) b.setAttribute("aria-current", "true");
+    b.onclick = () => {
+      hls.currentLevel = n === -1 ? -1 : n;
+      menu.hidden = true;
+      renderLevels();
+    };
+  });
+}
+
+function bindPlayer() {
+  const box = $("player");
+  const v = $("video");
+
+  $("pBack").onclick = closePlayer;
+  $("pBig").onclick = pTogglePlay;
+  $("pPlay").onclick = pTogglePlay;
+  v.onclick = pTogglePlay;
+
+  $("pMute").onclick = () => { v.muted = !v.muted; pSync(); };
+  $("pFull").onclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (box.requestFullscreen) box.requestFullscreen();
+  };
+  $("pQuality").onclick = (e) => {
+    e.stopPropagation();
+    $("pLevels").hidden = !$("pLevels").hidden;
+  };
+
+  const seek = $("seek");
+  seek.onpointerdown = (e) => {
+    dragging = true;
+    seek.classList.add("drag");
+    seek.setPointerCapture(e.pointerId);
+    pSeekTo(e.clientX);
+  };
+  seek.onpointermove = (e) => { if (dragging) pSeekTo(e.clientX); };
+  seek.onpointerup = (e) => {
+    dragging = false;
+    seek.classList.remove("drag");
+    try { seek.releasePointerCapture(e.pointerId); } catch (_) {}
+    pSeekTo(e.clientX);
+  };
+
+  box.onmousemove = () => {
+    box.classList.remove("idle");
+    clearTimeout(idleTimer);
+    if (v.paused) return;
+    idleTimer = setTimeout(() => box.classList.add("idle"), 2600);
+  };
+}
+
 function closePlayer() {
   const box = $("player");
   const v = $("video");
   saveProgress(true);
   if (hls) { hls.destroy(); hls = null; }
+  clearInterval(tickTimer);
+  clearTimeout(idleTimer);
   try { v.pause(); } catch (_) {}
   v.removeAttribute("src");
   v.load();
   box.hidden = true;
-  box.classList.remove("dim");
-  clearTimeout(idleTimer);
+  box.classList.remove("idle");
+  $("pLevels").hidden = true;
   refreshResume();
 }
 
-/* 关闭播放器后,把"继续观看"补到详情页上(详情页是之前渲染的,不会自己更新) */
 function refreshResume() {
   const wrap = $("v-detail").querySelector(".detail-wrap");
   if (!wrap) return;
@@ -425,30 +528,31 @@ function openPlayer(url, name) {
   const box = $("player");
   const v = $("video");
   box.hidden = false;
-  box.classList.remove("dim");
+  box.classList.remove("idle");
   $("pTitle").textContent = name || "";
   $("pState").textContent = url ? "加载中…" : "取流中…";
   if (hls) { hls.destroy(); hls = null; }
   if (!url) return;
 
+  clearInterval(tickTimer);
+  tickTimer = setInterval(pSync, 250);
+
   v.onloadedmetadata = () => {
     if (playCtx && playCtx.resume > 5) {
       try { v.currentTime = playCtx.resume; } catch (_) {}
     }
+    pSync();
   };
   v.ontimeupdate = () => saveProgress(false);
-  v.onplaying = () => { $("pState").textContent = ""; };
+  v.onplaying = () => { $("pState").textContent = ""; pSync(); };
+  v.onpause = pSync;
   v.onended = () => {
     const ctx = playCtx;
+    pSync();
     if (!ctx || !ctx.list || !ctx.list.length) return;
     const next = ctx.list[ctx.index + 1];
     if (next) playEpisode(next.id, next.name);
     else $("pState").textContent = "已经是最后一集";
-  };
-  box.onmousemove = () => {
-    box.classList.remove("dim");
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => box.classList.add("dim"), 2600);
   };
 
   const isHls = url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
@@ -458,8 +562,10 @@ function openPlayer(url, name) {
     hls.attachMedia(v);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       $("pState").textContent = "";
+      renderLevels();
       v.play().catch(() => {});
     });
+    hls.on(Hls.Events.LEVEL_SWITCHED, renderLevels);
     hls.on(Hls.Events.ERROR, (_e, d) => {
       if (d && d.fatal) {
         $("pState").textContent = "播放失败:" + d.details;
@@ -467,6 +573,7 @@ function openPlayer(url, name) {
       }
     });
   } else {
+    $("pQuality").hidden = true;
     v.src = url;
     v.play().catch(() => {});
   }

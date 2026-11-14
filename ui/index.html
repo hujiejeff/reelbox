@@ -325,28 +325,95 @@
   /* 有图之后去掉底色,避免圆角处透出一圈亮边 */
   .poster.has-img { background: transparent; }
   .poster img { display: block; }
-  /* 播放器:整屏覆盖 */
-  .player { position: fixed; inset: 0; z-index: 100; background: #000; display: flex; }
+  /* 播放器 */
+  .player { position: fixed; inset: 0; z-index: 100; background: #000; overflow: hidden; }
   .player[hidden] { display: none; }
   .player video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-  .player-head {
-    position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 12px;
-    padding: 14px 18px; color: #fff; background: linear-gradient(180deg, rgba(0,0,0,.72), transparent);
-    transition: opacity .25s; pointer-events: none;
+  .player.idle { cursor: none; }
+  .player.idle .p-top, .player.idle .p-bottom { opacity: 0; pointer-events: none; }
+  .player.idle .p-big { opacity: 0 !important; }
+
+  .p-top {
+    position: absolute; left: 0; right: 0; top: 0; z-index: 3;
+    display: flex; align-items: center; gap: 10px; padding: 16px 18px 30px;
+    color: #fff; background: linear-gradient(180deg, rgba(0,0,0,.62), rgba(0,0,0,0));
+    transition: opacity .25s;
   }
-  .player-head > * { pointer-events: auto; }
-  .player.dim .player-head { opacity: 0; }
-  .pbtn {
-    width: 38px; height: 38px; flex: none; display: grid; place-items: center; cursor: pointer;
-    border: none; border-radius: 50%; background: rgba(255,255,255,.14); color: #fff;
+  .p-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .p-icon {
+    width: 38px; height: 38px; flex: none; display: grid; place-items: center;
+    border: none; border-radius: 50%; cursor: pointer;
+    background: rgba(255,255,255,.12); color: #fff;
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    transition: background .15s, transform .15s;
   }
-  .pbtn:hover { background: rgba(255,255,255,.26); }
-  .ptitle { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pstate {
+  .p-icon:hover { background: rgba(255,255,255,.24); }
+  .p-icon:active { transform: scale(.94); }
+  .p-icon .m3e-icon { font-size: 20px; }
+  #pQuality { width: auto; padding: 0 14px; border-radius: 19px; font: 600 12px/1 system-ui, sans-serif; }
+
+  .p-levels {
+    position: absolute; right: 18px; top: 62px; z-index: 4;
+    display: flex; flex-direction: column; gap: 2px; padding: 6px;
+    min-width: 96px; border-radius: 16px;
+    background: rgba(28,27,31,.92); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  }
+  .p-levels[hidden] { display: none; }
+  .p-levels button {
+    border: none; background: transparent; color: #e6e0e9; cursor: pointer;
+    height: 34px; border-radius: 10px; font: 600 12.5px/1 system-ui, sans-serif;
+  }
+  .p-levels button:hover { background: rgba(255,255,255,.1); }
+  .p-levels button[aria-current="true"] { background: var(--m3e-sys-color-primary); color: var(--m3e-sys-color-on-primary); }
+
+  .p-big {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    color: #fff; font-size: 13px; background: rgba(0,0,0,.55); padding: 10px 18px; border-radius: 999px;
+    width: 76px; height: 76px; display: grid; place-items: center; cursor: pointer;
+    border: none; border-radius: 50%; color: #fff; z-index: 2;
+    background: rgba(0,0,0,.42); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    transition: opacity .2s, transform .2s;
   }
-  .pstate:empty { display: none; }
+  .p-big .m3e-icon { font-size: 40px; }
+  .p-big:hover { transform: translate(-50%, -50%) scale(1.06); }
+
+  .p-bottom {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+    padding: 40px 20px 16px; color: #fff;
+    background: linear-gradient(0deg, rgba(0,0,0,.78), rgba(0,0,0,0));
+    transition: opacity .25s;
+  }
+  .p-seek {
+    position: relative; height: 4px; margin-bottom: 12px;
+    border-radius: 2px; background: rgba(255,255,255,.22); cursor: pointer;
+    transition: height .15s;
+  }
+  .p-seek:hover, .p-seek.drag { height: 7px; }
+  .p-buf { position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+    border-radius: inherit; background: rgba(255,255,255,.34); }
+  .p-played { position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+    border-radius: inherit; background: var(--m3e-sys-color-primary); }
+  .p-knob {
+    position: absolute; top: 50%; left: 0; width: 13px; height: 13px; margin-left: -6.5px;
+    border-radius: 50%; background: var(--m3e-sys-color-primary);
+    transform: translateY(-50%) scale(0); transition: transform .15s;
+  }
+  .p-seek:hover .p-knob, .p-seek.drag .p-knob { transform: translateY(-50%) scale(1); }
+
+  .p-row { display: flex; align-items: center; gap: 10px; }
+  .p-time { font: 600 12.5px/1 ui-monospace, Consolas, monospace; opacity: .92; }
+  .p-gap { flex: 1; }
+
+  .p-state {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    color: #fff; font: 600 13px/1 system-ui, sans-serif;
+    background: rgba(0,0,0,.6); padding: 12px 20px; border-radius: 999px;
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    z-index: 5; pointer-events: none;
+  }
+  .p-state:empty { display: none; }
+
 
   @media (max-width: 599px) {
     /* 窄屏三列:放在最后,确保压过基础栅格 */
@@ -521,14 +588,43 @@
   });
 </script>
   <div class="player" id="player" hidden>
-    <video id="video" playsinline controls autoplay></video>
-    <div class="player-head">
-      <button class="pbtn" id="pBack" aria-label="返回">
+    <video id="video" playsinline autoplay></video>
+
+    <div class="p-top">
+      <button class="p-icon" id="pBack" aria-label="返回">
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>
       </button>
-      <div class="ptitle" id="pTitle"></div>
+      <div class="p-title" id="pTitle"></div>
+      <button class="p-icon" id="pQuality" hidden>自动</button>
+      <div class="p-levels" id="pLevels" hidden></div>
     </div>
-    <div class="pstate" id="pState"></div>
+
+    <button class="p-big" id="pBig" aria-label="播放/暂停">
+      <span class="m3e-icon" id="pBigIcon">play_arrow</span>
+    </button>
+
+    <div class="p-bottom">
+      <div class="p-seek" id="seek">
+        <div class="p-buf" id="buf"></div>
+        <div class="p-played" id="played"></div>
+        <div class="p-knob" id="knob"></div>
+      </div>
+      <div class="p-row">
+        <button class="p-icon" id="pPlay" aria-label="播放/暂停">
+          <span class="m3e-icon" id="pPlayIcon">play_arrow</span>
+        </button>
+        <span class="p-time" id="pTime">0:00 / 0:00</span>
+        <span class="p-gap"></span>
+        <button class="p-icon" id="pMute" aria-label="静音">
+          <span class="m3e-icon" id="pMuteIcon">volume_up</span>
+        </button>
+        <button class="p-icon" id="pFull" aria-label="全屏">
+          <span class="m3e-icon">fullscreen</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="p-state" id="pState"></div>
   </div>
 
   <script src="vendor/hls.min.js"></script>
