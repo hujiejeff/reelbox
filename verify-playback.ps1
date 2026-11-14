@@ -6,6 +6,7 @@ $env:RUSTUP_HOME = "D:\rust\rustup"
 $env:CARGO_HOME  = "D:\rust\cargo"
 $env:PATH = "D:\rust\cargo\bin;D:\rust\w64devkit\bin;$env:PATH"
 $fail = 0
+Set-Location $PSScriptRoot   # 允许从任意目录调用
 
 Write-Host "== 1. core tests ==" -ForegroundColor Cyan
 $out = (cargo test -p reelbox-core 2>&1 | ForEach-Object { "$_" }) -join "`n"
