@@ -85,3 +85,19 @@ cargo build -p reelbox --target x86_64-pc-windows-gnu
 - `tiny_http` 未处理 Range 请求:mp4 直链拖动进度会从头发,建议优先用 m3u8 源
 - 没有进度记忆 / 自动下一集 / 手动选清晰度
 - 反代只监听本机,不对外暴露
+
+## 验收清单
+
+| 项 | 状态 | 判定方式 |
+| --- | --- | --- |
+| 点剧集能进播放页 | 通过 | 截图 `docs/playback.png` |
+| 画面真的在播(不是静止图) | 通过 | 相隔 6 秒两帧的 md5 不同 |
+| 分享页能抽出 m3u8 | 通过 | `cargo test extract_tests` 3 条 |
+| 防盗链 UA/Referer 生效 | 通过 | 反代日志里分片返回 200 |
+| 退出播放不泄漏 | 通过 | `closePlayer` 销毁 Hls 实例并清 `src` |
+
+一键复核:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File verify-playback.ps1
+```
