@@ -156,8 +156,8 @@
     font: 500 15px/1 system-ui, "PingFang SC", sans-serif; color: inherit;
   }
   .searchbox input::placeholder { color: var(--m3e-sys-color-on-surface-variant); }
-  #v-detail { overflow-y: auto; }
-  .detail-wrap { width: 100%; max-width: 780px; margin-inline: auto; padding: 8px 22px 44px; }
+  #v-detail { overflow-y: auto; overflow-x: hidden; }
+  .detail-wrap { width: 100%; max-width: 780px; min-width: 0; margin-inline: auto; padding: 8px 22px 44px; }
   .back {
     width: 40px; height: 40px; margin: 2px 0 6px -8px; border: none; border-radius: 50%;
     display: grid; place-items: center; cursor: pointer; color: inherit; background: transparent;
