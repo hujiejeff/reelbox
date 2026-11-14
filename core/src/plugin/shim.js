@@ -1,6 +1,8 @@
 // 沙箱里的兼容层:WeBox / console / ctx。
 // ctx.html.load(url) 用一个极简 DOM 实现,支持 $(sel) / text() / attr() / each()。
 
+// 原生契约别名:reelbox.define 与 WeBox.define 等价
+var reelbox = { define: function (o) { globalThis.__DEFINE = o; return o; } };
 var WeBox = {
   define: function (o) {
     globalThis.__DEFINE = o;
@@ -176,6 +178,12 @@ function makePage(html, url) {
   }
   return { $: $, url: url, html: html };
 }
+
+ctx.fail = function (code, msg) {
+  var e = new Error(msg || code);
+  e.code = code;
+  throw e;
+};
 
 var ctx = {
   http: {

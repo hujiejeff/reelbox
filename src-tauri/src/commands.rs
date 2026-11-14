@@ -102,8 +102,12 @@ pub async fn play(source: Source, episode_id: String) -> Result<Stream, String> 
             let path = std::path::PathBuf::from(&source.url);
             let arg = format!("{{\"id\":\"{}\"}}", episode_id.replace('"', ""));
             let out = plugin::run_file(&path, "play", &arg, plugin_fetch())?;
-            let v: serde_json::Value =
+            let mut v: serde_json::Value =
                 serde_json::from_str(&out).map_err(|e| format!("play 返回值不是 JSON: {e}"))?;
+            // play 允许返回数组(多清晰度),先取第一个
+            if let Some(arr) = v.as_array() {
+                v = arr.first().cloned().unwrap_or(serde_json::Value::Null);
+            }
             let url = v
                 .get("url")
                 .and_then(|x| x.as_str())
