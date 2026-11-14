@@ -273,11 +273,73 @@
     --m3e-sys-color-on-secondary-container: #ffd9e2;
   }
 
-  /* 设置页 */
-  .settings { padding: 24px; max-width: 620px; overflow-y: auto; }
-  .settings h3 { font-size: 13px; margin: 22px 0 10px; font-weight: 700;
+  /* 设置页:左侧锚点导航 + 每个分区一张 m3e 卡片 */
+  .settings {
+    flex: 1; display: flex; align-items: flex-start; gap: 20px;
+    padding: 20px 20px 32px; overflow-y: auto;
+  }
+  .set-nav { flex: none; display: flex; flex-direction: column; gap: 2px; width: 148px;
+    position: sticky; top: 0; }
+  .set-tab {
+    display: flex; align-items: center; gap: 12px; width: 100%; height: 44px; padding: 0 14px;
+    border: none; cursor: pointer; border-radius: 22px; background: transparent; color: inherit;
+    font: 600 13.5px/1 system-ui, "PingFang SC", sans-serif; text-align: start;
+  }
+  .set-tab .m3e-icon { font-size: 20px; color: var(--m3e-sys-color-on-surface-variant); }
+  .set-tab:hover { background: var(--m3e-sys-color-surface-container-high); }
+  .set-tab[aria-selected="true"] { background: var(--m3e-sys-color-secondary-container);
+    color: var(--m3e-sys-color-on-secondary-container); }
+  .set-tab[aria-selected="true"] .m3e-icon { color: inherit; }
+
+  .set-body { flex: 1; min-width: 0; max-width: 720px; display: flex; flex-direction: column; gap: 16px; }
+  .set-card { padding: 20px 20px 22px; gap: 0; }
+  .set-card[hidden] { display: none; }
+  .set-card__title { margin: 0 0 4px; font: 600 17px/1.35 system-ui, "PingFang SC", sans-serif;
+    letter-spacing: -.01em; }
+  .set-card__sub { margin: 0 0 6px; font: 500 12.5px/1.6 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant); }
+  .set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 14px 0; }
+  .set-row--stack { flex-direction: column; align-items: stretch; gap: 10px; }
+  .set-row__text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .set-row__text > b { font: 600 14px/1.4 system-ui, "PingFang SC", sans-serif; }
+  .set-row__text > span { font: 500 12.5px/1.55 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant); }
+  .set-block { margin-top: 6px; padding-top: 6px; }
+  .set-block__head { display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px; margin-bottom: 8px; }
+  .set-block__title { font: 600 13px/1.4 system-ui, "PingFang SC", sans-serif;
     color: var(--m3e-sys-color-on-surface-variant); letter-spacing: .02em; }
-  .settings h3:first-child { margin-top: 0; }
+  .set-block__count { font: 500 12px/1.4 system-ui, sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant); }
+  .set-input {
+    flex: none; min-width: 180px; max-width: 100%; height: 42px; padding: 0 12px;
+    border-radius: 12px; border: 1px solid var(--m3e-sys-color-outline-variant);
+    background: var(--m3e-sys-color-surface-container-low); color: inherit; outline: none;
+    font: 500 13px/1 system-ui, "PingFang SC", sans-serif;
+  }
+  .set-input:focus { border-color: var(--m3e-sys-color-primary); }
+  .set-mono { margin: 0 0 10px; font: 11.5px/1.6 ui-monospace, Consolas, monospace;
+    color: var(--m3e-sys-color-on-surface-variant); word-break: break-all; }
+
+  /* 窄屏:左侧导航折成顶部分段控件 */
+  @media (max-width: 599px) {
+    .settings { flex-direction: column; align-items: stretch; padding: 10px 12px 104px; gap: 12px; }
+    .set-nav {
+      flex-direction: row; width: 100%; position: static; gap: 4px;
+      overflow-x: auto; scrollbar-width: none; padding-bottom: 2px;
+    }
+    .set-nav::-webkit-scrollbar { display: none; }
+    .set-tab { flex: none; width: auto; height: 38px; padding: 0 14px; border-radius: 19px; gap: 8px; }
+    .set-tab .m3e-icon { font-size: 18px; }
+    .set-body { gap: 12px; max-width: none; }
+    .set-card { padding: 16px 14px 18px; }
+    .set-row { flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 0; }
+    .set-input { width: 100%; min-width: 0; }
+    .srcmgr .m3e-list-item__content .m3e-list-item__supporting,
+    .src-list .m3e-list-item__content .m3e-list-item__supporting { max-width: 100%; }
+  }
+
   .seg { display: flex; flex-wrap: wrap; gap: 8px; }
   .seg button {
     height: 40px; padding: 0 18px; border-radius: 20px; cursor: pointer;
@@ -550,28 +612,38 @@
   .m3e-filter-chip__leading { display: inline-flex; align-items: center; justify-content: center; }
   .m3e-filter-chip__check { display: inline-flex; align-items: center; justify-content: center; }
   .m3e-filter-chip__check svg { display: block; }
-  /* 源管理 */
-  .srcmgr { display: flex; flex-direction: column; gap: 6px; }
-  .srcrow {
-    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-    border-radius: 14px; background: var(--m3e-sys-color-surface-container);
+  /* 源管理:m3e 的 list item(每项:名称 / 类型 / 地址 + 右侧编辑删除) */
+  .src-list, .srcmgr { display: flex; flex-direction: column; gap: 2px; }
+  .srcmgr .m3e-list-item, .src-list .m3e-list-item { border-radius: 16px; }
+  .srcmgr .m3e-list-item[data-active="1"] {
+    background: var(--m3e-sys-color-secondary-container);
+    color: var(--m3e-sys-color-on-secondary-container);
   }
-  .srcrow .nm { font-size: 13.5px; font-weight: 600; }
-  .srcrow .kd {
-    font-size: 11px; padding: 2px 8px; border-radius: 8px;
+  .srcmgr .m3e-list-item__content .m3e-list-item__headline {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+    font: 600 13.5px/1.45 system-ui, "PingFang SC", sans-serif;
+  }
+  .srcmgr .m3e-list-item__content .m3e-list-item__supporting,
+  .src-list .m3e-list-item__content .m3e-list-item__supporting {
+    margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 500 11.5px/1.5 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant); max-width: 42ch;
+  }
+  .srcmgr .m3e-list-item__leading .m3e-icon,
+  .src-list .m3e-list-item__leading .m3e-icon { font-size: 22px;
+    color: var(--m3e-sys-color-on-surface-variant); }
+  .srcmgr .m3e-list-item[data-active="1"] .m3e-list-item__leading .m3e-icon { color: inherit; }
+  .srcmgr .m3e-list-item__trailing { gap: 2px; }
+  .src-badge {
+    font: 600 10.5px/1 system-ui, "PingFang SC", sans-serif; padding: 3px 7px; border-radius: 8px;
     background: var(--m3e-sys-color-surface-container-highest);
     color: var(--m3e-sys-color-on-surface-variant);
   }
-  .srcrow .ul {
-    flex: 1; min-width: 0; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; color: var(--m3e-sys-color-on-surface-variant); text-align: right;
+  .src-badge--warn {
+    background: var(--m3e-sys-color-error-container);
+    color: var(--m3e-sys-color-on-error-container);
   }
-  .srcrow button {
-    flex: none; border: none; background: transparent; cursor: pointer; color: inherit;
-    font: 600 12px/1 system-ui, sans-serif; padding: 6px 8px; border-radius: 8px;
-  }
-  .srcrow button:hover { background: var(--m3e-sys-color-surface-container-high); }
-  .srcmgr-bar { display: flex; gap: 8px; margin-top: 10px; }
+  .srcmgr-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .btn-soft {
     height: 38px; padding: 0 16px; border-radius: 19px; cursor: pointer;
     border: 1px solid var(--m3e-sys-color-outline-variant);
@@ -579,16 +651,95 @@
     font: 600 13px/1 system-ui, "PingFang SC", sans-serif;
   }
   .btn-soft:hover { background: var(--m3e-sys-color-surface-container-high); }
-  .srcform { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-  .srcform[hidden] { display: none; }
-  .srcform input, .srcform select {
-    height: 40px; padding: 0 14px; border-radius: 12px;
+
+  /* 对话框里的字段:沿用表单的观感,只补 m3e 的圆角与描边 */
+  .dlg-fields { display: flex; flex-direction: column; gap: 14px; }
+  .dlg-field { display: flex; flex-direction: column; gap: 6px; }
+  .dlg-field__label { font: 600 12px/1.4 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant); }
+  .dlg-field__hint { font: 500 11.5px/1.5 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant); }
+  .dlg-input {
+    height: 46px; padding: 0 14px; border-radius: 12px; width: 100%; box-sizing: border-box;
     border: 1px solid var(--m3e-sys-color-outline-variant);
     background: var(--m3e-sys-color-surface-container-low);
-    color: inherit; font: 500 13px/1 system-ui, "PingFang SC", sans-serif; outline: none;
+    color: inherit; outline: none;
+    font: 500 13.5px/1 system-ui, "PingFang SC", sans-serif;
   }
-  .srcform input:focus, .srcform select:focus { border-color: var(--m3e-sys-color-primary); }
-  .srcform-bar { display: flex; gap: 8px; }
+  .dlg-input:focus { border-color: var(--m3e-sys-color-primary); }
+  .dlg-field--bad .dlg-input { border-color: var(--m3e-sys-color-error); }
+  .dlg-field--bad .dlg-field__label { color: var(--m3e-sys-color-error); }
+  .dlg-text { margin: 0; font: 500 13px/1.65 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant); }
+  .dlg-text:empty { display: none; }
+  .dlg-tip { margin-top: 10px; min-height: 1.2em; }
+  .dlg-btn--danger { --_m3e-button-content: var(--m3e-sys-color-error); }
+  /* snackbar 要盖过播放器(z-index 100) */
+  .m3e-snackbar-host { z-index: 320; }
+
+  /* ---------- 列表/详情的三态:加载(骨架屏)/ 空 / 错误 ---------- */
+  .state {
+    max-width: 460px; margin: 26px auto 0; padding: 26px 22px 22px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+  }
+  .state__icon { font-size: 40px; color: var(--m3e-sys-color-on-surface-variant); opacity: .7; }
+  .state--error .state__icon { color: var(--m3e-sys-color-error); opacity: 1; }
+  .state__title { font: 600 15px/1.45 system-ui, "PingFang SC", sans-serif; }
+  .state__msg {
+    font: 500 13px/1.65 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant); max-width: 34em;
+  }
+  .state__acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
+  .btn-soft[data-primary="1"] {
+    background: var(--m3e-sys-color-primary); color: var(--m3e-sys-color-on-primary);
+    border-color: transparent;
+  }
+  .btn-soft[data-primary="1"]:hover { background: var(--m3e-sys-color-primary); filter: brightness(1.06); }
+  .state__raw { width: 100%; margin-top: 6px; text-align: start; }
+  .state__raw > summary {
+    cursor: pointer; font: 600 12px/1.7 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant);
+  }
+  .state__raw > pre {
+    margin: 6px 0 0; padding: 8px 10px; max-height: 150px; overflow: auto; border-radius: 10px;
+    background: var(--m3e-sys-color-surface-container);
+    color: var(--m3e-sys-color-on-surface-variant);
+    font: 11px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+  }
+  @media (max-width: 599px) { .state { margin-top: 10px; padding: 22px 16px 18px; } }
+
+  /* 播放失败:盖在画面上的一张小卡片,给"重试 / 换线路" */
+  .p-fail {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 6;
+    width: min(420px, calc(100% - 36px)); padding: 18px 20px 16px;
+    display: flex; flex-direction: column; gap: 10px; text-align: center;
+    border-radius: 24px; color: #fff;
+    background: rgba(18,17,22,.9);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    box-shadow: 0 10px 32px rgba(0,0,0,.4);
+  }
+  .p-fail[hidden] { display: none; }
+  .p-fail__head {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    font: 600 14px/1.4 system-ui, "PingFang SC", sans-serif;
+  }
+  .p-fail__head .m3e-icon { font-size: 22px; color: #ffb4ab; }
+  .p-fail__hint { font: 500 12.5px/1.6 system-ui, "PingFang SC", sans-serif; opacity: .8; }
+  .p-fail__acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .p-fail .m3e-button { --_m3e-button-content: #e9ddff; }
+  .p-fail .m3e-button[data-primary="1"] {
+    background: var(--m3e-sys-color-primary); color: var(--m3e-sys-color-on-primary);
+  }
+  .p-fail__raw { text-align: start; }
+  .p-fail__raw > summary {
+    cursor: pointer; font: 600 11.5px/1.7 system-ui, "PingFang SC", sans-serif; opacity: .72;
+  }
+  .p-fail__raw > pre {
+    margin: 4px 0 0; max-height: 110px; overflow: auto; opacity: .72;
+    font: 11px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+  }
+  /* 失败卡片和状态文字同时存在时,把状态文字抬到卡片上方,别叠在一起 */
+  .player.failed .p-state { top: calc(50% - 132px); }
 
 </style>
 </head>
@@ -648,61 +799,206 @@
 
       <div class="view" id="v-settings">
         <div class="settings">
-          <h3>主题模式</h3>
-          <div class="seg" id="segMode">
-            <button data-mode="auto">自动</button>
-            <button data-mode="light">浅色</button>
-            <button data-mode="dark">深色</button>
-          </div>
+          <nav class="set-nav" id="setNav" aria-label="设置分区">
+            <button type="button" class="set-tab" data-sec="src" aria-selected="true">
+              <span class="m3e-icon" aria-hidden="true">dns</span><span class="set-tab__label">源</span>
+            </button>
+            <button type="button" class="set-tab" data-sec="play">
+              <span class="m3e-icon" aria-hidden="true">play_circle</span><span class="set-tab__label">播放</span>
+            </button>
+            <button type="button" class="set-tab" data-sec="look">
+              <span class="m3e-icon" aria-hidden="true">palette</span><span class="set-tab__label">外观</span>
+            </button>
+            <button type="button" class="set-tab" data-sec="debug">
+              <span class="m3e-icon" aria-hidden="true">terminal</span><span class="set-tab__label">调试</span>
+            </button>
+            <button type="button" class="set-tab" data-sec="about">
+              <span class="m3e-icon" aria-hidden="true">info</span><span class="set-tab__label">关于</span>
+            </button>
+          </nav>
 
-          <h3 id="blackRow">纯黑模式</h3>
-          <div class="seg" id="segBlack">
-            <button data-black="0">标准</button>
-            <button data-black="1">纯黑</button>
-          </div>
+          <div class="set-body" id="setBody">
+            <!-- 1. 源 -->
+            <section class="m3e-card m3e-card--outlined set-card" data-panel="src">
+              <h2 class="set-card__title">源</h2>
+              <p class="set-card__sub">点播接口(苹果 CMS 的 /api.php/provide/vod 那种)、XML 源,或插件源。</p>
 
-          <h3>主题色彩</h3>
-          <div class="swatches" id="swatches"></div>
+              <div class="set-row">
+                <div class="set-row__text">
+                  <b>当前源</b><span>首页列表和搜索都用它</span>
+                </div>
+                <select class="set-input" id="curSource" aria-label="当前源"></select>
+              </div>
 
-          <h3>配色风格</h3>
-          <div class="seg" id="segVariant">
-            <button data-v="tonal">标准</button>
-            <button data-v="vibrant">鲜明</button>
-            <button data-v="expressive">氛围</button>
-            <button data-v="neutral">柔和</button>
-            <button data-v="mono">单色</button>
-          </div>
-          <p class="hint">配色由种子色实时生成,和 Android 的 Material You 是同一套算法</p>
+              <div class="set-block">
+                <div class="set-block__head">
+                  <span class="set-block__title">源列表</span>
+                  <span class="set-block__count" id="srcCount"></span>
+                </div>
+                <div class="srcmgr" id="srcmgr"></div>
+              </div>
 
-          <h3>源管理</h3>
-          <div class="srcmgr" id="srcmgr"></div>
-          <div class="srcmgr-bar">
-            <button class="btn-soft" id="srcAdd">添加源</button>
-            <button class="btn-soft" id="srcIndex">网络导入</button>
-            <button class="btn-soft" id="srcImport">导入 JSON</button>
-            <input type="file" id="srcFile" accept=".json,application/json" hidden>
-            <button class="btn-soft" id="srcPlugin">导入插件</button>
-            <input type="file" id="pluginFile" accept=".js,text/javascript" hidden>
-          </div>
-          <div class="srcform" id="srcForm" hidden>
-            <input id="sfName" placeholder="名称,例如 我的源">
-            <input id="sfUrl" placeholder="接口地址,例如 https://xxx/api.php/provide/vod">
-            <select id="sfKind">
-              <option value="vod">JSON(vod)</option>
-              <option value="xml">XML</option>
-            </select>
-            <div class="srcform-bar">
-              <button class="btn-soft" id="sfSave">保存</button>
-              <button class="btn-soft" id="sfCancel">取消</button>
-            </div>
-          </div>
+              <div class="srcmgr-bar">
+                <button class="btn-soft" id="srcAdd" data-primary="1">添加源</button>
+                <button class="btn-soft" id="srcIndex">网络导入</button>
+                <button class="btn-soft" id="srcImport">导入 JSON</button>
+                <input type="file" id="srcFile" accept=".json,application/json" hidden>
+                <button class="btn-soft" id="srcPlugin">导入插件</button>
+                <input type="file" id="pluginFile" accept=".js,text/javascript" hidden>
+              </div>
+              <p class="hint">
+                网络导入会自动跳过 iplayr 那类 HTML 爬取配置(它们的地址不是接口,导进来取不到数据),
+                跳过的条数会在底部提示里说清楚。
+              </p>
+            </section>
 
-          <h3>开发者</h3>
-          <div class="seg" id="segDebug">
-            <button data-debug="0">关闭</button>
-            <button data-debug="1">启用日志</button>
+            <!-- 2. 播放 -->
+            <section class="m3e-card m3e-card--outlined set-card" data-panel="play" hidden>
+              <h2 class="set-card__title">播放</h2>
+              <p class="set-card__sub">播放器的默认行为,只影响本机。</p>
+
+              <div class="set-row">
+                <div class="set-row__text">
+                  <b>清晰度偏好</b><span>自动按网速切档,或者固定最高档</span>
+                </div>
+                <div class="seg" id="segQuality">
+                  <button data-q="auto">自动</button>
+                  <button data-q="high">最高</button>
+                </div>
+              </div>
+
+              <div class="set-row">
+                <div class="set-row__text">
+                  <b>自动连播</b><span>一集放完接着放下一集</span>
+                </div>
+                <label class="m3e-switch">
+                  <input class="m3e-switch__input" type="checkbox" id="swAutoplay" aria-label="自动连播">
+                  <span class="m3e-switch__track"><span class="m3e-switch__handle"></span></span>
+                </label>
+              </div>
+
+              <div class="set-row">
+                <div class="set-row__text">
+                  <b>进度记忆</b><span>记住看到哪一集哪一秒,下次接着看</span>
+                </div>
+                <label class="m3e-switch">
+                  <input class="m3e-switch__input" type="checkbox" id="swResume" aria-label="进度记忆">
+                  <span class="m3e-switch__track"><span class="m3e-switch__handle"></span></span>
+                </label>
+              </div>
+            </section>
+
+            <!-- 3. 外观 -->
+            <section class="m3e-card m3e-card--outlined set-card" data-panel="look" hidden>
+              <h2 class="set-card__title">外观</h2>
+              <p class="set-card__sub">动态取色:一颗种子色,实时生成整套 Material You 配色。</p>
+
+              <div class="set-row set-row--stack">
+                <div class="set-row__text"><b>主题模式</b><span>跟随系统,或固定浅色 / 深色</span></div>
+                <div class="seg" id="segMode">
+                  <button data-mode="auto">自动</button>
+                  <button data-mode="light">浅色</button>
+                  <button data-mode="dark">深色</button>
+                </div>
+              </div>
+
+              <div class="set-row set-row--stack" id="blackRow">
+                <div class="set-row__text"><b>纯黑模式</b><span>深色下用纯黑底,OLED 更省电</span></div>
+                <div class="seg" id="segBlack">
+                  <button data-black="0">标准</button>
+                  <button data-black="1">纯黑</button>
+                </div>
+              </div>
+
+              <div class="set-row set-row--stack">
+                <div class="set-row__text"><b>主题色彩</b><span>种子色,和 Android 的 Material You 同一套</span></div>
+                <div class="swatches" id="swatches"></div>
+              </div>
+
+              <div class="set-row set-row--stack">
+                <div class="set-row__text"><b>配色风格</b><span>同一颗种子色,不同的味道</span></div>
+                <div class="seg" id="segVariant">
+                  <button data-v="tonal">标准</button>
+                  <button data-v="vibrant">鲜明</button>
+                  <button data-v="expressive">氛围</button>
+                  <button data-v="neutral">柔和</button>
+                  <button data-v="mono">单色</button>
+                </div>
+              </div>
+            </section>
+
+            <!-- 4. 调试 -->
+            <section class="m3e-card m3e-card--outlined set-card" data-panel="debug" hidden>
+              <h2 class="set-card__title">调试</h2>
+              <p class="set-card__sub">出错时的现场都在日志里:取列表 / 取详情 / 取流各自的原始报错。</p>
+
+              <div class="set-row">
+                <div class="set-row__text">
+                  <b>详细日志</b><span>多记播放与探测细节;错误始终会记</span>
+                </div>
+                <div class="seg" id="segDebug">
+                  <button data-debug="0">关闭</button>
+                  <button data-debug="1">开启</button>
+                </div>
+              </div>
+
+              <div class="set-row">
+                <div class="set-row__text">
+                  <b>调试浮标</b><span>右下角常驻一个按钮,随时弹出日志面板</span>
+                </div>
+                <label class="m3e-switch">
+                  <input class="m3e-switch__input" type="checkbox" id="swFab" aria-label="调试浮标">
+                  <span class="m3e-switch__track"><span class="m3e-switch__handle"></span></span>
+                </label>
+              </div>
+
+              <div class="set-block">
+                <div class="set-block__head"><span class="set-block__title">日志文件</span></div>
+                <p class="set-mono" id="logPath">读取中…</p>
+                <div class="srcmgr-bar">
+                  <button class="btn-soft" id="btnLiveLog">实时日志</button>
+                  <button class="btn-soft" id="btnOpenLog">打开日志</button>
+                </div>
+                <p class="hint">Ctrl+Shift+D 也能开关实时日志面板。</p>
+              </div>
+            </section>
+
+            <!-- 5. 关于 -->
+            <section class="m3e-card m3e-card--outlined set-card" data-panel="about" hidden>
+              <h2 class="set-card__title">关于</h2>
+              <p class="set-card__sub">Reelbox —— 全平台影视资源解析播放器。</p>
+              <div class="m3e-list src-list">
+                <div class="m3e-list-item">
+                  <span class="m3e-list-item__leading"><span class="m3e-icon" aria-hidden="true">info</span></span>
+                  <span class="m3e-list-item__content">
+                    <span class="m3e-list-item__headline">版本</span>
+                  </span>
+                  <span class="m3e-list-item__trailing" id="aboutVersion">—</span>
+                </div>
+                <div class="m3e-list-item">
+                  <span class="m3e-list-item__leading"><span class="m3e-icon" aria-hidden="true">memory</span></span>
+                  <span class="m3e-list-item__content">
+                    <span class="m3e-list-item__headline">构建</span>
+                    <span class="m3e-list-item__supporting" id="aboutBuild">—</span>
+                  </span>
+                </div>
+                <div class="m3e-list-item">
+                  <span class="m3e-list-item__leading"><span class="m3e-icon" aria-hidden="true">extension</span></span>
+                  <span class="m3e-list-item__content">
+                    <span class="m3e-list-item__headline">插件引擎</span>
+                    <span class="m3e-list-item__supporting" id="aboutEngine">—</span>
+                  </span>
+                </div>
+                <div class="m3e-list-item">
+                  <span class="m3e-list-item__leading"><span class="m3e-icon" aria-hidden="true">folder</span></span>
+                  <span class="m3e-list-item__content">
+                    <span class="m3e-list-item__headline">配置文件</span>
+                    <span class="m3e-list-item__supporting" id="aboutSources">—</span>
+                  </span>
+                </div>
+              </div>
+            </section>
           </div>
-          <p class="hint">启用后按 Ctrl+Shift+D 弹出实时日志;日志同时写入 %APPDATA%/reelbox/reelbox.log</p>
         </div>
       </div>
 
@@ -808,6 +1104,22 @@
     </div>
 
     <div class="p-state" id="pState"></div>
+
+    <div class="p-fail" id="pFail" hidden>
+      <div class="p-fail__head">
+        <span class="m3e-icon" id="pFailIcon">error</span>
+        <span id="pFailMsg">播放失败</span>
+      </div>
+      <div class="p-fail__hint" id="pFailHint"></div>
+      <div class="p-fail__acts">
+        <button class="m3e-button m3e-button--text" id="pRetry" type="button">重试</button>
+        <button class="m3e-button m3e-button--text" id="pSwitch" type="button">换线路</button>
+      </div>
+      <details class="p-fail__raw">
+        <summary>原始错误</summary>
+        <pre id="pFailRaw"></pre>
+      </details>
+    </div>
   </div>
 
   <script src="vendor/hls.min.js"></script>

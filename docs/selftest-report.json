@@ -1,19 +1,19 @@
 {
-  "at": "2026-11-14T11:18:14.840Z",
+  "at": "2026-11-14T12:47:33.768Z",
   "exe": "reelbox --selftest",
   "source": {
     "name": "4k影视",
     "url": "C:\\Users\\hujie\\AppData\\Roaming\\reelbox\\plugins\\user-4kvm.webox.js"
   },
   "list": {
-    "ms": 568,
+    "ms": 550,
     "items": 30,
     "first": "谷雨",
     "poster": true,
     "ok": true
   },
   "detail": {
-    "ms": 526,
+    "ms": 513,
     "title": "谷雨",
     "summary": 255,
     "groups": 1,
@@ -21,7 +21,7 @@
     "ok": true
   },
   "play": {
-    "ms": 7210,
+    "ms": 8498,
     "tries": 2,
     "passed": 2,
     "needed": 2,
@@ -30,24 +30,24 @@
         "name": "第1集",
         "id": "ch4s99p1u",
         "ok": true,
-        "ms": 3712,
+        "ms": 4590,
         "from": 0,
         "readyState": 4,
         "videoWidth": 1920,
         "videoHeight": 800,
-        "to": 0.57,
+        "to": 1108.31,
         "index": 1
       },
       {
         "name": "第2集",
         "id": "ch4s99p2a",
         "ok": true,
-        "ms": 3496,
+        "ms": 3905,
         "from": 0,
         "readyState": 4,
         "videoWidth": 1920,
         "videoHeight": 800,
-        "to": 0.69,
+        "to": 0.72,
         "index": 2
       }
     ],
@@ -55,11 +55,11 @@
   },
   "cms": {
     "name": "电影天堂",
-    "ms": 8657,
+    "ms": 13559,
     "ok": true,
     "reason": ""
   },
   "result": "PASS",
   "reason": "",
-  "durationMs": 16970
+  "durationMs": 23131
 }

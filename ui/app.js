@@ -1,5 +1,12 @@
 import { initTheme } from "./theme.js";
 import { initPluginHost, callPlugin, isPluginSource } from "./plugin-host.js";
+import {
+  alertDialog,
+  confirmDialog,
+  formDialog,
+  promptDialog,
+  toast,
+} from "./ui-dialog.js";
 
 // Reelbox 前端:所有数据都从 Tauri 命令拿。
 // 插件源例外:钩子在 ui/plugin-host.js 的 sandbox iframe 里跑,这里只做数据搬运。
@@ -18,6 +25,9 @@ const S = {
   loading: false,
   query: "",
   blobs: new Map(),     // 封面地址 → objectURL(避免重复加载)
+  listError: null,      // 上一页/当前列表的失败信息(三态用:加载中 / 空 / 错误)
+  detailItem: null,     // 最近打开的条目,详情失败时重试用
+  detailGroups: [],     // 详情里的线路,播放失败"换线路"用
 };
 
 const $ = (id) => document.getElementById(id);
@@ -40,7 +50,7 @@ async function init() {
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d")) {
       e.preventDefault();
-      if (debugOn()) toggleDebug();
+      toggleDebug();
     }
   });
   bindDebugToggle();
@@ -49,10 +59,11 @@ async function init() {
   initPluginHost({ invoke: invoke, log: log });
   {
     const d = document.getElementById("dbg");
-    const fab = document.getElementById("dbgFab");
-    if (fab) fab.hidden = !debugOn();
-    if (!debugOn() && d) d.hidden = true;
+    if (d) d.hidden = true;
   }
+  syncDebugButtons();
+  syncPlaySettings();
+  loadAppInfo();
   bindPlayer();
   document.addEventListener("keydown", (e) => {
     const box = $("player");
@@ -75,9 +86,19 @@ async function init() {
   try {
     S.sources = await invoke("list_sources");
   } catch (e) {
-    return showEmpty("读不到源列表:" + e);
+    return showListError(errorInfo("source", e), () => init());
   }
-  if (!S.sources.length) return showEmpty("还没有配置源");
+  if (!S.sources.length) {
+    showListEmpty(
+      "还没有配置源",
+      "加一个点播接口地址(苹果 CMS 的 /api.php/provide/vod 那种),或者从网络索引批量导入。",
+      "去添加源",
+      openSourceManager
+    );
+    bindNav();
+    bindSourceMenu();
+    return;
+  }
   S.source = S.sources[0];
   renderSources();
   bindNav();
@@ -251,7 +272,9 @@ async function runSelfTest() {
       "list ms=" + report.list.ms + " n=" + items.length +
       " first=" + JSON.stringify(first.title || "") + " poster=" + (first.poster ? "yes" : "no")
     );
-    if (!items.length) return await stop("列表为空");
+    if (!items.length) {
+      return await stop("列表为空" + (S.listError ? " | " + S.listError.title + " | " + S.listError.raw : ""));
+    }
     if (!report.list.ok) return await stop("首个条目没有中文片名");
 
     /* ---- 指定片名(复现某个播不了的片):--selftest-title=xxx ---- */
@@ -393,7 +416,9 @@ async function switchSource(src) {
   // 切源等于换了片库:详情页上的剧集已失效,先回首页
   S.detailTitle = "";
   S.detailEps = [];
+  S.detailGroups = [];
   S.detailId = "";
+  S.listError = null;
   if (!$("player").hidden) closePlayer();
   showView("home");
   await Promise.all([loadFilters(), loadItems()]);
@@ -478,7 +503,8 @@ async function loadFilters() {
 async function loadItems() {
   if (!S.source) return;
   S.loading = true;
-  setStatus();
+  S.listError = null;
+  showListLoading();
   try {
     const page = await fetchPage(1, S.child);
     S.items = page.items || [];
@@ -487,7 +513,12 @@ async function loadItems() {
     resetGrid();
     appendCards(0);
   } catch (e) {
-    showEmpty(String(e));
+    log("LIST FAIL", errText(e));
+    S.items = [];
+    S.next = "";
+    resetGrid();
+    S.listError = errorInfo("list", e);
+    showListError(S.listError, () => loadItems());
   } finally {
     S.loading = false;
     setStatus();
@@ -496,14 +527,22 @@ async function loadItems() {
 
 async function loadMore() {
   if (S.loading || !S.next) return;
+  const more = Number(S.next);
   S.loading = true;
   try {
-    const page = await fetchPage(Number(S.next), S.child);
+    const page = await fetchPage(more, S.child);
     const before = S.items.length;
     S.items = S.items.concat(page.items || []);
     S.next = page.nextCursor || "";
     appendCards(before);
-  } catch (_) {
+  } catch (e) {
+    // 翻页失败不该把已经看到的内容清掉:停掉自动翻页,给一个可点的提示
+    log("LIST MORE FAIL", errText(e));
+    S.next = "";
+    showLoadMoreError(errorInfo("list", e), () => {
+      S.next = String(more);
+      loadMore();
+    });
   } finally {
     S.loading = false;
   }
@@ -513,7 +552,8 @@ async function doSearch() {
   const q = ($("q").value || "").trim();
   if (!q) return loadItems();
   S.loading = true;
-  setStatus();
+  S.listError = null;
+  showListLoading();
   try {
     const page = await fetchSearch(q, 1);
     S.items = page.items || [];
@@ -521,7 +561,12 @@ async function doSearch() {
     resetGrid();
     appendCards(0);
   } catch (e) {
-    showEmpty(String(e));
+    log("SEARCH FAIL", errText(e));
+    S.items = [];
+    S.next = "";
+    resetGrid();
+    S.listError = errorInfo("search", e);
+    showListError(S.listError, () => doSearch());
   } finally {
     S.loading = false;
     setStatus();
@@ -530,22 +575,117 @@ async function doSearch() {
 
 async function openDetail(item) {
   log("openDetail", item && item.title);
+  if (item) S.detailItem = item;
   showView("detail");
-  $("v-detail").innerHTML =
-    '<div class="detail-wrap">' +
-      '<div class="skel-hero"><div class="sk"></div>' +
-        '<div class="sk-lines"><i></i><i></i><i></i><i></i></div></div>' +
-      '<div class="skel-chips">' + "<i></i>".repeat(14) + "</div>" +
-    "</div>";
+  $("v-detail").innerHTML = DETAIL_SKELETON;
   try {
     const d = await fetchDetail(item.id);
     S.detailId = d.id || item.id;
     renderDetail(d);
     return d;
   } catch (e) {
-    $("v-detail").innerHTML = '<div class="placeholder"><b>详情失败</b><span>' + esc(String(e)) + "</span></div>";
+    log("DETAIL FAIL", errText(e));
+    showDetailError(errorInfo("detail", e), item);
     throw e;
   }
+}
+
+// ---------- 三态:加载(骨架屏)/ 空 / 错误 ----------
+// 空屏是最糟的状态:用户既不知道发生了什么,也没法重试。这里把"哪一步失败"
+// "网络还是源不支持""原始错误"都摆出来,并给出对应的下一步操作。
+
+const STEP_LABEL = {
+  source: "读源列表",
+  list: "取列表",
+  search: "搜索",
+  detail: "取详情",
+  stream: "取流",
+};
+
+function errText(e) {
+  if (!e) return "未知错误";
+  if (typeof e === "string") return e;
+  if (e.message) return String(e.message);
+  return String(e);
+}
+
+/** 导入进来的 iplayr HTML 爬取配置:地址不是接口,天然取不到数据 */
+function isCrawlSource(src) {
+  if (!src) return false;
+  if (isPluginSource(src)) return false;
+  const kind = String(src.kind || "");
+  if (kind === "xml" || kind === "webox") return false;
+  const url = String(src.url || "").toLowerCase();
+  if (!/^https?:/.test(url)) return false;
+  const host = url.split("://")[1].split(/[/?#]/)[0];
+  if (host.indexOf("raw.githubusercontent.com") >= 0) return true;
+  return url.split(/[?#]/)[0].endsWith(".json");
+}
+
+/**
+ * 一次失败 → 给用户看的三句话:哪一步失败、是网络还是源不支持、原始错误。
+ * 网络类错误给重试,源不支持类错误提示换源。
+ */
+function errorInfo(step, e) {
+  const raw = errText(e);
+  let kind = "unknown";
+  if ((step === "list" || step === "search" || step === "detail") && isCrawlSource(S.source)) {
+    kind = "unsupported";
+  }
+  if (kind !== "unsupported") {
+    if (/^\s*network\b|请求失败|超时|timed out|timeout|dns|connect|unreachable|reset|eof|读响应失败|failed to fetch|networkerror/i.test(raw)) {
+      kind = "network";
+    } else if (/^\s*(invalid_response|not_found)|解析失败|不是合法|返回的是网页|不支持|白名单|看起来是 xml|no_boa|manifestparsing|unknown/i.test(raw)) {
+      kind = "unsupported";
+    }
+  }
+  const label = STEP_LABEL[step] || "请求";
+  let title;
+  let hint;
+  if (kind === "unsupported") {
+    title = label + "失败:这个源给不出可用的数据";
+    hint =
+      step === "detail" || step === "list" || step === "search"
+        ? "看起来它不是点播接口(可能是 HTML 爬取配置,或者站点改版了)。去「设置 → 源」换一个源,或修正它的地址。"
+        : "这个源没给出可播放的流。换一条线路,或者换源试试。";
+  } else if (kind === "network") {
+    title = label + "失败:网络没通";
+    hint = "源站连不上或超时了。检查网络后重试;一直不行就换个源。";
+  } else {
+    title = label + "失败";
+    hint = "可以先重试一次;反复失败就换个源。";
+  }
+  return { step, kind, raw, title, hint };
+}
+
+/** 空/错误共用的状态卡片;按钮通过 data-act 交给调用方绑定 */
+function stateCard(o) {
+  const acts = (o.actions || [])
+    .map(
+      (a) =>
+        '<button class="btn-soft" data-act="' + esc(a.id) + '"' +
+        (a.primary ? ' data-primary="1"' : "") + ">" + esc(a.label) + "</button>"
+    )
+    .join("");
+  return (
+    '<div class="m3e-card m3e-card--outlined state' + (o.error ? " state--error" : "") + '">' +
+      '<span class="m3e-icon state__icon">' + esc(o.icon || "inbox") + "</span>" +
+      '<div class="state__title">' + esc(o.title) + "</div>" +
+      (o.msg ? '<div class="state__msg">' + esc(o.msg) + "</div>" : "") +
+      (acts ? '<div class="state__acts">' + acts + "</div>" : "") +
+      (o.raw
+        ? '<details class="state__raw"><summary>原始错误</summary><pre>' + esc(o.raw) + "</pre></details>"
+        : "") +
+    "</div>"
+  );
+}
+
+/** 出错时的"去换源":切到设置页的「源」分区 */
+function openSourceManager() {
+  showView("settings");
+  setSettingsSection("src");
+  const box = $("srcmgr");
+  if (box && box.scrollIntoView) box.scrollIntoView({ block: "nearest" });
 }
 
 // ---------- 渲染 ----------
@@ -620,9 +760,11 @@ function posterFor(url) {
 // 从 from 开始把 items 追加到网格;已存在的卡片不动,所以滚动不会重载图片。
 function appendCards(from) {
   const grid = $("grid");
-  $("empty").style.display = S.items.length ? "none" : "";
+  const el = $("empty");
+  el.style.display = "none";
+  el.innerHTML = "";
   if (!S.items.length) {
-    $("empty").textContent = S.loading ? "" : "这个分类没有内容";
+    if (!S.loading) showListEmpty();
     return;
   }
   const frag = document.createElement("div");
@@ -662,13 +804,15 @@ function resetGrid() {
 function renderDetail(d) {
   const summary = (d.summary || "").replace(/[\s\u3000]+/g, " ").trim();
   S.detailTitle = d.title;
+  S.detailId = d.id || S.detailId || "";
+  S.detailGroups = d.groups || []; // 播放失败时"换线路"要用
   S.detailEps = [];
   d.groups.forEach((g) =>
     g.episodes.forEach((e) => S.detailEps.push({ id: e.id, name: e.name, group: e.group || g.id }))
   );
   const rec = progGet(detailKey());
   const resumeBtn =
-    rec && rec.id
+    resumeOn() && rec && rec.id
       ? '<button class="resume" id="btnResume">继续观看 · ' + esc(rec.name || "") + " · " + fmtTime(rec.t) + "</button>"
       : "";
   const groups = d.groups
@@ -747,8 +891,8 @@ let dragging = false;
 
 /* ---------- 播放进度 ---------- */
 
-/* ---------- 源管理 ---------- */
-let editingId = "";
+/* ---------- 设置 → 源 ---------- */
+const INDEX_URL = "https://ddgksf2013.top/webox/index.json";
 
 function normSource(raw) {
   const url = (raw.url || raw.api || "").trim();
@@ -774,38 +918,69 @@ function uniqSources(list) {
   return out;
 }
 
+function sourceKindLabel(s) {
+  if (isPluginSource(s)) return "插件";
+  return String((s && s.kind) || "") === "xml" ? "XML" : "JSON";
+}
+
+/** 设置页「当前源」下拉 */
+function renderCurrentSource() {
+  const sel = $("curSource");
+  if (!sel) return;
+  const list = S.sources || [];
+  sel.innerHTML = list.length
+    ? list
+        .map(
+          (s) =>
+            '<option value="' + esc(s.id) + '">' + esc(s.name) + " · " + sourceKindLabel(s) + "</option>"
+        )
+        .join("")
+    : '<option value="">(还没有源)</option>';
+  if (S.source) sel.value = S.source.id;
+  sel.disabled = !list.length;
+}
+
+/** 源列表:m3e list item,每项 = 名称 / 类型 / 地址 + 右侧编辑与删除 */
 function renderSourceManager() {
   const box = $("srcmgr");
+  renderCurrentSource();
   if (!box) return;
-  box.innerHTML = (S.sources || [])
-    .map(
-      (s) =>
-        '<div class="srcrow" data-id="' + esc(s.id) + '">' +
-        '<span class="nm">' + esc(s.name) + "</span>" +
-        '<span class="kd">' + (s.kind === "xml" ? "XML" : "JSON") + "</span>" +
-        '<span class="ul">' + esc(s.url) + "</span>" +
-        '<button data-act="edit" data-id="' + esc(s.id) + '">编辑</button>' +
-        '<button data-act="del" data-id="' + esc(s.id) + '">删除</button>' +
+  const list = S.sources || [];
+  const count = $("srcCount");
+  if (count) count.textContent = list.length ? list.length + " 个" : "";
+  if (!list.length) {
+    box.innerHTML = '<p class="hint">还没有源。下面「添加源」或「网络导入」都行。</p>';
+    return;
+  }
+  box.innerHTML = list
+    .map((s) => {
+      const active = !!(S.source && S.source.id === s.id);
+      const crawl = isCrawlSource(s);
+      return (
+        '<div class="m3e-list-item" data-id="' + esc(s.id) + '"' + (active ? ' data-active="1"' : "") + ">" +
+          '<span class="m3e-list-item__leading"><span class="m3e-icon" aria-hidden="true">' +
+            (isPluginSource(s) ? "extension" : "dns") + "</span></span>" +
+          '<span class="m3e-list-item__content">' +
+            '<span class="m3e-list-item__headline">' + esc(s.name) +
+              '<span class="src-badge">' + sourceKindLabel(s) + "</span>" +
+              (crawl
+                ? '<span class="src-badge src-badge--warn" title="地址是 HTML 爬取配置,不是点播接口">取不到数据</span>'
+                : "") +
+            "</span>" +
+            '<span class="m3e-list-item__supporting">' + esc(s.url) + "</span>" +
+          "</span>" +
+          '<span class="m3e-list-item__trailing">' +
+            '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="edit" data-id="' +
+              esc(s.id) + '" aria-label="编辑 ' + esc(s.name) + '">' +
+              '<span class="m3e-icon" aria-hidden="true">edit</span></button>' +
+            '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="del" data-id="' +
+              esc(s.id) + '" aria-label="删除 ' + esc(s.name) + '">' +
+              '<span class="m3e-icon" aria-hidden="true">delete</span></button>' +
+          "</span>" +
         "</div>"
-    )
-    .join("") || '<p class="hint">还没有源</p>';
-}
-
-function openSrcForm(src) {
-  const form = $("srcForm");
-  if (!form) return;
-  editingId = src ? src.id : "";
-  $("sfName").value = src ? src.name : "";
-  $("sfUrl").value = src ? src.url : "";
-  $("sfKind").value = src && src.kind === "xml" ? "xml" : "vod";
-  form.hidden = false;
-  $("sfName").focus();
-}
-
-function closeSrcForm() {
-  const form = $("srcForm");
-  if (form) form.hidden = true;
-  editingId = "";
+      );
+    })
+    .join("");
 }
 
 async function persistSources() {
@@ -813,41 +988,174 @@ async function persistSources() {
     await invoke("save_sources", { list: S.sources });
     log("sources saved", String(S.sources.length));
   } catch (e) {
-    log("SOURCES SAVE FAIL", e);
+    log("SOURCES SAVE FAIL", errText(e));
+    toast("保存源列表失败:" + errText(e), { dismissible: true });
   }
 }
 
-async function saveSrcForm() {
-  const name = $("sfName").value.trim();
-  const url = $("sfUrl").value.trim();
-  const kind = $("sfKind").value;
-  if (!name || !url) return;
-  const src = normSource({ name: name, url: url, kind: kind });
-  if (!src) return;
+/** 新增 / 编辑源:一个 m3e 对话框,三个字段 */
+async function editSource(src) {
+  const res = await formDialog({
+    icon: "dns",
+    headline: src ? "编辑源" : "添加源",
+    okText: "保存",
+    fields: [
+      { id: "name", label: "名称", value: src ? src.name : "", placeholder: "例如 我的源" },
+      {
+        id: "url",
+        label: "接口地址",
+        value: src ? src.url : "",
+        placeholder: "https://xxx/api.php/provide/vod",
+      },
+      {
+        id: "kind",
+        label: "类型",
+        type: "select",
+        value: src && String(src.kind) === "xml" ? "xml" : "vod",
+        options: [
+          { value: "vod", label: "JSON(vod)" },
+          { value: "xml", label: "XML" },
+        ],
+      },
+    ],
+    note: "地址以 .json 结尾的多半是 HTML 爬取配置,不是点播接口,取不到数据。",
+  });
+  if (!res) return;
+  const src2 = normSource({ name: res.name, url: res.url, kind: res.kind });
+  if (!src2) return;
   const list = S.sources.slice();
-  if (editingId) {
-    const i = list.findIndex((x) => x.id === editingId);
-    if (i >= 0) list[i] = Object.assign({}, src, { id: editingId });
-    else list.push(src);
+  if (src) {
+    const i = list.findIndex((x) => x.id === src.id);
+    if (i >= 0) list[i] = Object.assign({}, src2, { id: src.id });
+    else list.push(src2);
   } else {
-    if (list.some((x) => x.url === src.url)) return;
-    list.push(src);
+    if (list.some((x) => x.url === src2.url)) {
+      toast("这个地址已经加过了");
+      return;
+    }
+    list.push(src2);
   }
   S.sources = list;
   await persistSources();
   renderSourceManager();
   renderSources();
-  closeSrcForm();
+  toast(src ? "已保存「" + src2.name + "」" : "已添加「" + src2.name + "」");
 }
 
 async function removeSource(id) {
+  const src = (S.sources || []).find((x) => x.id === id);
+  if (!src) return;
+  const ok = await confirmDialog(
+    "删除源「" + src.name + "」?",
+    "删掉之后可以在「添加源」里重新加回来。",
+    "删除",
+    true
+  );
+  if (!ok) return;
   const list = S.sources.filter((x) => x.id !== id);
-  if (!list.length) return;
+  if (!list.length) {
+    toast("至少得留一个源");
+    return;
+  }
   S.sources = list;
   await persistSources();
   renderSourceManager();
   renderSources();
+  toast("已删除「" + src.name + "」");
   if (S.source && S.source.id === id) await switchSource(list[0]);
+}
+
+/** 网络导入:跳过的 iplayr 爬取配置要明说,不能静默丢 */
+async function importFromIndex() {
+  const url = await promptDialog("网络导入源", "索引地址", INDEX_URL, "https://.../index.json", "导入");
+  if (!url) return;
+  try {
+    const res = await invoke("import_index", { url });
+    // 兼容旧返回(纯数组)
+    const list = (res && res.sources) || (Array.isArray(res) ? res : []);
+    const skipped = (res && res.skipped) || 0;
+    const skippedNames = (res && res.skipped_names) || [];
+    if (!list.length && !skipped) {
+      toast("索引里没有可用的源");
+      return;
+    }
+    const have = new Set(S.sources.map((x) => x.url));
+    const fresh = list.filter((x) => !have.has(x.url));
+    const dup = list.length - fresh.length;
+    S.sources = S.sources.concat(fresh);
+    await persistSources();
+    renderSourceManager();
+    renderSources();
+    log(
+      "index imported",
+      "new=" + fresh.length,
+      "dup=" + dup,
+      "skipped=" + skipped,
+      skippedNames.join(",")
+    );
+    let msg = "新增 " + fresh.length + " 个,跳过 " + skipped + " 个不支持的源";
+    if (dup) msg += "(重复 " + dup + " 个)";
+    toast(msg, {
+      actionLabel: skipped ? "看详情" : "",
+      onAction: () =>
+        alertDialog(
+          "跳过了 " + skipped + " 个源",
+          (skippedNames.length ? skippedNames.join("、") : "这些源") +
+            " 指向的是 HTML 爬取配置(iplayr 那种),不是点播接口地址,导进来也取不到数据,所以没有导入。",
+          "知道了"
+        ),
+    });
+  } catch (e) {
+    log("INDEX IMPORT FAIL", errText(e));
+    alertDialog("导入失败", errText(e));
+  }
+}
+
+async function importPluginFile(e) {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  try {
+    const text = await f.text();
+    const res = await invoke("save_plugin", { fileName: f.name, text: text });
+    const exists = S.sources.some((x) => x.id === res.id);
+    if (!exists) {
+      S.sources = S.sources.concat([{ id: res.id, name: res.name, kind: "webox", url: res.path }]);
+      await persistSources();
+    }
+    renderSourceManager();
+    renderSources();
+    log("plugin imported", res.id);
+    toast("已导入插件:" + res.name);
+  } catch (err) {
+    log("PLUGIN IMPORT FAIL", errText(err));
+    alertDialog("导入插件失败", errText(err));
+  } finally {
+    e.target.value = "";
+  }
+}
+
+async function importJsonFile(e) {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  try {
+    const text = await f.text();
+    const data = JSON.parse(text);
+    const raw = Array.isArray(data) ? data : data.sites || data.sources || [];
+    const merged = uniqSources(S.sources.concat(raw.map(normSource).filter(Boolean)));
+    if (!merged.length) throw new Error("没有识别到可用的源");
+    const added = merged.length - S.sources.length;
+    S.sources = merged;
+    await persistSources();
+    renderSourceManager();
+    renderSources();
+    log("sources imported", String(merged.length));
+    toast("已导入,新增 " + Math.max(0, added) + " 个,当前共 " + merged.length + " 个源");
+  } catch (err) {
+    log("IMPORT FAIL", errText(err));
+    alertDialog("导入失败", errText(err));
+  } finally {
+    e.target.value = "";
+  }
 }
 
 function bindSourceManager() {
@@ -856,92 +1164,34 @@ function bindSourceManager() {
     box.dataset.bound = "1";
     box.onclick = (e) => {
       const b = e.target.closest("button[data-act]");
-      if (!b) return;
-      const id = b.getAttribute("data-id");
-      if (b.getAttribute("data-act") === "edit") {
-        const src = S.sources.find((x) => x.id === id);
-        if (src) openSrcForm(src);
-      } else if (confirm("删除这个源?")) {
-        removeSource(id);
+      if (b) {
+        const id = b.getAttribute("data-id");
+        if (b.getAttribute("data-act") === "edit") {
+          const src = S.sources.find((x) => x.id === id);
+          if (src) editSource(src);
+        } else {
+          removeSource(id);
+        }
+        return;
+      }
+      // 点整行 = 切到那个源
+      const row = e.target.closest(".m3e-list-item[data-id]");
+      if (!row) return;
+      const src = S.sources.find((x) => x.id === row.getAttribute("data-id"));
+      if (src && (!S.source || src.id !== S.source.id)) {
+        renderSources();
+        switchSource(src);
       }
     };
   }
   if ($("srcAdd") && !$("srcAdd").dataset.bound) {
     $("srcAdd").dataset.bound = "1";
-    $("srcAdd").onclick = () => openSrcForm(null);
-    $("sfSave").onclick = saveSrcForm;
-    $("sfCancel").onclick = closeSrcForm;
-    $("srcIndex").onclick = async () => {
-      const url = prompt(
-        "从网络批量导入源,填索引地址:",
-        "https://ddgksf2013.top/webox/index.json"
-      );
-      if (!url) return;
-      try {
-        const list = await invoke("import_index", { url });
-        if (!list.length) return alert("索引里没有可用的源");
-        const have = new Set(S.sources.map((x) => x.url));
-        const fresh = list.filter((x) => !have.has(x.url));
-        S.sources = S.sources.concat(fresh);
-        await persistSources();
-        renderSourceManager();
-        renderSources();
-        log("index imported", String(fresh.length));
-        alert("导入完成:新增 " + fresh.length + " 个,跳过重复 " + (list.length - fresh.length) + " 个");
-      } catch (err) {
-        log("INDEX IMPORT FAIL", err);
-        alert("导入失败:" + err);
-      }
-    };
-
+    $("srcAdd").onclick = () => editSource(null);
+    $("srcIndex").onclick = importFromIndex;
     $("srcImport").onclick = () => $("srcFile").click();
     $("srcPlugin").onclick = () => $("pluginFile").click();
-    $("pluginFile").onchange = async (e) => {
-      const f = e.target.files && e.target.files[0];
-      if (!f) return;
-      try {
-        const text = await f.text();
-        const res = await invoke("save_plugin", { fileName: f.name, text: text });
-        const exists = S.sources.some((x) => x.id === res.id);
-        if (!exists) {
-          S.sources = S.sources.concat([
-            { id: res.id, name: res.name, type: "webox", url: res.path },
-          ]);
-          await persistSources();
-        }
-        renderSourceManager();
-        renderSources();
-        log("plugin imported", res.id);
-        alert("已导入插件:" + res.name);
-      } catch (err) {
-        log("PLUGIN IMPORT FAIL", err);
-        alert("导入失败:" + err);
-      } finally {
-        e.target.value = "";
-      }
-    };
-    $("srcFile").onchange = async (e) => {
-      const f = e.target.files && e.target.files[0];
-      if (!f) return;
-      try {
-        const text = await f.text();
-        const data = JSON.parse(text);
-        const raw = Array.isArray(data) ? data : data.sites || data.sources || [];
-        const merged = uniqSources(S.sources.concat(raw.map(normSource).filter(Boolean)));
-        if (!merged.length) throw new Error("没有识别到可用的源");
-        S.sources = merged;
-        await persistSources();
-        renderSourceManager();
-        renderSources();
-        log("sources imported", String(merged.length));
-        alert("已导入,当前共 " + merged.length + " 个源");
-      } catch (err) {
-        log("IMPORT FAIL", err && err.message);
-        alert("导入失败:" + (err && err.message ? err.message : err));
-      } finally {
-        e.target.value = "";
-      }
-    };
+    $("pluginFile").onchange = importPluginFile;
+    $("srcFile").onchange = importJsonFile;
   }
 }
 
@@ -969,6 +1219,12 @@ function log() {
   if (box && !box.hidden) { box.textContent = LOG_BUF.join(NL); box.scrollTop = box.scrollHeight; }
 }
 
+/** 噪音行(播放/探测细节):只有开了「详细日志」才记 */
+function logv() {
+  if (!debugOn()) return;
+  log.apply(null, arguments);
+}
+
 const DEBUG_KEY = "reelbox.debug";
 
 function debugOn() {
@@ -978,45 +1234,230 @@ function debugOn() {
 function setDebug(on) {
   try { localStorage.setItem(DEBUG_KEY, on ? "1" : "0"); } catch (_) {}
   const box = document.getElementById("dbg");
-  const fab = document.getElementById("dbgFab");
-  if (fab) fab.hidden = !on;
   if (box && !on) box.hidden = true;
   syncDebugButtons();
   log("debug", on ? "on" : "off");
 }
 
+/** 调试浮标:右下角那颗按钮(和「详细日志」是两件事) */
+function fabOn() {
+  try { return localStorage.getItem("reelbox.debugFab") !== "0"; } catch (_) { return true; }
+}
+
+function setFab(on) {
+  try { localStorage.setItem("reelbox.debugFab", on ? "1" : "0"); } catch (_) {}
+  syncDebugButtons();
+}
+
 function syncDebugButtons() {
   const seg = document.getElementById("segDebug");
-  if (!seg) return;
-  const on = debugOn() ? "1" : "0";
-  seg.querySelectorAll("button").forEach((b) => {
-    b.setAttribute("aria-selected", b.getAttribute("data-debug") === on ? "true" : "false");
-  });
+  if (seg) {
+    const on = debugOn() ? "1" : "0";
+    seg.querySelectorAll("button").forEach((b) => {
+      b.setAttribute("aria-selected", b.getAttribute("data-debug") === on ? "true" : "false");
+    });
+  }
+  const fab = document.getElementById("dbgFab");
+  if (fab) fab.hidden = !fabOn();
+  const sw = document.getElementById("swFab");
+  if (sw) sw.checked = fabOn();
 }
 
 function bindDebugToggle() {
   const fab = document.getElementById("dbgFab");
-  if (fab) {
-    fab.hidden = !debugOn();
+  if (fab && !fab.dataset.bound) {
+    fab.dataset.bound = "1";
     fab.onclick = () => toggleDebug();
   }
   const seg = document.getElementById("segDebug");
-  if (!seg || seg.dataset.bound) return;
-  seg.dataset.bound = "1";
-  seg.onclick = (e) => {
-    const b = e.target.closest("button");
-    if (!b) return;
-    setDebug(b.getAttribute("data-debug") === "1");
-  };
+  if (seg && !seg.dataset.bound) {
+    seg.dataset.bound = "1";
+    seg.onclick = (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      setDebug(b.getAttribute("data-debug") === "1");
+    };
+  }
   syncDebugButtons();
+}
+
+function showDebugPanel(on) {
+  const box = document.getElementById("dbg");
+  if (!box) return;
+  box.hidden = !on;
+  if (on) {
+    box.textContent = LOG_BUF.join(NL);
+    box.scrollTop = box.scrollHeight;
+  }
 }
 
 function toggleDebug() {
   const box = document.getElementById("dbg");
   if (!box) return;
-  box.hidden = !box.hidden;
-  box.textContent = LOG_BUF.join(NL);
-  box.scrollTop = box.scrollHeight;
+  showDebugPanel(box.hidden);
+}
+
+/* ---------- 播放偏好(设置 → 播放) ---------- */
+// 三个开关都真的作用到播放器上:清晰度 → hls/插件档位,自动连播 → onended,
+// 进度记忆 → saveProgress / resume。
+
+function prefGet(key, dflt) {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? dflt : v;
+  } catch (_) {
+    return dflt;
+  }
+}
+
+function prefSet(key, val) {
+  try { localStorage.setItem(key, val); } catch (_) {}
+}
+
+function qualityPref() { return prefGet("reelbox.quality", "auto"); }   // auto | high
+function autoplayOn() { return prefGet("reelbox.autoplay", "1") === "1"; }
+function resumeOn() { return prefGet("reelbox.resume", "1") === "1"; }
+
+function syncPlaySettings() {
+  const seg = $("segQuality");
+  if (seg) {
+    seg.querySelectorAll("button").forEach((b) => {
+      b.setAttribute("aria-selected", b.getAttribute("data-q") === qualityPref() ? "true" : "false");
+    });
+  }
+  const a = $("swAutoplay");
+  if (a) a.checked = autoplayOn();
+  const r = $("swResume");
+  if (r) r.checked = resumeOn();
+}
+
+/* ---------- 设置页:分区 + 各分区自己的绑定 ---------- */
+
+const SET_SECS = ["src", "play", "look", "debug", "about"];
+let APP_INFO = null;
+
+/** 切换设置分区(左侧锚点 / 窄屏分段控件) */
+function setSettingsSection(key) {
+  if (SET_SECS.indexOf(key) < 0) key = "src";
+  setSec = key;
+  const nav = $("setNav");
+  if (nav) {
+    nav.querySelectorAll("[data-sec]").forEach((b) => {
+      b.setAttribute("aria-selected", b.getAttribute("data-sec") === key ? "true" : "false");
+    });
+  }
+  document.querySelectorAll("#v-settings [data-panel]").forEach((p) => {
+    if (p.getAttribute("data-panel") === key) p.removeAttribute("hidden");
+    else p.setAttribute("hidden", "");
+  });
+  if (key === "src") renderSourceManager();
+  if (key === "about") fillAbout();
+  if (key === "debug") fillLogPath();
+}
+
+function fillAbout() {
+  if (!APP_INFO) return;
+  const set = (id, v) => { const el = $(id); if (el) el.textContent = v || "—"; };
+  set("aboutVersion", "v" + APP_INFO.version);
+  set("aboutBuild", APP_INFO.build);
+  set("aboutEngine", APP_INFO.plugin_engine);
+  set("aboutSources", APP_INFO.sources_path);
+}
+
+function fillLogPath() {
+  const el = $("logPath");
+  if (el) el.textContent = (APP_INFO && APP_INFO.log_path) || "读取中…";
+}
+
+async function loadAppInfo() {
+  try {
+    APP_INFO = await invoke("app_info");
+    fillAbout();
+    fillLogPath();
+    log("app_info", APP_INFO.version + " " + APP_INFO.build);
+  } catch (e) {
+    log("app_info fail", errText(e));
+    const el = $("logPath");
+    if (el) el.textContent = "%APPDATA%\\reelbox\\reelbox.log";
+  }
+}
+
+let settingsBound = false;
+
+function bindSettings() {
+  if (settingsBound) return;
+  settingsBound = true;
+
+  const nav = $("setNav");
+  if (nav) {
+    nav.onclick = (e) => {
+      const b = e.target.closest("[data-sec]");
+      if (b) setSettingsSection(b.getAttribute("data-sec"));
+    };
+  }
+
+  // 源
+  const cur = $("curSource");
+  if (cur) {
+    cur.onchange = () => {
+      const src = (S.sources || []).find((x) => x.id === cur.value);
+      if (src && (!S.source || src.id !== S.source.id)) {
+        renderSources();
+        switchSource(src);
+      }
+    };
+  }
+  bindSourceManager();
+
+  // 播放
+  const segQ = $("segQuality");
+  if (segQ) {
+    segQ.onclick = (e) => {
+      const b = e.target.closest("button[data-q]");
+      if (!b) return;
+      prefSet("reelbox.quality", b.getAttribute("data-q"));
+      syncPlaySettings();
+      toast(qualityPref() === "high" ? "清晰度:固定最高档" : "清晰度:自动");
+    };
+  }
+  const swA = $("swAutoplay");
+  if (swA) {
+    swA.onchange = () => {
+      prefSet("reelbox.autoplay", swA.checked ? "1" : "0");
+      log("pref autoplay", swA.checked);
+    };
+  }
+  const swR = $("swResume");
+  if (swR) {
+    swR.onchange = () => {
+      prefSet("reelbox.resume", swR.checked ? "1" : "0");
+      log("pref resume", swR.checked);
+      if (!swR.checked) refreshResume();
+    };
+  }
+
+  // 调试
+  bindDebugToggle();
+  const swF = $("swFab");
+  if (swF) swF.onchange = () => setFab(swF.checked);
+  const live = $("btnLiveLog");
+  if (live) live.onclick = () => showDebugPanel(true);
+  const open = $("btnOpenLog");
+  if (open) {
+    open.onclick = async () => {
+      try {
+        const p = await invoke("open_log");
+        log("open log", p);
+        toast("已在文件管理器里定位到日志");
+      } catch (e) {
+        log("OPEN LOG FAIL", errText(e));
+        alertDialog("打开日志失败", errText(e));
+      }
+    };
+  }
+
+  syncPlaySettings();
+  syncDebugButtons();
 }
 
 const PROG_KEY = "reelbox.progress";
@@ -1046,6 +1487,51 @@ function pStatus(msg) {
   const el = $("pState");
   if (!msg) { el.innerHTML = ""; return; }
   el.innerHTML = '<span class="spin"></span><span>' + esc(msg) + "</span>";
+}
+
+/** 另一条线路的第一集;没有别的线路就返回 null(那就只能换源) */
+function otherLine() {
+  const groups = S.detailGroups || [];
+  const cur = (playCtx && playCtx.group) || "";
+  const start = groups.findIndex((g) => g.id === cur);
+  for (let k = 1; k <= groups.length; k++) {
+    const g = groups[(start + k + groups.length) % groups.length];
+    if (!g || g.id === cur) continue;
+    const eps = g.episodes || [];
+    const pick = eps.find((e) => !playCtx || e.id !== playCtx.id) || eps[0];
+    if (pick) return { id: pick.id, name: pick.name, group: g.id, line: g.name };
+  }
+  return null;
+}
+
+function hidePlayerFail() {
+  const box = $("pFail");
+  if (box) box.hidden = true;
+  const p = $("player");
+  if (p) p.classList.remove("failed");
+}
+
+/**
+ * 播放失败:状态文字之外给「重试」和「换线路」,原始错误收进小字。
+ * 换线路 = 换到详情页里另一条线路的第一集;只有一条线路时退化成"换源"。
+ */
+function playerFail(info) {
+  const box = $("pFail");
+  if (!box) return;
+  const alt = otherLine();
+  $("pFailIcon").textContent = info.kind === "unsupported" ? "link_off" : "error";
+  $("pFailMsg").textContent = info.title;
+  $("pFailHint").textContent =
+    (info.hint || "") + (alt ? "" : " 这个标题下没有别的线路了,可以换个源。");
+  $("pFailRaw").textContent = info.raw || "";
+  const sw = $("pSwitch");
+  sw.textContent = alt ? "换线路" : "换源";
+  sw.onclick = alt
+    ? () => playEpisode(alt.id, alt.name, alt.group)
+    : () => { closePlayer(); openSourceManager(); };
+  box.hidden = false;
+  $("player").classList.add("failed");
+  log("PLAY FAIL", info.step, info.kind, info.raw);
 }
 
 // 用路径画图标:字体字形带侧边距,画不准中心
@@ -1203,6 +1689,12 @@ function bindPlayer() {
     pSync();
   };
 
+  $("pRetry").onclick = () => {
+    const c = playCtx;
+    hidePlayerFail();
+    if (c && c.id) playEpisode(c.id, c.name, c.group || "");
+  };
+
   $("pPrev").onclick = () => jumpEpisode(-1);
   $("pNext").onclick = () => jumpEpisode(1);
   $("pFull").onclick = () => {
@@ -1281,6 +1773,8 @@ function closePlayer() {
   v.load();
   box.hidden = true;
   box.classList.remove("idle");
+  hidePlayerFail();
+  pStatus("");
   $("pLevels").hidden = true;
   refreshResume();
 }
@@ -1290,7 +1784,7 @@ function refreshResume() {
   if (!wrap) return;
   const rec = progGet(detailKey());
   let btn = $("btnResume");
-  if (!rec || !rec.id) {
+  if (!resumeOn() || !rec || !rec.id) {
     if (btn) btn.remove();
     return;
   }
@@ -1306,6 +1800,7 @@ function refreshResume() {
 }
 
 function saveProgress(force) {
+  if (!resumeOn()) return; // 设置里关了进度记忆就不落盘
   if (!playCtx || !playCtx.id) return;
   const v = $("video");
   const t = v.currentTime;
@@ -1321,6 +1816,7 @@ function openPlayer(url, name, mime, kind) {
   const v = $("video");
   box.hidden = false;
   box.classList.remove("idle");
+  hidePlayerFail();
   const full = S.detailTitle && name && name !== S.detailTitle
     ? S.detailTitle + " · " + name
     : name || S.detailTitle || "";
@@ -1339,12 +1835,16 @@ function openPlayer(url, name, mime, kind) {
     pSync();
   };
   v.ontimeupdate = () => saveProgress(false);
-  v.onplaying = () => { pStatus(""); pSync(); };
+  v.onplaying = () => { pStatus(""); hidePlayerFail(); pSync(); };
   v.onpause = pSync;
   v.onended = () => {
     const ctx = playCtx;
     pSync();
     if (!ctx || !ctx.list || !ctx.list.length) return;
+    if (!autoplayOn()) {
+      pStatus("这一集放完了(自动连播已关闭)");
+      return;
+    }
     const next = ctx.list[ctx.index + 1];
     if (next) playEpisode(next.id, next.name, next.group || "");
     else pStatus("已经是最后一集");
@@ -1358,6 +1858,14 @@ function openPlayer(url, name, mime, kind) {
       "readyState=" + v.readyState, "networkState=" + v.networkState,
       "src=" + shortUrl(v.currentSrc || v.src, 100)
     );
+    pStatus("播放失败:播放器拿不到这条流");
+    playerFail({
+      step: "stream",
+      kind: "network",
+      title: "播放失败:播放器拿不到这条流",
+      hint: "同一条线路重试一次,或者换一条线路。",
+      raw: videoFailReason(v),
+    });
   };
 
   // 本地反代地址把真实地址 base64 掉了,看不出扩展名,所以以 mime 为准;
@@ -1366,11 +1874,21 @@ function openPlayer(url, name, mime, kind) {
   const hint = mime || (playCtx && playCtx.mime) || "";
   const hlsByHint = /mpegurl|m3u8/i.test(hint) || url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
   const isHls = kind === "file" ? false : (kind === "hls" || hlsByHint);
-  log("play mode " + (isHls ? "hls" : "native") + " kind=" + (kind || "?") + " hint=" + hint);
+  logv("play mode " + (isHls ? "hls" : "native") + " kind=" + (kind || "?") + " hint=" + hint);
   // 探测说"既不是清单也不是媒体"时别硬塞给 hls.js,否则只会得到 manifestParsingError
   if (kind === "unknown") {
-    log("play abort kind=unknown head=" + ((playCtx && playCtx.probe && playCtx.probe.head) || ""));
-    pStatus("这条线路返回的是网页,不是播放流 —— 换一条线路试试");
+    const probe = (playCtx && playCtx.probe) || {};
+    log("play abort kind=unknown head=" + (probe.head || ""));
+    pStatus("这条线路返回的是网页,不是播放流");
+    playerFail({
+      step: "stream",
+      kind: "unsupported",
+      title: "这条线路返回的是网页,不是播放流",
+      hint: "源站这一集给的不是 m3u8/mp4(可能是错误页或被拦了)。换一条线路试试。",
+      raw:
+        "kind=unknown status=" + (probe.status || 0) + " mime=" + (probe.mime || "") +
+        (probe.head ? "\n" + probe.head : ""),
+    });
     return;
   }
 
@@ -1379,6 +1897,11 @@ function openPlayer(url, name, mime, kind) {
     // 事件要先挂上再 loadSource,否则早期的清单错误会漏记
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       pStatus("");
+      hidePlayerFail();
+      // 设置里的清晰度偏好:自动让它自己切,「最高」钉在最高一档
+      if (qualityPref() === "high" && hls.levels && hls.levels.length > 1) {
+        hls.currentLevel = hls.levels.length - 1;
+      }
       renderLevels();
       v.volume = loadVolume();
       v.play().then(() => tryUnmute(v)).catch(() => {});
@@ -1398,6 +1921,15 @@ function openPlayer(url, name, mime, kind) {
       log("HLS FATAL", d.details);
       pStatus("播放失败:" + d.details);
       window.__err && window.__err("hls: " + d.details);
+      playerFail({
+        step: "stream",
+        kind: "network",
+        title: "播放失败:" + d.details,
+        hint: "清单或分片拿不到。重试一次,或者换一条线路。",
+        raw:
+          "type=" + d.type + " details=" + d.details + " code=" + (resp.code || 0) +
+          (ctxUrl ? "\nurl=" + shortUrl(ctxUrl, 160) : "") + (reason ? "\nresp=" + reason : ""),
+      });
     });
     hls.loadSource(url);
     hls.attachMedia(v);
@@ -1448,7 +1980,7 @@ async function playEpisode(id, name, groupId) {
     mime: "",
     list: list,
     index: idx,
-    resume: rec && rec.id === id ? rec.t || 0 : 0,
+    resume: resumeOn() && rec && rec.id === id ? rec.t || 0 : 0,
   };
   openPlayer("", name);
   try {
@@ -1459,9 +1991,9 @@ async function playEpisode(id, name, groupId) {
     const hookMs = Date.now() - t0;
     if (playCtx) playCtx.mime = st.mime || "";
     // 源头(插件 play 钩子给的)地址:签名串很长,只留开头,但要能看出主机和路径
-    log("play hook ms=" + hookMs + " mime=" + (st.mime || "") + " url=" + shortUrl(st.url, 160));
+    logv("play hook ms=" + hookMs + " mime=" + (st.mime || "") + " url=" + shortUrl(st.url, 160));
     if (st.headers && Object.keys(st.headers).length) {
-      log("play headers " + Object.keys(st.headers).join(","));
+      logv("play headers " + Object.keys(st.headers).join(","));
     }
     const local = await invoke("player_url", { stream: st });
     lastLocalUrl = local;
@@ -1471,7 +2003,8 @@ async function playEpisode(id, name, groupId) {
     try {
       const probe = await invoke("stream_kind", { stream: st });
       kind = (probe && probe.kind) || "";
-      log(
+      if (playCtx) playCtx.probe = probe || null;
+      logv(
         "probe kind=" + kind + " code=" + ((probe && probe.status) || 0) +
         " ct=" + ((probe && probe.mime) || "") + " bytes=" + ((probe && probe.bytes) || 0) +
         (kind === "unknown" ? " head=" + ((probe && probe.head) || "") : "")
@@ -1490,11 +2023,20 @@ async function playEpisode(id, name, groupId) {
       }
     }
     if (playCtx) playCtx.options = opts;
-    log("stream " + st.mime + " local=" + shortUrl(local, 90) + " opts=" + opts.length);
-    openPlayer(local, name, st.mime, kind);
+    logv("stream " + st.mime + " local=" + shortUrl(local, 90) + " opts=" + opts.length);
+    // 清晰度偏好「最高」:插件多档时直接起最高一档(多数插件按低→高排)
+    let startUrl = local;
+    if (qualityPref() === "high" && opts.length > 1) {
+      const best = opts[opts.length - 1];
+      startUrl = best.url;
+      if (playCtx) playCtx.quality = best.quality;
+      logv("quality high →", best.quality);
+    }
+    openPlayer(startUrl, name, st.mime, kind);
   } catch (e) {
     log("STREAM FAIL", e);
-    pStatus("取流失败:" + e);
+    pStatus("取流失败");
+    playerFail(errorInfo("stream", e));
   }
 }
 
@@ -1526,11 +2068,14 @@ function showView(key) {
   if (divider) divider.style.display = onHome ? "" : "none";
   if (onHome) renderParents();
   if (key === "settings") {
-    bindDebugToggle();
-    bindSourceManager();
+    bindSettings();
     renderSourceManager();
+    setSettingsSection(setSec === "src" ? "src" : setSec);
   }
 }
+
+// 设置页当前分区(切走再回来还停在同一处)
+let setSec = "src";
 
 function bindSourceMenu() {
   const btn = $("srcBtn");
@@ -1598,21 +2143,112 @@ function clearSkeleton() {
   $("grid").querySelectorAll(".skel").forEach((n) => n.remove());
 }
 
-function setStatus() {
+const DETAIL_SKELETON =
+  '<div class="detail-wrap">' +
+    '<div class="skel-hero"><div class="sk"></div>' +
+      '<div class="sk-lines"><i></i><i></i><i></i><i></i></div></div>' +
+    '<div class="skel-chips">' + "<i></i>".repeat(14) + "</div>" +
+  "</div>";
+
+/** 列表:加载中(骨架屏) */
+function showListLoading() {
   const el = $("empty");
-  if (S.loading && !S.items.length) {
-    el.style.display = "none";
-    renderSkeleton();
-  } else {
-    clearSkeleton();
-  }
+  el.style.display = "none";
+  el.innerHTML = "";
+  renderSkeleton();
 }
 
-function showEmpty(msg) {
+/** 列表:空(没有内容) */
+function showListEmpty(title, msg, actionLabel, onAction) {
+  clearSkeleton();
   $("grid").innerHTML = "";
   const el = $("empty");
   el.style.display = "";
-  el.textContent = msg;
+  el.innerHTML = stateCard({
+    icon: "movie",
+    title: title || "这个分类没有内容",
+    msg: msg || "换一个分类,或者用别的片名搜一下。",
+    actions: actionLabel ? [{ id: "more", label: actionLabel }] : [],
+  });
+  const b = el.querySelector('[data-act="more"]');
+  if (b && onAction) b.onclick = onAction;
+}
+
+/** 列表:错误(原因 + 重试;源不支持时引导换源) */
+function showListError(info, retry) {
+  clearSkeleton();
+  $("grid").innerHTML = "";
+  const el = $("empty");
+  el.style.display = "";
+  const unsupported = info.kind === "unsupported";
+  el.innerHTML = stateCard({
+    error: true,
+    icon: unsupported ? "link_off" : "cloud_off",
+    title: info.title,
+    msg: info.hint,
+    actions: unsupported
+      ? [{ id: "switch", label: "去换源", primary: true }, { id: "retry", label: "重试" }]
+      : [{ id: "retry", label: "重试", primary: true }, { id: "switch", label: "源管理" }],
+    raw: info.raw,
+  });
+  const retryBtn = el.querySelector('[data-act="retry"]');
+  if (retryBtn) retryBtn.onclick = () => (retry ? retry() : loadItems());
+  const sw = el.querySelector('[data-act="switch"]');
+  if (sw) sw.onclick = openSourceManager;
+}
+
+/** 翻页失败:已经加载的内容留着,在后面补一条可点的重试 */
+function showLoadMoreError(info, retry) {
+  const old = $("grid").querySelector(".more-fail");
+  if (old) old.remove();
+  const card = document.createElement("div");
+  card.className = "more-fail";
+  card.style.cssText = "grid-column:1/-1";
+  card.innerHTML = stateCard({
+    error: true,
+    icon: "cloud_off",
+    title: info.title,
+    msg: "已经加载的内容还留着,可以接着看,或者重试加载下一页。",
+    actions: [{ id: "retry", label: "重试加载更多", primary: true }],
+    raw: info.raw,
+  });
+  card.querySelector('[data-act="retry"]').onclick = () => {
+    card.remove();
+    if (retry) retry();
+  };
+  $("grid").appendChild(card);
+}
+
+/** 详情:错误(原因 + 重试 / 换源) */
+function showDetailError(info, item) {
+  const box = $("v-detail");
+  const unsupported = info.kind === "unsupported";
+  box.innerHTML =
+    '<div class="detail-wrap">' +
+      '<button class="back" id="btnBack" aria-label="返回">' +
+        '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>' +
+      "</button>" +
+      stateCard({
+        error: true,
+        icon: unsupported ? "link_off" : "cloud_off",
+        title: info.title,
+        msg: info.hint,
+        actions: unsupported
+          ? [{ id: "switch", label: "去换源", primary: true }, { id: "retry", label: "重试" }]
+          : [{ id: "retry", label: "重试", primary: true }, { id: "switch", label: "源管理" }],
+        raw: info.raw,
+      }) +
+    "</div>";
+  $("btnBack").onclick = () => showView("home");
+  const retryBtn = box.querySelector('[data-act="retry"]');
+  if (retryBtn) retryBtn.onclick = () => openDetail(item || S.detailItem).catch(() => {});
+  const sw = box.querySelector('[data-act="switch"]');
+  if (sw) sw.onclick = openSourceManager;
+}
+
+function setStatus() {
+  if (S.loading && !S.items.length) renderSkeleton();
+  else clearSkeleton();
 }
 
 function revokeBlobs() {
