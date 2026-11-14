@@ -31,6 +31,7 @@ pub fn run() {
             commands::filters,
             commands::poster,
             commands::append_log,
+            commands::save_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("reelbox: 启动失败");

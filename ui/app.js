@@ -510,6 +510,31 @@ function bindSourceManager() {
     $("sfSave").onclick = saveSrcForm;
     $("sfCancel").onclick = closeSrcForm;
     $("srcImport").onclick = () => $("srcFile").click();
+    $("srcPlugin").onclick = () => $("pluginFile").click();
+    $("pluginFile").onchange = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const res = await invoke("save_plugin", { fileName: f.name, text: text });
+        const exists = S.sources.some((x) => x.id === res.id);
+        if (!exists) {
+          S.sources = S.sources.concat([
+            { id: res.id, name: res.name, kind: "webox", url: res.path },
+          ]);
+          await persistSources();
+        }
+        renderSourceManager();
+        renderSources();
+        log("plugin imported", res.id);
+        alert("已导入插件:" + res.name);
+      } catch (err) {
+        log("PLUGIN IMPORT FAIL", err);
+        alert("导入失败:" + err);
+      } finally {
+        e.target.value = "";
+      }
+    };
     $("srcFile").onchange = async (e) => {
       const f = e.target.files && e.target.files[0];
       if (!f) return;

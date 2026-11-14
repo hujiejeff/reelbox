@@ -176,3 +176,27 @@ pub fn append_log(line: String) {
     }
 }
 
+
+/// 保存一个导入的插件文件,返回 (路径, 名称, id)
+#[tauri::command]
+pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value, String> {
+    let meta = plugin::parse_meta(&text)?;
+    let base = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join("reelbox").join("plugins");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+
+    let safe: String = meta
+        .id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let path = dir.join(format!("{safe}.webox.js"));
+    std::fs::write(&path, &text).map_err(|e| format!("写插件失败: {e}"))?;
+    Ok(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "name": if meta.name.is_empty() { file_name } else { meta.name },
+        "id": safe,
+    }))
+}
