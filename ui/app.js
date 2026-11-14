@@ -247,30 +247,57 @@ function resetGrid() {
 }
 
 function renderDetail(d) {
-  const eps = [];
-  d.groups.forEach((g) => {
-    eps.push('<div class="catgroup">' + esc(g.name) + "</div>");
-    g.episodes.forEach((e) => {
-      eps.push('<button class="chip-ep" data-id="' + esc(e.id) + '">' + esc(e.name) + "</button>");
-    });
-  });
+  const summary = (d.summary || "").replace(/[\s\u3000]+/g, " ").trim();
+  const groups = d.groups
+    .map(
+      (g, gi) =>
+        '<section class="epgroup"><h4>' +
+        esc(/[\u4e00-\u9fa5]/.test(g.name) ? g.name : "线路 " + (gi + 1)) +
+        '</h4><div class="epgrid">' +
+        g.episodes
+          .map((e) => '<button class="chip-ep" data-id="' + esc(e.id) + '">' + esc(e.name) + "</button>")
+          .join("") +
+        "</div></section>"
+    )
+    .join("");
+
   $("v-detail").innerHTML =
-    '<div class="detail-head"><button class="m3e-button m3e-button--text m3e-button--size-s" id="btnBack">返回</button></div>' +
-    '<div class="detail-top"><div class="hero"><img alt=""></div>' +
-    "<div><h2>" + esc(d.title) + "</h2><p>" + esc(d.summary || "") + "</p></div></div>" +
-    '<div class="eps">' + eps.join("") + "</div>";
+    '<div class="detail-wrap">' +
+      '<button class="back" id="btnBack" aria-label="返回">' +
+        '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>' +
+      "</button>" +
+      '<div class="detail-top">' +
+        '<div class="hero"><img alt=""></div>' +
+        '<div class="hero-meta">' +
+          "<h2>" + esc(d.title) + "</h2>" +
+          (summary ? '<p id="sum">' + esc(summary) + "</p>" : "") +
+          (summary.length > 90 ? '<button class="more" id="btnMore">展开</button>' : "") +
+        "</div>" +
+      "</div>" +
+      (groups || '<p class="noep">这个源没给剧集列表</p>') +
+    "</div>";
 
   $("btnBack").onclick = () => showView("home");
+
+  const more = $("btnMore");
+  if (more)
+    more.onclick = () => {
+      const p = $("sum");
+      const open = p.classList.toggle("open");
+      more.textContent = open ? "收起" : "展开";
+    };
+
   if (d.poster) {
-    invoke("poster", { url: d.poster })
-      .then((buf) => {
-        const url = URL.createObjectURL(new Blob([new Uint8Array(buf)], { type: "image/jpeg" }));
-        S.blobs.push(url);
+    posterFor(d.poster)
+      .then((u) => {
         const img = $("v-detail").querySelector(".hero img");
-        if (img) img.src = url;
+        if (!img) return;
+        img.src = u;
+        img.parentElement.classList.add("has-img");
       })
       .catch(() => {});
   }
+
   $("v-detail").querySelectorAll(".chip-ep").forEach((b) => {
     b.onclick = () => playEpisode(b.getAttribute("data-id"), b.textContent);
   });
