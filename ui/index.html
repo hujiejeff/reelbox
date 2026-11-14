@@ -116,7 +116,7 @@
   @media (min-width: 840px) {
     .rail { display: none; }
     .side { display: flex; }
-    .cattabs, .chips { display: none; }
+    .cattabs { display: none; }
     .topbar { padding: 12px 24px 4px; }
     .toolbar { padding-inline: 24px; }
     .scroll { padding-inline: 24px; }
@@ -163,28 +163,11 @@
       </nav>
       <div class="side__divider"></div>
       <div class="side__scroll">
-        <button class="cat" data-cat="" aria-selected="true">全部</button>
-        <div class="catgroup">电影片</div>
-        <button class="cat cat--child" data-cat="动作片" type="button">动作片</button>
-        <button class="cat cat--child" data-cat="喜剧片" type="button">喜剧片</button>
-        <button class="cat cat--child" data-cat="爱情片" type="button">爱情片</button>
-        <button class="cat cat--child" data-cat="科幻片" type="button">科幻片</button>
-        <button class="cat cat--child" data-cat="恐怖片" type="button">恐怖片</button>
-        <button class="cat cat--child" data-cat="剧情片" type="button">剧情片</button>
-        <div class="catgroup">连续剧</div>
-        <button class="cat cat--child" data-cat="国产剧" type="button">国产剧</button>
-        <button class="cat cat--child" data-cat="香港剧" type="button">香港剧</button>
-        <button class="cat cat--child" data-cat="韩国剧" type="button">韩国剧</button>
-        <button class="cat cat--child" data-cat="欧美剧" type="button">欧美剧</button>
-        <button class="cat cat--child" data-cat="日本剧" type="button">日本剧</button>
-        <div class="catgroup">综艺片</div>
-        <button class="cat cat--child" data-cat="大陆综艺" type="button">大陆综艺</button>
-        <button class="cat cat--child" data-cat="港台综艺" type="button">港台综艺</button>
-        <button class="cat cat--child" data-cat="日韩综艺" type="button">日韩综艺</button>
-        <div class="catgroup">动漫片</div>
-        <button class="cat cat--child" data-cat="国产动漫" type="button">国产动漫</button>
-        <button class="cat cat--child" data-cat="日韩动漫" type="button">日韩动漫</button>
-        <button class="cat cat--child" data-cat="欧美动漫" type="button">欧美动漫</button>
+        <button class="cat" data-parent="" aria-selected="true">全部</button>
+        <button class="cat" data-parent="电影片" type="button">电影片</button>
+        <button class="cat" data-parent="连续剧" type="button">连续剧</button>
+        <button class="cat" data-parent="综艺片" type="button">综艺片</button>
+        <button class="cat" data-parent="动漫片" type="button">动漫片</button>
       </div>
     </aside>
 
@@ -299,9 +282,11 @@
 
 <script>
 (function () {
+  var kids = {"电影片":["动作片","喜剧片","爱情片","科幻片","恐怖片","剧情片"],"连续剧":["国产剧","香港剧","韩国剧","欧美剧","日本剧"],"综艺片":["大陆综艺","港台综艺","日韩综艺"],"动漫片":["国产动漫","日韩动漫","欧美动漫"]};
   var views = { home: "v-home", fav: "v-fav", settings: "v-settings" };
-  var side = document.getElementById("side");
+  var chips = document.getElementById("childchips");
 
+  // 目的地:首页 / 喜欢 / 设置
   document.querySelectorAll("[data-nav]").forEach(function (el) {
     el.addEventListener("click", function () {
       var key = el.getAttribute("data-nav");
@@ -315,6 +300,29 @@
       });
     });
   });
+
+  // 一级分类:左栏(宽屏)与顶部 Tab(窄屏)共用
+  function selectParent(p) {
+    document.querySelectorAll("[data-parent]").forEach(function (o) {
+      if (o.getAttribute("data-parent") === p) o.setAttribute("aria-selected", "true");
+      else o.removeAttribute("aria-selected");
+    });
+    chips.innerHTML = "";
+    if (!p) { chips.style.display = "none"; return; }
+    var list = kids[p] || [];
+    chips.style.display = list.length ? "" : "none";
+    list.forEach(function (k) {
+      var b = document.createElement("button");
+      b.className = "m3e-filter-chip";
+      b.type = "button";
+      b.textContent = k;
+      chips.appendChild(b);
+    });
+  }
+  document.querySelectorAll("[data-parent]").forEach(function (el) {
+    el.addEventListener("click", function () { selectParent(el.getAttribute("data-parent")); });
+  });
+  chips.style.display = "none"; // 默认"全部"没有二级
 
   // 源下拉
   var btn = document.getElementById("srcBtn"), menu = document.getElementById("srcMenu"),
@@ -336,31 +344,6 @@
       b.querySelector(".m3e-icon").textContent = on ? "check" : "";
     });
     menu.removeAttribute("data-open");
-  });
-
-  // 一级分类 Tab
-  var chips = document.getElementById("childchips");
-  document.querySelectorAll(".cattab").forEach(function (t) {
-    t.addEventListener("click", function () {
-      document.querySelectorAll(".cattab").forEach(function (o) { o.removeAttribute("aria-selected"); });
-      t.setAttribute("aria-selected", "true");
-      var p = t.getAttribute("data-parent");
-      chips.innerHTML = "";
-      if (!p) return;
-      (window.__kids[p] || []).forEach(function (k) {
-        var b = document.createElement("button");
-        b.className = "m3e-filter-chip"; b.type = "button"; b.textContent = k;
-        chips.appendChild(b);
-      });
-    });
-  });
-  window.__kids = {"电影片":["动作片","喜剧片","爱情片","科幻片","恐怖片","剧情片"],"连续剧":["国产剧","香港剧","韩国剧","欧美剧","日本剧"],"综艺片":["大陆综艺","港台综艺","日韩综艺"],"动漫片":["国产动漫","日韩动漫","欧美动漫"]};
-
-  // 面板里的分类选中
-  side.addEventListener("click", function (e) {
-    var b = e.target.closest(".cat"); if (!b) return;
-    side.querySelectorAll(".cat").forEach(function (o) { o.removeAttribute("aria-selected"); });
-    b.setAttribute("aria-selected", "true");
   });
 })();
 </script>
