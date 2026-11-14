@@ -40,6 +40,48 @@ pub fn load_sources() -> Vec<Source> {
     source::defaults()
 }
 
+/// 从网络索引批量导入源。索引格式:
+/// { "name": "...", "sources": [ { "name": "...", "type": "json|vod|xml", "url": "..." } ] }
+#[tauri::command]
+pub async fn import_index(url: String) -> Result<Vec<Source>, String> {
+    let u = url.trim().to_string();
+    if !(u.starts_with("http://") || u.starts_with("https://")) {
+        return Err("索引地址必须是 http(s)".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<Source>, String> {
+        let resp = fetch_guarded(&u, None)?;
+        let body = resp.body;
+        let v: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("索引不是合法 JSON: {e}"))?;
+        let arr = v
+            .get("sources")
+            .and_then(|x| x.as_array())
+            .ok_or("索引里没有 sources 数组")?;
+        let mut out: Vec<Source> = Vec::new();
+        for it in arr {
+            let name = it.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            let url = it.get("url").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            if name.is_empty() || url.is_empty() {
+                continue;
+            }
+            let kind = match it.get("type").and_then(|x| x.as_str()).unwrap_or("") {
+                "xml" => "xml",
+                "webox" => "webox",
+                _ => "vod",
+            }
+            .to_string();
+            let slug: String = name
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            out.push(Source { id: format!("{}-{}", slug.trim_matches('-'), out.len() + 1), name, kind, url });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn save_sources(list: Vec<Source>) -> Result<(), String> {
     let path = sources_path();

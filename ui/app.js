@@ -871,6 +871,29 @@ function bindSourceManager() {
     $("srcAdd").onclick = () => openSrcForm(null);
     $("sfSave").onclick = saveSrcForm;
     $("sfCancel").onclick = closeSrcForm;
+    $("srcIndex").onclick = async () => {
+      const url = prompt(
+        "从网络批量导入源,填索引地址:",
+        "https://ddgksf2013.top/webox/index.json"
+      );
+      if (!url) return;
+      try {
+        const list = await invoke("import_index", { url });
+        if (!list.length) return alert("索引里没有可用的源");
+        const have = new Set(S.sources.map((x) => x.url));
+        const fresh = list.filter((x) => !have.has(x.url));
+        S.sources = S.sources.concat(fresh);
+        await persistSources();
+        renderSourceManager();
+        renderSources();
+        log("index imported", String(fresh.length));
+        alert("导入完成:新增 " + fresh.length + " 个,跳过重复 " + (list.length - fresh.length) + " 个");
+      } catch (err) {
+        log("INDEX IMPORT FAIL", err);
+        alert("导入失败:" + err);
+      }
+    };
+
     $("srcImport").onclick = () => $("srcFile").click();
     $("srcPlugin").onclick = () => $("pluginFile").click();
     $("pluginFile").onchange = async (e) => {
