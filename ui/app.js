@@ -1765,6 +1765,8 @@ function sourceTechLabel(s) {
 /** 状态点:形状 + 颜色双通道(样式见 index.html 的 .status-dot 四态) */
 function statusDotHtml(src) {
   const h = healthOf(src);
+  // 状态点是 health 数据的可视化,不是行的装饰:没测过就什么都不显示(评审 1)
+  if (h.state === "untested") return "";
   return (
     '<span class="status-dot" data-state="' + esc(h.state) + '" role="img" aria-label="' +
       esc(h.label) + '" title="' + esc(h.label) + '"></span>'
@@ -1834,10 +1836,8 @@ function renderSourceManager() {
             '<span class="m3e-list-item__supporting">' + esc(s.url) + "</span>" +
           "</span>" +
           '<span class="m3e-list-item__trailing">' +
-            // 「进去看」= 真的进这个源的首页;点行只切源、留在源页,两件事分开(I5)
-            '<button type="button" class="m3e-icon-button m3e-icon-button--standard src-row__go"' +
-              ' data-act="home" data-idx="' + idx + '" title="进去看" aria-label="进去看 · ' + esc(s.name) + '">' +
-              '<span class="m3e-icon" aria-hidden="true">arrow_forward</span></button>' +
+            // 行尾只留一个「更多」:状态点是状态、容器+名称 600 是当前源,
+            // 再加箭头/勾就是第三种标记了(评审 1;§2.3 行尾 = 状态点 + 更多)
             '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="more" data-idx="' +
               idx + '" aria-haspopup="menu" aria-label="更多 · ' + esc(s.name) + '">' +
               '<span class="m3e-icon" aria-hidden="true">more_vert</span></button>' +
@@ -1848,7 +1848,7 @@ function renderSourceManager() {
     .join("");
 }
 
-/** 行「更多」菜单:编辑 / 测试连接 / 设为当前 / 置顶 / 复制地址 / 删除 */
+/** 行「更多」菜单:进去看 / 编辑 / 测试连接 / 设为当前 / 置顶 / 复制地址 / 删除 */
 function openSourceRowMenu(src, anchor) {
   const active = !!(S.source && S.source.id === src.id);
   const firstInList = (S.sources || []).indexOf(src) === 0;
@@ -1856,6 +1856,9 @@ function openSourceRowMenu(src, anchor) {
     anchor,
     [
       { type: "label", label: sourceKindLabel(src) + " · " + sourceTechLabel(src) },
+      // 「进去看」= 真的进这个源的首页;点行只切源、留在源页,两件事分开(I5)。
+      // 行尾不再放箭头按钮(评审 1),这个动作收进菜单第一项。
+      { id: "home", label: "进去看", icon: "arrow_forward" },
       { id: "edit", label: "编辑", icon: "edit" },
       {
         id: "current",
@@ -1874,6 +1877,7 @@ function openSourceRowMenu(src, anchor) {
 }
 
 async function onSourceRowAction(id, src) {
+  if (id === "home") return showView("home");
   if (id === "edit") return editSource(src);
   if (id === "current") return setCurrentSource(src);
   if (id === "pin") return pinSource(src);
@@ -2336,7 +2340,6 @@ function bindSourceManager() {
           openSourceRowMenu(src, b);
           return;
         }
-        if (act === "home") return showView("home");
         return;
       }
       // 点整行 = 设为当前源,但留在源页 + toast + 3s 撤销(I5)
@@ -3693,11 +3696,12 @@ function layoutControls() {
   const wide = window.matchMedia("(min-width: 1120px)").matches;
   const target = wide ? $("sideControls") : $("topbar");
   if (controls.parentElement !== target) target.appendChild(controls);
-  controls.style.display = "";
-  // 窄屏只有首页需要顶栏(源按钮 + 搜索);设置/喜欢/详情各用自己的 app bar
-  const showTop = wide ? false : currentView === "home";
-  $("topbar").style.display = showTop ? "" : "none";
-  $("sideControls").style.display = wide ? "" : "none";
+  // 源切换 + 搜索框是首页(一级页)的控件。设置二级页只能有 app bar + 内容 + 吸底操作区,
+  // 所以只在首页出现:窄屏收起 #topbar,宽屏收起侧栏那一格(以前 ≥1120 会漏进设置页)
+  const onHome = currentView === "home";
+  controls.style.display = onHome ? "" : "none";
+  $("topbar").style.display = !wide && onHome ? "" : "none";
+  $("sideControls").style.display = wide && onHome ? "" : "none";
 }
 
 $("q").addEventListener("keydown", (e) => {

@@ -6,7 +6,8 @@
 //   search?(源总数 > 8 才出现)
 //   分组 × n(最近使用 / 点播 / 插件 / 直播)
 //
-// 行:56 高、r28、leading 18 图标、名称 16/24、trailing 状态点 + check。
+// 行:56 高、r28、leading 18 图标、名称 16/24、trailing 只有状态点(有 health 数据才显示)。
+// 当前源只靠 secondary-container 底 + 名称 600 表示,不加 check(评审 1)。
 
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -74,6 +75,18 @@ function groupHtml(group, rows, isRecent) {
   );
 }
 
+/** 状态点只在有 health 数据时出现:未测速不画空心环(评审 1) */
+function trailHtml(r) {
+  if (!r.state || r.state === "untested") return "";
+  return (
+    '<span class="src-panel__trail">' +
+      '<span class="status-dot" data-state="' + esc(r.state) + '" role="img" aria-label="' +
+        esc(r.stateLabel || "未测速") + '"' + (r.stateLabel ? ' title="' + esc(r.stateLabel) + '"' : "") +
+      "></span>" +
+    "</span>"
+  );
+}
+
 function rowHtml(r, isRecent) {
   return (
     '<button type="button" class="src-panel__row" data-idx="' + esc(r.idx) + '" data-src="' + esc(r.id) + '"' +
@@ -85,13 +98,7 @@ function rowHtml(r, isRecent) {
       (isRecent && r.icon
         ? '<span class="m3e-icon src-panel__type" aria-hidden="true">' + esc(r.icon) + "</span>"
         : "") +
-      '<span class="src-panel__trail">' +
-        // health = 8dp 圆/方块/空心环;check = 18dp 对勾。两者不要混成一个点
-        '<span class="status-dot" data-state="' + esc(r.state || "untested") + '" role="img" aria-label="' +
-          esc(r.stateLabel || "未测速") + '"' + (r.stateLabel ? ' title="' + esc(r.stateLabel) + '"' : "") +
-        "></span>" +
-        (r.current ? '<span class="m3e-icon src-panel__check" aria-hidden="true">check</span>' : "") +
-      "</span>" +
+      trailHtml(r) +
     "</button>"
   );
 }

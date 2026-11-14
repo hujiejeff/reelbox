@@ -161,15 +161,9 @@
     flex: none; display: inline-flex; align-items: center; line-height: 1;
     font-size: 14px; opacity: .7;
   }
-  /* 行尾:状态点(8,health)与勾选(check 18)是两件事,间距 8 而不是行 gap */
+  /* 行尾只有状态点(8,health 数据才有)。当前源不在这里再放 check(评审 1) */
   .src-panel__trail {
     flex: none; display: inline-flex; align-items: center; gap: 8px; line-height: 1;
-  }
-  /* 勾选照 m3e 的做法:check 18dp,颜色 on-secondary-container(当前行才出现) */
-  .src-panel__check {
-    flex: none; display: inline-flex; align-items: center; justify-content: center;
-    font-size: 18px; line-height: 1;
-    color: var(--m3e-sys-color-on-secondary-container);
   }
   .src-panel__empty {
     display: flex; flex-direction: column; align-items: center; gap: 8px;
