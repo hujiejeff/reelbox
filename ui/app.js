@@ -63,6 +63,11 @@ async function switchSource(src) {
   S.blobs.forEach((u) => URL.revokeObjectURL(u));
   S.blobs.clear();
   $("srcName").textContent = src.name;
+  // 切源等于换了片库:详情页上的剧集已失效,先回首页
+  S.detailTitle = "";
+  S.detailEps = [];
+  if (!$("player").hidden) closePlayer();
+  showView("home");
   await Promise.all([loadFilters(), loadItems()]);
 }
 
