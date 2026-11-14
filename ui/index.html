@@ -503,6 +503,14 @@
   .p-state { display: flex; align-items: center; gap: 10px; }
   .detail-loading { display: flex; align-items: center; gap: 10px; padding: 32px 0; color: var(--m3e-sys-color-on-surface-variant); }
   .detail-loading .spin { border-color: var(--m3e-sys-color-outline-variant); border-top-color: var(--m3e-sys-color-primary); }
+  /* 调试日志面板:Ctrl+Shift+D */
+  .dbg {
+    position: fixed; left: 0; bottom: 0; z-index: 300; margin: 0;
+    width: 100%; max-height: 42%; overflow: auto; padding: 10px 14px;
+    background: rgba(8,8,10,.94); color: #9ef5a8;
+    font: 11px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap;
+  }
+  .dbg[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -637,6 +645,8 @@
     window.__err("reject: " + (e.reason && e.reason.message ? e.reason.message : e.reason));
   });
 </script>
+  <pre id="dbg" class="dbg" hidden></pre>
+
   <div class="player" id="player" hidden>
     <video id="video" playsinline autoplay></video>
 

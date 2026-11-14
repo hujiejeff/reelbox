@@ -137,3 +137,26 @@ segment  HTTP 200, 996,400 bytes
 ```
 
 两个源都是「分享页 → 相对路径 m3u8」的同一形态,走的是同一段 `resolve_media` + `extract_m3u8`。
+
+## 排查手段
+
+### 日志
+
+前端所有关键节点都会写一行日志,两份副本:
+
+- **内存环形缓冲**(最近 300 行):按 `Ctrl+Shift+D` 在窗口底部弹出面板,实时刷新
+- **落盘**:`%APPDATA%\reelbox\reelbox.log`,追加写
+
+已埋的点:
+
+| 事件 | 内容 |
+| --- | --- |
+| `init start` | 前端启动 |
+| `switchSource` | 切源 |
+| `openDetail` | 打开详情 |
+| `playEpisode` | 点某集 |
+| `stream` | 取流成功(mime + 代理地址前 60 字符) |
+| `STREAM FAIL` / `HLS FATAL` | 取流或解码失败原因 |
+| `mute toggle` | 每次切换静音前后的 `muted` / `volume` |
+
+出问题时,把 `Ctrl+Shift+D` 面板截个图,或者直接把 `reelbox.log` 发我,比口头描述快得多。

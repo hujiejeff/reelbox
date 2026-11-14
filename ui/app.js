@@ -23,6 +23,13 @@ const $ = (id) => document.getElementById(id);
 // ---------- 数据 ----------
 
 async function init() {
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d")) {
+      e.preventDefault();
+      toggleDebug();
+    }
+  });
+  log("init start");
   bindPlayer();
   document.addEventListener("keydown", (e) => {
     const box = $("player");
@@ -56,6 +63,7 @@ async function init() {
 }
 
 async function switchSource(src) {
+  log("switchSource", src && src.id);
   S.source = src;
   S.parent = "";
   S.child = "";
@@ -149,6 +157,7 @@ async function doSearch() {
 }
 
 async function openDetail(item) {
+  log("openDetail", item && item.title);
   showView("detail");
   $("v-detail").innerHTML =
     '<div class="detail-wrap">' +
@@ -355,6 +364,31 @@ let tickTimer = 0;
 let dragging = false;
 
 /* ---------- 播放进度 ---------- */
+/* ---------- 日志:内存环形缓冲 + 落盘 ---------- */
+const LOG_MAX = 300;
+const LOG_BUF = [];
+const NL = String.fromCharCode(10);
+
+function log() {
+  const t = new Date().toISOString().slice(11, 19);
+  const line = t + " " + Array.prototype.map.call(arguments, String).join(" ");
+  LOG_BUF.push(line);
+  if (LOG_BUF.length > LOG_MAX) LOG_BUF.shift();
+  try {
+    invoke("append_log", { line: line }).catch((e) => { LOG_BUF.push("LOGFAIL " + e); });
+  } catch (e) { LOG_BUF.push("LOGFAIL " + e); }
+  const box = document.getElementById("dbg");
+  if (box && !box.hidden) { box.textContent = LOG_BUF.join(NL); box.scrollTop = box.scrollHeight; }
+}
+
+function toggleDebug() {
+  const box = document.getElementById("dbg");
+  if (!box) return;
+  box.hidden = !box.hidden;
+  box.textContent = LOG_BUF.join(NL);
+  box.scrollTop = box.scrollHeight;
+}
+
 const PROG_KEY = "reelbox.progress";
 
 function progAll() {
@@ -434,7 +468,8 @@ function pTogglePlay() {
 function renderLevels() {
   const btn = $("pQuality");
   const menu = $("pLevels");
-  if (!hls || !hls.levels || hls.levels.length < 2) {
+  const heights = new Set((hls && hls.levels ? hls.levels : []).map((l) => l.height || 0));
+  if (!hls || !hls.levels || hls.levels.length < 2 || heights.size < 2) {
     btn.hidden = true;
     menu.hidden = true;
     return;
@@ -476,17 +511,7 @@ function bindPlayer() {
     saveVolume();
     pSync();
   };
-  // 浏览器可能为了自动播放把视频静音,首次点击播放器时恢复声音
-  $("player").addEventListener("pointerdown", () => {
-    const vv = $("video");
-    if (vv.muted) {
-      vv.muted = false;
-      if (!vv.volume) vv.volume = 0.8;
-      $("vol").value = String(Math.round(vv.volume * 100));
-      saveVolume();
-      pSync();
-    }
-  }, true);
+  
 
   // 音量浮层:移开 250ms 再收起,避免从按钮移到滑块的瞬间消失
   const volWrap = document.querySelector(".p-volwrap");
@@ -510,7 +535,15 @@ function bindPlayer() {
   const volEl = $("vol");
   volEl.value = String(Math.round(loadVolume() * 100));
   v.volume = loadVolume();
+  let volIdle = 0;
+  const keepOpen = () => {
+    if (volWrap) volWrap.classList.add("open");
+    clearTimeout(volIdle);
+    volIdle = setTimeout(() => volWrap && volWrap.classList.remove("open"), 3000);
+  };
+  volEl.addEventListener("pointerdown", keepOpen);
   volEl.oninput = () => {
+    keepOpen();
     const val = Number(volEl.value) / 100;
     v.volume = val;
     v.muted = val === 0;
@@ -679,6 +712,7 @@ function openPlayer(url, name) {
     hls.on(Hls.Events.LEVEL_SWITCHED, renderLevels);
     hls.on(Hls.Events.ERROR, (_e, d) => {
       if (d && d.fatal) {
+        log("HLS FATAL", d.details);
         pStatus("播放失败:" + d.details);
         window.__err && window.__err("hls: " + d.details);
       }
@@ -692,6 +726,7 @@ function openPlayer(url, name) {
 }
 
 async function playEpisode(id, name) {
+  log("playEpisode", name);
   const key = detailKey();
   const rec = progGet(key);
   const list = S.detailEps || [];
@@ -708,8 +743,10 @@ async function playEpisode(id, name) {
   try {
     const st = await invoke("play", { source: S.source, episodeId: id });
     const local = await invoke("player_url", { stream: st });
+    log("stream", st.mime, String(local).slice(0, 60));
     openPlayer(local, name);
   } catch (e) {
+    log("STREAM FAIL", e);
     pStatus("取流失败:" + e);
   }
 }

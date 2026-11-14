@@ -67,3 +67,23 @@ pub fn player_url(stream: Stream) -> String {
     let h = serde_json::to_string(&list).unwrap_or_else(|_| "[]".into());
     crate::proxy::wrap(&stream.url, &h)
 }
+
+/// 前端日志落盘:写到临时目录下的 reelbox/reelbox.log
+#[tauri::command]
+pub fn append_log(line: String) {
+    use std::io::Write as _;
+    let base = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join("reelbox");
+    let path = dir.join("reelbox.log");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("log: 建目录失败 {e}");
+        return;
+    }
+    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(mut f) => { let _ = writeln!(f, "{line}"); }
+        Err(e) => eprintln!("log: 写 {} 失败: {e}", path.display()),
+    }
+}
+
