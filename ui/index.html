@@ -325,6 +325,13 @@
   /* 有图之后去掉底色,避免圆角处透出一圈亮边 */
   .poster.has-img { background: transparent; }
   .poster img { display: block; }
+  @media (max-width: 599px) {
+    /* 窄屏三列:放在最后,确保压过基础栅格 */
+    .grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 16px 10px; }
+    .badge { left: 6px; bottom: 6px; font-size: 10px; padding: 2px 6px; border-radius: 7px; }
+    .meta { padding-top: 7px; }
+    .meta b { font-size: 12px; }
+  }
 </style>
 </head>
 <body>
