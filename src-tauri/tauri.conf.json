@@ -12,8 +12,8 @@
         "title": "Reelbox",
         "width": 1000,
         "height": 640,
-        "minWidth": 760,
-        "minHeight": 500,
+        "minWidth": 360,
+        "minHeight": 480,
         "resizable": true
       }
     ],
