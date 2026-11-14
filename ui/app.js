@@ -13,7 +13,7 @@ const S = {
   next: "",
   loading: false,
   query: "",
-  blobs: [],            // 回收用的 object URL
+  blobs: new Map(),     // 封面地址 → objectURL(避免重复加载)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -39,6 +39,8 @@ async function switchSource(src) {
   S.parent = "";
   S.child = "";
   S.items = [];
+  S.blobs.forEach((u) => URL.revokeObjectURL(u));
+  S.blobs.clear();
   $("srcName").textContent = src.name;
   await Promise.all([loadFilters(), loadItems()]);
 }
@@ -72,7 +74,8 @@ async function loadItems() {
     S.items = page.items || [];
     S.page = 1;
     S.next = page.nextCursor || "";
-    renderGrid();
+    resetGrid();
+    appendCards(0);
   } catch (e) {
     showEmpty(String(e));
   } finally {
@@ -90,9 +93,10 @@ async function loadMore() {
       page: Number(S.next),
       classify: S.child,
     });
+    const before = S.items.length;
     S.items = S.items.concat(page.items || []);
     S.next = page.nextCursor || "";
-    renderGrid();
+    appendCards(before);
   } catch (_) {
   } finally {
     S.loading = false;
@@ -108,7 +112,8 @@ async function doSearch() {
     const page = await invoke("search", { source: S.source, keyword: q, page: 1 });
     S.items = page.items || [];
     S.next = "";
-    renderGrid();
+    resetGrid();
+    appendCards(0);
   } catch (e) {
     showEmpty(String(e));
   } finally {
@@ -185,32 +190,46 @@ function renderChildren() {
     .join("");
 }
 
-function renderGrid() {
-  revokeBlobs();
+function posterFor(url) {
+  const cached = S.blobs.get(url);
+  if (cached) return Promise.resolve(cached);
+  return invoke("poster", { url }).then((buf) => {
+    const u = URL.createObjectURL(new Blob([new Uint8Array(buf)], { type: "image/jpeg" }));
+    S.blobs.set(url, u);
+    return u;
+  });
+}
+
+// 从 from 开始把 items 追加到网格;已存在的卡片不动,所以滚动不会重载图片。
+function appendCards(from) {
   const grid = $("grid");
   $("empty").style.display = S.items.length ? "none" : "";
   if (!S.items.length) {
     $("empty").textContent = S.loading ? "" : "这个分类没有内容";
+    return;
   }
-  grid.innerHTML = S.items
+  const frag = document.createElement("div");
+  frag.innerHTML = S.items
+    .slice(from)
     .map(
-      (it, i) =>
-        '<article class="card" data-i="' + i + '"><div class="poster"><img alt="" loading="lazy"></div>' +
+      (it, k) =>
+        '<article class="card" data-i="' + (from + k) + '"><div class="poster"><img alt="" loading="lazy"></div>' +
         '<div class="meta"><b>' + esc(it.title) + "</b><span>" + esc(it.subtitle || "") + "</span></div></article>"
     )
     .join("");
+  const added = Array.from(frag.children);
+  added.forEach((el) => grid.appendChild(el));
 
-  const imgs = grid.querySelectorAll("img");
-  S.items.forEach((it, i) => {
-    if (!it.poster || !imgs[i]) return;
-    invoke("poster", { url: it.poster })
-      .then((buf) => {
-        const url = URL.createObjectURL(new Blob([new Uint8Array(buf)], { type: "image/jpeg" }));
-        S.blobs.push(url);
-        imgs[i].src = url;
-      })
-      .catch(() => {});
+  added.forEach((el, k) => {
+    const it = S.items[from + k];
+    if (!it || !it.poster) return;
+    const img = el.querySelector("img");
+    posterFor(it.poster).then((u) => { if (img) img.src = u; }).catch(() => {});
   });
+}
+
+function resetGrid() {
+  $("grid").innerHTML = "";
 }
 
 function renderDetail(d) {
@@ -273,6 +292,14 @@ function showView(key) {
     if (k === key) v.setAttribute("data-on", "");
     else v.removeAttribute("data-on");
   });
+
+  // 分类只在首页有意义:切走时收起,切回时按当前选中重画
+  const onHome = key === "home";
+  const list = $("catlist");
+  const divider = document.querySelector(".side__divider");
+  if (list) list.style.display = onHome ? "" : "none";
+  if (divider) divider.style.display = onHome ? "" : "none";
+  if (onHome) renderParents();
 }
 
 function bindSourceMenu() {
