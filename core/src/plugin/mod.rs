@@ -242,3 +242,59 @@ pub fn plugin_filters(
     }
     out
 }
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+
+    const DEMO: &str = r#"
+WeBox.define({
+  id: "demo.local", name: "本地插件源", version: "0.0.1",
+  async filters(ctx) {
+    return [{ key: "classify", label: "分类", options: [
+      { label: "全部", value: "" }, { label: "电影", value: "movie" } ] }];
+  },
+  async list(ctx) {
+    return { list: [
+      { id: "a1", title: "插件来的第一条", note: "第 1 集" },
+      { id: "a2", title: "插件来的第二条", note: "完结" }
+    ], next: "" };
+  },
+  async play(ctx) { return { url: "https://example.com/x.m3u8" }; }
+});
+"#;
+
+    fn write_demo() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("reelbox-plugin-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("demo.webox.js");
+        std::fs::write(&p, DEMO).unwrap();
+        p
+    }
+
+    #[test]
+    fn runs_list_from_file() {
+        let p = write_demo();
+        let out = run_file(&p, "list", "{}", Box::new(|_| None)).unwrap();
+        let page = crate::plugin::adapt::page_from_json(&out).unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].title, "插件来的第一条");
+        assert_eq!(page.items[1].subtitle, "完结");
+    }
+
+    #[test]
+    fn runs_filters_from_file() {
+        let p = write_demo();
+        let fs = plugin_filters(&p, Box::new(|_| None));
+        assert_eq!(fs.len(), 1);
+        assert_eq!(fs[0].key, "classify");
+        assert_eq!(fs[0].options.len(), 2);
+    }
+
+    #[test]
+    fn runs_play_from_file() {
+        let p = write_demo();
+        let out = run_file(&p, "play", r#"{"id":"a1"}"#, Box::new(|_| None)).unwrap();
+        assert!(out.contains("x.m3u8"), "实际: {out}");
+    }
+}

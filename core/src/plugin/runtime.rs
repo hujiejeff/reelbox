@@ -100,7 +100,7 @@ globalThis.__R = undefined; globalThis.__E = undefined;
             .ctx
             .global_object()
             .get(js_string!("__E"), &mut self.ctx)
-            .map(|v| v.display().to_string())
+            .map(|v| v.to_string(&mut self.ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default())
             .unwrap_or_default();
         if err != "undefined" && !err.is_empty() {
             return Err(format!("{hook}: {err}"));
@@ -113,7 +113,8 @@ globalThis.__R = undefined; globalThis.__E = undefined;
         if out.is_undefined() {
             return Ok("null".to_string());
         }
-        Ok(out.display().to_string())
+        let text = out.to_string(&mut self.ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+        Ok(text)
     }
 }
 
