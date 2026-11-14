@@ -51,11 +51,7 @@ impl Host {
         ctx.register_global_builtin_callable(js_string!("__fetch_text"), 1, fetch_fn)
             .map_err(|e| e.to_string())?;
 
-        let shim = r#"
-var WeBox = { define: function (o) { globalThis.__DEFINE = o; return o; } };
-var console = { log: function () {}, warn: function () {}, error: function () {} };
-var ctx = { http: { get: function (u) { return __fetch_text(u); } } };
-"#;
+        let shim = include_str!("shim.js");
         ctx.eval(Source::from_bytes(shim))
             .map_err(|e| format!("兼容层失败: {e}"))?;
         ctx.eval(Source::from_bytes(source))
@@ -145,6 +141,39 @@ WeBox.define({
         assert_eq!(h.meta().name, "测试插件");
         let out = h.call("filters", "{}").unwrap();
         assert!(out.contains("abcdef"), "实际输出: {out}");
+    }
+
+
+    const HTML_PLUGIN: &str = r#"
+WeBox.define({
+  id: "html-test", name: "解析测试",
+  list: async (ctx) => {
+    const page = await ctx.html.load("https://x/list");
+    const out = [];
+    page.$("li a[href]").each(function (i, el) {
+      const a = page.$(el);
+      out.push({ title: a.text(), url: a.attr("href") });
+    });
+    return { count: out.length, first: out[0] };
+  }
+});
+"#;
+
+    const LIST_HTML: &str = r#"<html><body><ul>
+<li><a href="/v/1">第一个</a></li>
+<li><a href="/v/2">第二个</a></li>
+</ul></body></html>"#;
+
+    #[test]
+    fn parses_html_and_selects() {
+        let mut h = Host::load(HTML_PLUGIN, Box::new(|url| {
+            assert_eq!(url, "https://x/list");
+            Some(LIST_HTML.to_string())
+        }))
+        .unwrap();
+        let out = h.call("list", "{}").unwrap();
+        assert!(out.contains("/v/1"), "实际输出: {out}");
+        assert!(out.contains("/v/1"), "实际输出: {out}");
     }
 
     #[test]
