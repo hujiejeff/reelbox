@@ -468,8 +468,10 @@ function bindPlayer() {
   v.onclick = pTogglePlay;
 
   $("pMute").onclick = () => {
-    v.muted = !v.muted;
-    if (!v.muted && v.volume === 0) v.volume = 0.6;
+    const wasSilent = v.muted || v.volume < 0.05;
+    v.muted = !wasSilent;
+    if (!v.muted && v.volume < 0.05) v.volume = 0.8;
+    if (v.muted) v.volume = 0;
     $("vol").value = String(Math.round((v.muted ? 0 : v.volume) * 100));
     saveVolume();
     pSync();
@@ -485,6 +487,25 @@ function bindPlayer() {
       pSync();
     }
   }, true);
+
+  // 音量浮层:移开 250ms 再收起,避免从按钮移到滑块的瞬间消失
+  const volWrap = document.querySelector(".p-volwrap");
+  let volTimer = 0;
+  if (volWrap) {
+    volWrap.addEventListener("mouseenter", () => {
+      clearTimeout(volTimer);
+      volWrap.classList.add("open");
+    });
+    volWrap.addEventListener("mouseleave", () => {
+      clearTimeout(volTimer);
+      volTimer = setTimeout(() => volWrap.classList.remove("open"), 250);
+    });
+  }
+  const volBox = document.querySelector(".p-vol");
+  if (volBox) {
+    volBox.addEventListener("pointerdown", (e) => e.stopPropagation());
+    volBox.addEventListener("click", (e) => e.stopPropagation());
+  }
 
   const volEl = $("vol");
   volEl.value = String(Math.round(loadVolume() * 100));
