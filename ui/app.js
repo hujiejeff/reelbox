@@ -2404,31 +2404,23 @@ function setDebug(on) {
   const box = document.getElementById("dbg");
   if (box && !on) box.hidden = true;
   syncDebugButtons();
+  syncSetSummaries();
   log("debug", on ? "on" : "off");
 }
 
-/** 调试浮标:右下角那颗按钮(和「详细日志」是两件事) */
+/**
+ * 调试浮标:右下角那颗随时弹日志面板的按钮。
+ * 它跟着「记录日志」走 —— 日志没记录时没有现场可看,浮标也就不该常驻(评审 2)。
+ */
 function fabOn() {
-  try { return localStorage.getItem("reelbox.debugFab") !== "0"; } catch (_) { return true; }
-}
-
-function setFab(on) {
-  try { localStorage.setItem("reelbox.debugFab", on ? "1" : "0"); } catch (_) {}
-  syncDebugButtons();
+  return debugOn();
 }
 
 function syncDebugButtons() {
-  const seg = document.getElementById("segDebug");
-  if (seg) {
-    const on = debugOn() ? "1" : "0";
-    seg.querySelectorAll("button").forEach((b) => {
-      b.setAttribute("aria-selected", b.getAttribute("data-debug") === on ? "true" : "false");
-    });
-  }
+  const sw = document.getElementById("swLog");
+  if (sw) sw.checked = debugOn();
   const fab = document.getElementById("dbgFab");
   if (fab) fab.hidden = !fabOn();
-  const sw = document.getElementById("swFab");
-  if (sw) sw.checked = fabOn();
 }
 
 function bindDebugToggle() {
@@ -2437,14 +2429,10 @@ function bindDebugToggle() {
     fab.dataset.bound = "1";
     fab.onclick = () => toggleDebug();
   }
-  const seg = document.getElementById("segDebug");
-  if (seg && !seg.dataset.bound) {
-    seg.dataset.bound = "1";
-    seg.onclick = (e) => {
-      const b = e.target.closest("button");
-      if (!b) return;
-      setDebug(b.getAttribute("data-debug") === "1");
-    };
+  const sw = document.getElementById("swLog");
+  if (sw && !sw.dataset.bound) {
+    sw.dataset.bound = "1";
+    sw.onchange = () => setDebug(sw.checked);
   }
   syncDebugButtons();
 }
@@ -2542,7 +2530,7 @@ function setSummary(key) {
     return mode + " · " + themeSeedLabel() + " · " + (VARIANT_LABEL[themeState.variant] || "标准");
   }
   if (key === "debug") {
-    return "日志" + (debugOn() ? "开" : "关") + " · 浮标" + (fabOn() ? "开" : "关");
+    return "日志" + (debugOn() ? "开" : "关");
   }
   if (key === "about") {
     return APP_INFO ? "v" + APP_INFO.version + " · 契约 v1" : "读取中…";
@@ -2813,12 +2801,8 @@ function bindSettings() {
     };
   }
 
-  // 调试
+  // 调试:一个开关(记录日志)+ 一个文本按钮(打开日志目录)(评审 2)
   bindDebugToggle();
-  const swF = $("swFab");
-  if (swF) swF.onchange = () => { setFab(swF.checked); syncSetSummaries(); };
-  const live = $("btnLiveLog");
-  if (live) live.onclick = () => showDebugPanel(true);
   const open = $("btnOpenLog");
   if (open) {
     open.onclick = async () => {

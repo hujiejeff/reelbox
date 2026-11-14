@@ -696,7 +696,6 @@
     border-color: var(--m3e-sys-color-on-surface);
     box-shadow: inset 0 0 0 3px var(--m3e-sys-color-surface);
   }
-  .hint { font-size: 12px; color: var(--m3e-sys-color-on-surface-variant); margin: 12px 0 0; line-height: 1.6; }
 
   /* 骨架屏:呼吸式明暗,比转圈更贴合 M3E */
   .skel .poster, .skel .meta i {
@@ -1344,22 +1343,13 @@
                 <div class="set-page__body">
                   <p class="set-page__sub">出错时的现场都在日志里:取列表 / 取详情 / 取流各自的原始报错。</p>
 
+                  <!-- 一个开关 + 一个文本按钮 + 日志路径,不再有分段控件与第二个开关(评审 2) -->
                   <div class="set-row">
                     <div class="set-row__text">
-                      <b>详细日志</b><span>多记播放与探测细节;错误始终会记</span>
-                    </div>
-                    <div class="seg" id="segDebug">
-                      <button data-debug="0">关闭</button>
-                      <button data-debug="1">开启</button>
-                    </div>
-                  </div>
-
-                  <div class="set-row">
-                    <div class="set-row__text">
-                      <b>调试浮标</b><span>右下角常驻一个按钮,随时弹出日志面板</span>
+                      <b>记录日志</b><span>把播放与探测细节也写进日志文件;错误始终会记</span>
                     </div>
                     <label class="m3e-switch">
-                      <input class="m3e-switch__input" type="checkbox" id="swFab" aria-label="调试浮标">
+                      <input class="m3e-switch__input" type="checkbox" id="swLog" aria-label="记录日志">
                       <span class="m3e-switch__track"><span class="m3e-switch__handle"></span></span>
                     </label>
                   </div>
@@ -1368,10 +1358,8 @@
                     <div class="set-block__head"><span class="set-block__title">日志文件</span></div>
                     <p class="set-mono" id="logPath">读取中…</p>
                     <div class="set-acts">
-                      <button type="button" class="m3e-button m3e-button--outlined" id="btnLiveLog">实时日志</button>
-                      <button type="button" class="m3e-button m3e-button--outlined" id="btnOpenLog">打开日志</button>
+                      <button type="button" class="m3e-button m3e-button--text" id="btnOpenLog">打开日志目录</button>
                     </div>
-                    <p class="hint">Ctrl+Shift+D 也能开关实时日志面板。</p>
                   </div>
                 </div>
               </div>
