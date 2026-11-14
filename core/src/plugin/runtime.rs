@@ -9,7 +9,11 @@ use boa_engine::{js_string, Context as JsContext, JsValue, NativeFunction, Sourc
 
 use super::PluginMeta;
 
-struct FetchState(Box<dyn Fn(&str) -> Option<String>>);
+thread_local! {
+    /// 当前线程的抓取函数(boa 与宿主同线程,足够用)
+    static FETCHER: std::cell::RefCell<Option<std::rc::Rc<dyn Fn(&str) -> Option<String>>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 pub struct Host {
     ctx: JsContext,
@@ -21,7 +25,9 @@ impl Host {
         let meta = super::parse_meta(source)?;
         let mut ctx = JsContext::default();
 
-        ctx.insert_data(FetchState(fetch));
+        FETCHER.with(|slot| {
+            *slot.borrow_mut() = Some(std::rc::Rc::from(fetch));
+        });
 
         // 宿主函数:抓文本(非捕获闭包,满足 Copy 要求)
         let fetch_fn = NativeFunction::from_copy_closure(|_this, args, context| {
@@ -32,9 +38,11 @@ impl Host {
                 },
                 None => return Ok(JsValue::null()),
             };
-            let text = context
-                .get_data::<FetchState>()
-                .and_then(|st| (st.0)(&url));
+            let _ = context;
+            let text = FETCHER.with(|slot| {
+                let guard = slot.borrow();
+                guard.as_ref().and_then(|f| f(&url))
+            });
             match text {
                 Some(t) => Ok(JsValue::from(js_string!(t.as_str()))),
                 None => Ok(JsValue::null()),
@@ -78,7 +86,7 @@ globalThis.__R = undefined; globalThis.__E = undefined;
   try {{
     var f = globalThis.__DEFINE["{hook}"];
     if (typeof f !== "function") {{ globalThis.__E = "没有实现 {hook}"; return; }}
-    var arg = ({arg_json});
+    var arg = Object.assign({{}}, ctx, {arg_json});
     Promise.resolve(f.call(globalThis.__DEFINE, arg)).then(
       function (v) {{ try {{ globalThis.__R = JSON.stringify(v); }} catch (e) {{ globalThis.__R = String(v); }} }},
       function (e) {{ globalThis.__E = String(e && e.message ? e.message : e); }}
@@ -128,10 +136,9 @@ WeBox.define({
 "#;
 
     #[test]
-    #[ignore = "宿主数据桥接待修:闭包里 get_data 取不到 FetchState"]
     fn runs_hook_and_calls_host() {
         let mut h = Host::load(PLUGIN, Box::new(|url| {
-            assert_eq!(url, "https://x/flags");
+            assert_eq!(url, "https://x/flags", "插件传来的地址不对");
             Some("abcdef".to_string())
         }))
         .unwrap();
