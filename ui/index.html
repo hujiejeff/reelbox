@@ -262,6 +262,29 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* 收藏卡右上角的 ⋮:压在封面图上,只能用半透明黑底(与 .badge 同一个例外,
+     原因同样是"底图不可控,角色色读不清") */
+  .card__more {
+    position: absolute; top: 4px; right: 4px; z-index: 2;
+    width: 32px; height: 32px; display: grid; place-items: center; cursor: pointer;
+    border: none; border-radius: 50%; color: #fff;
+    background: rgba(0, 0, 0, .42);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    opacity: 0; transition: opacity 120ms cubic-bezier(.2,0,0,1), background 120ms cubic-bezier(.2,0,0,1);
+  }
+  .card__more .m3e-icon { font-size: 20px; }
+  .card:hover .card__more, .card__more:focus-visible { opacity: 1; }
+  .card__more:hover { background: rgba(0, 0, 0, .62); }
+  @media (hover: none) { .card__more { opacity: 1; } }
+  /* 僵尸收藏(源已删除):灰化但仍可点(点了给"重新定位源 / 移除"两条出路) */
+  .card--dead .poster { filter: grayscale(1); opacity: .55; }
+  .card--dead .card__more { opacity: 1; }
+  .card--dead .meta b { color: var(--m3e-sys-color-on-surface-variant); }
+  .badge--dead {
+    background: var(--m3e-sys-color-error-container);
+    color: var(--m3e-sys-color-on-error-container);
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
   .searchbox input {
     flex: 1; min-width: 0; border: none; outline: none; background: transparent;
     font: 500 15px/1 system-ui, "PingFang SC", sans-serif; color: inherit;

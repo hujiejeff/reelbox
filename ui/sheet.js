@@ -17,6 +17,10 @@ const CLOSE_MS = 149;
 const MIN_H = 344;
 const CLOSE_POS = 56;
 const CLOSE_VELOCITY = 125;
+// m3e 的 .m3e-bottom-sheet__sheet 默认是 visibility:hidden,
+// 只有 --expanded / --partially-expanded / [data-animating] 才会把它变成 visible。
+// 只挂内联 translate 做动画的话,sheet 永远不出现,只剩一层遮罩(评审 V1)。
+const EXPANDED = "m3e-bottom-sheet--expanded";
 
 let sheetEl = null;
 let sheetHost = null;
@@ -71,6 +75,13 @@ export function openSheet(opts) {
     d.setAttribute("open", "");
   }
 
+  // 展开态:m3e 靠这个类给 __sheet 上 visibility:visible。
+  // 内联 translate 只负责位移,撑不住可见性 —— 所以这两步都要做。
+  d.classList.remove("m3e-bottom-sheet--partially-expanded");
+  d.classList.add(EXPANDED);
+  d.removeAttribute("data-animating");
+  d.style.removeProperty("--_m3e-bs-translate");
+
   // 初始高度:内容不足时就是内容高 + 16,内容多时 min(内容, 60vh)
   const vh = window.innerHeight || 800;
   const want = contentHeight(host) + 16;
@@ -96,12 +107,20 @@ export function openSheet(opts) {
     if (closed || now.close !== close) return;
     closed = true;
     now.close = null;
+    // 先摘掉展开态(状态回到"收起"),再播 149ms 位移动画。
+    // 摘类会让 __sheet 变回 visibility:hidden,所以同时挂上 m3e 的 [data-animating]
+    // 把可见性撑到动画结束 —— 否则关闭会瞬间消失,149ms 白给。
+    d.classList.remove(EXPANDED);
+    d.setAttribute("data-animating", "");
+    d.style.setProperty("--_m3e-bs-translate", "100%");
     sheet.style.transition = "translate " + CLOSE_MS + "ms cubic-bezier(.31,.94,.34,1)";
     sheet.style.translate = "0 100%";
     scrim.style.opacity = "0";
     setTimeout(() => {
       if (d.open && typeof d.close === "function") d.close();
       else d.removeAttribute("open");
+      d.removeAttribute("data-animating");
+      d.style.removeProperty("--_m3e-bs-translate");
       sheet.style.translate = "";
       sheet.style.transition = "";
       scrim.style.opacity = "";

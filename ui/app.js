@@ -6,6 +6,7 @@ import { closeMenu, menuOpen, openMenu } from "./menu.js";
 import {
   alertDialog,
   confirmDialog,
+  dialog,
   formDialog,
   promptDialog,
   toast,
@@ -1102,6 +1103,107 @@ function favToggle(fav) {
   return on;
 }
 
+/** 删掉一条收藏(按「源id|片名」的键,顺带清掉 sourceId 对不上的老键) */
+function favRemove(fav) {
+  const all = favAll();
+  let hit = false;
+  for (const k of Object.keys(all)) {
+    const v = all[k] || {};
+    const same = k === favKey(fav.sourceId, fav.title);
+    const loose = v.title === fav.title && String(v.sourceId || "") === String(fav.sourceId || "");
+    if (same || loose) {
+      delete all[k];
+      hit = true;
+    }
+  }
+  if (hit) {
+    favSave(all);
+    renderFavs();
+  }
+  return hit;
+}
+
+/** 清掉指向某个源的全部收藏;返回清掉的条数 */
+function favRemoveBySource(sourceId) {
+  const all = favAll();
+  let n = 0;
+  for (const k of Object.keys(all)) {
+    const v = all[k] || {};
+    if (String(v.sourceId || "") === String(sourceId || "") || String(k).split("|")[0] === String(sourceId || "")) {
+      delete all[k];
+      n++;
+    }
+  }
+  if (n) {
+    favSave(all);
+    renderFavs();
+  }
+  return n;
+}
+
+/** 有多少条收藏指着这个源 */
+function favCountForSource(sourceId) {
+  return favList().filter((f) => String(f.sourceId || "") === String(sourceId || "")).length;
+}
+
+/**
+ * 重新定位源:把一条收藏改挂到另一个源上(源 id 变了、或者当初挂错了源)。
+ * 键是「源id|片名」,所以这里要换键,不能原地改值。
+ */
+async function favRelink(fav) {
+  const list = S.sources || [];
+  if (!list.length) {
+    alertDialog("没有可用的源", "先去「设置 → 源」加一个源,再回来重新定位。");
+    return;
+  }
+  const cur = list.findIndex((s) => s.id === fav.sourceId);
+  const res = await formDialog({
+    icon: "link",
+    headline: "重新定位源",
+    okText: "保存",
+    fields: [
+      {
+        id: "src",
+        label: "这条收藏挂到哪个源",
+        type: "select",
+        // 用下标当值:id 重复时也不会指错(见 A1)
+        value: String(cur < 0 ? 0 : cur),
+        options: list.map((s, i) => ({ value: String(i), label: s.name + (s.id === fav.sourceId ? "(当前)" : "") })),
+      },
+    ],
+    note: "只改这条收藏指向的源;片名不变,点进去用新源同名条目播放。",
+  });
+  if (!res) return;
+  const src = list[Number(res.src)];
+  if (!src) return;
+  const all = favAll();
+  delete all[favKey(fav.sourceId, fav.title)];
+  all[favKey(src.id, fav.title)] = Object.assign({}, fav, { sourceId: src.id });
+  favSave(all);
+  renderFavs();
+  toast("已挂到「" + src.name + "」");
+}
+
+/** 收藏卡右上角的 ⋮ 菜单:移除 / 重新定位源 */
+function openFavMenu(fav, anchor) {
+  const dead = !(S.sources || []).some((s) => s.id === fav.sourceId);
+  return openMenu(
+    anchor,
+    [
+      { type: "label", label: dead ? "源已删除" : "收藏" },
+      { id: "remove", label: "移除收藏", icon: "delete", danger: true },
+      { id: "relink", label: "重新定位源", icon: "link" },
+    ],
+    (id) => {
+      if (id === "remove") {
+        if (favRemove(fav)) toast("已移除「" + fav.title + "」");
+        return;
+      }
+      if (id === "relink") favRelink(fav);
+    }
+  );
+}
+
 function syncFavBtn(btn, on) {
   if (!btn) return;
   btn.setAttribute("aria-pressed", on ? "true" : "false");
@@ -1127,12 +1229,19 @@ function renderFavs() {
   const empty = $("favEmpty");
   if (!grid || !empty) return;
   const list = favList();
+  // 源被删掉的条目留着但灰化(A1/源删除之后卡片不该永久装死也删不掉,见 I4)
   grid.innerHTML = list
     .map((f, i) => {
       const src = (S.sources || []).find((s) => s.id === f.sourceId);
       return (
-        '<article class="card" data-fav="' + i + '"><div class="poster">' +
-        (src ? '<span class="badge">' + esc(src.name) + "</span>" : "") +
+        '<article class="card' + (src ? "" : " card--dead") + '" data-fav="' + i + '">' +
+        '<div class="poster">' +
+        (src
+          ? '<span class="badge">' + esc(src.name) + "</span>"
+          : '<span class="badge badge--dead">源已删除</span>') +
+        '<button type="button" class="card__more" data-favmenu="' + i +
+          '" aria-haspopup="menu" aria-label="收藏操作 · ' + esc(f.title) + '">' +
+          '<span class="m3e-icon" aria-hidden="true">more_vert</span></button>' +
         '</div><div class="meta"><b>' + esc(f.title) + "</b></div></article>"
       );
     })
@@ -1141,7 +1250,15 @@ function renderFavs() {
   const cards = Array.from(grid.children);
   list.forEach((f, i) => {
     const el = cards[i];
-    if (!el || !f.poster) return;
+    if (!el) return;
+    const more = el.querySelector("[data-favmenu]");
+    if (more) {
+      more.onclick = (e) => {
+        e.stopPropagation(); // 别让卡片的点击把详情打开
+        openFavMenu(f, more);
+      };
+    }
+    if (!f.poster) return;
     const box = el.querySelector(".poster");
     posterFor(f.poster)
       .then((u) => {
@@ -1173,10 +1290,31 @@ function renderFavs() {
 async function openFav(f) {
   const src = (S.sources || []).find((s) => s.id === f.sourceId);
   if (!src) {
-    alertDialog("源不在了", "「" + f.title + "」是用一个已经删掉的源收藏的,加回那个源才能看。");
+    // 僵尸收藏:能给的两条出路是"重新定位源"和"删掉",别只弹一句话就完事(I4)
+    const pick = await dialog({
+      icon: "link_off",
+      headline: "这条收藏的源已经删了",
+      content:
+        '<p class="dlg-text">「' + esc(f.title) + "」当初是用一个已经不存在的源收藏的。" +
+        "重新定位到一个源,或者把这条收藏清掉。</p>",
+      actions: [
+        { label: "关闭", value: null },
+        { label: "移除收藏", value: "remove", danger: true },
+        { label: "重新定位源", value: "relink", primary: true },
+      ],
+    });
+    if (pick === "remove") {
+      if (favRemove(f)) toast("已移除「" + f.title + "」");
+    } else if (pick === "relink") {
+      await favRelink(f);
+    }
     return;
   }
-  if (!S.source || S.source.id !== src.id) await switchSource(src);
+  if (!S.source || S.source.id !== src.id) {
+    await switchSource(src);
+    // 静默换源会让人以为列表自己变了:说一句
+    toast("已切到「" + src.name + "」以匹配这条收藏");
+  }
   await openDetail({ id: f.id, title: f.title, poster: f.poster || "" });
 }
 
@@ -1832,13 +1970,33 @@ async function addFromClipboard() {
 async function removeSource(src) {
   // 按对象删:同 id 的两条源只删点中的那条
   if (!src || !(S.sources || []).includes(src)) return;
-  const ok = await confirmDialog(
-    "删除源「" + src.name + "」?",
-    "删掉之后可以在「添加源」里重新加回来。",
-    "删除",
-    true
-  );
-  if (!ok) return;
+  const refs = favCountForSource(src.id);
+  let dropFavs = false;
+  if (refs) {
+    // 先让用户决定收藏怎么办:删源之后那些卡片会变成播不了的"僵尸"(I4)
+    const pick = await dialog({
+      icon: "warning",
+      headline: "删除源「" + src.name + "」?",
+      content:
+        '<p class="dlg-text">有 ' + refs + " 条收藏引用了它。删掉源之后这些收藏还在," +
+        "但点进去播不了 —— 要一并清掉吗?</p>",
+      actions: [
+        { label: "取消", value: null },
+        { label: "只删源", value: "keep" },
+        { label: "一并清掉收藏", value: "drop", primary: true, danger: true },
+      ],
+    });
+    if (!pick) return;
+    dropFavs = pick === "drop";
+  } else {
+    const ok = await confirmDialog(
+      "删除源「" + src.name + "」?",
+      "删掉之后可以在「添加源」里重新加回来。",
+      "删除",
+      true
+    );
+    if (!ok) return;
+  }
   const list = S.sources.filter((x) => x !== src);
   if (!list.length) {
     toast("至少得留一个源");
@@ -1846,7 +2004,8 @@ async function removeSource(src) {
   }
   dropRecent(src.id); // 删掉的源不该再出现在「最近使用」里
   await applySources(list);
-  toast("已删除「" + src.name + "」");
+  const dropped = dropFavs ? favRemoveBySource(src.id) : 0;
+  toast(dropped ? "已删除「" + src.name + "」,顺带清掉 " + dropped + " 条收藏" : "已删除「" + src.name + "」");
   if (S.source === src) await switchSource(list[0]);
 }
 
