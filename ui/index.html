@@ -505,12 +505,24 @@
   .detail-loading .spin { border-color: var(--m3e-sys-color-outline-variant); border-top-color: var(--m3e-sys-color-primary); }
   /* 调试日志面板:Ctrl+Shift+D */
   .dbg {
-    position: fixed; left: 0; bottom: 0; z-index: 300; margin: 0;
-    width: 100%; max-height: 42%; overflow: auto; padding: 10px 14px;
-    background: rgba(8,8,10,.94); color: #9ef5a8;
+    position: fixed; left: 14px; bottom: 14px; z-index: 300; margin: 0;
+    width: min(620px, 72vw); max-height: 34%; overflow: auto; padding: 10px 14px;
+    border-radius: 16px; box-shadow: 0 6px 24px rgba(0,0,0,.28);
+    background: rgba(10,10,12,.92); color: #9ef5a8;
     font: 11px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap;
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
   }
   .dbg[hidden] { display: none; }
+  .dbg-fab {
+    position: fixed; right: 16px; bottom: 16px; z-index: 310;
+    width: 44px; height: 44px; display: grid; place-items: center; cursor: pointer;
+    border: none; border-radius: 50%; color: #d0f5d8;
+    background: rgba(18,18,22,.82); box-shadow: 0 4px 16px rgba(0,0,0,.3);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  }
+  .dbg-fab[hidden] { display: none; }
+  .dbg-fab:hover { background: rgba(32,32,38,.92); }
+  .dbg-fab .m3e-icon { font-size: 20px; }
 </style>
 </head>
 <body>
@@ -652,6 +664,9 @@
     window.__err("reject: " + (e.reason && e.reason.message ? e.reason.message : e.reason));
   });
 </script>
+  <button id="dbgFab" class="dbg-fab" hidden aria-label="日志">
+    <span class="m3e-icon">terminal</span>
+  </button>
   <pre id="dbg" class="dbg" hidden></pre>
 
   <div class="player" id="player" hidden>

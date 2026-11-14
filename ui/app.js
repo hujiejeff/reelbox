@@ -29,8 +29,14 @@ async function init() {
       if (debugOn()) toggleDebug();
     }
   });
+  bindDebugToggle();
   log("init start");
-  if (!debugOn()) { const d = document.getElementById("dbg"); if (d) d.hidden = true; }
+  {
+    const d = document.getElementById("dbg");
+    const fab = document.getElementById("dbgFab");
+    if (fab) fab.hidden = !debugOn();
+    if (!debugOn() && d) d.hidden = true;
+  }
   bindPlayer();
   document.addEventListener("keydown", (e) => {
     const box = $("player");
@@ -391,6 +397,8 @@ function debugOn() {
 function setDebug(on) {
   try { localStorage.setItem(DEBUG_KEY, on ? "1" : "0"); } catch (_) {}
   const box = document.getElementById("dbg");
+  const fab = document.getElementById("dbgFab");
+  if (fab) fab.hidden = !on;
   if (box && !on) box.hidden = true;
   syncDebugButtons();
   log("debug", on ? "on" : "off");
@@ -406,6 +414,11 @@ function syncDebugButtons() {
 }
 
 function bindDebugToggle() {
+  const fab = document.getElementById("dbgFab");
+  if (fab) {
+    fab.hidden = !debugOn();
+    fab.onclick = () => toggleDebug();
+  }
   const seg = document.getElementById("segDebug");
   if (!seg || seg.dataset.bound) return;
   seg.dataset.bound = "1";
