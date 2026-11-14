@@ -21,7 +21,8 @@ const esc = (s) =>
  *   query,                                    // 当前搜索词
  *   empty: false                              // 一个源都没有
  * }
- * row = { id, name, type: "vod"|"plugin"|"live", icon, current, state, stateLabel }
+ * row = { idx, id, name, type: "vod"|"plugin"|"live", icon, current, state, stateLabel }
+ * idx = 该源在 sources 数组里的下标(行按它派发,同 id 的两条源不会误伤)
  */
 export function buildSrcPanel(opts) {
   const box = document.createElement("div");
@@ -75,7 +76,7 @@ function groupHtml(group, rows, isRecent) {
 
 function rowHtml(r, isRecent) {
   return (
-    '<button type="button" class="src-panel__row" data-src="' + esc(r.id) + '"' +
+    '<button type="button" class="src-panel__row" data-idx="' + esc(r.idx) + '" data-src="' + esc(r.id) + '"' +
     (r.current ? ' aria-current="true"' : "") + ">" +
       '<span class="m3e-icon src-panel__lead" aria-hidden="true">' +
         (isRecent ? "history" : esc(r.icon || "dns")) + "</span>" +

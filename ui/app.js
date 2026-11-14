@@ -96,6 +96,9 @@ async function init() {
   } catch (e) {
     return showListError(errorInfo("source", e), () => init());
   }
+  // 老配置里有名字塌成 "-" 的 id(见 docs/REVIEW-2026-11-14.md A1):
+  // 先修 id 再往下走,收藏与进度里「源id|片名」的键会同步搬过去。
+  if (migrateSourceIds()) renderFavs();
   if (!S.sources.length) {
     showListEmpty(
       "还没有配置源",
@@ -823,6 +826,7 @@ function srcPanelModel(query) {
   const toRow = (s) => {
     const h = healthOf(s);
     return {
+      idx: all.indexOf(s),
       id: s.id,
       name: s.name,
       icon: srcTypeIcon(s),
@@ -866,9 +870,9 @@ function mountSrcPanel(host, query) {
       editSource(null);
       return;
     }
-    const row = e.target.closest("[data-src]");
+    const row = e.target.closest("[data-idx]");
     if (!row) return;
-    const src = (S.sources || []).find((s) => s.id === row.getAttribute("data-src"));
+    const src = (S.sources || [])[Number(row.getAttribute("data-idx"))];
     if (!src) return;
     // 选中后立刻走关闭动效(149ms),不等它结束就开始切源
     closeSrcMenu();
@@ -1333,7 +1337,9 @@ function normSource(raw) {
   const name = (raw.name || raw.key || "").trim();
   if (!url || !name) return null;
   const kind = normKind(raw.kind || raw.type, url);
-  const id = (raw.id || name).toString().toLowerCase().replace(/[^a-z0-9_-]+/gi, "-").slice(0, 24) || "src";
+  // id 不再由名字生成(见 normalizeSourceIds):这里只负责搬过来,
+  // 缺了或者靠不住的时候由 normalizeSourceIds 按地址补。
+  const id = String(raw.id == null ? "" : raw.id).trim();
   // 后端把 kind 序列化成 type,这里跟着用 type,免得存回去时丢类型
   return { id: id, name: name, type: kind, url: url };
 }
@@ -1349,7 +1355,178 @@ function uniqSources(list) {
     seen.add(key);
     out.push(src);
   }
-  return out;
+  return normalizeSourceIds(out).list;
+}
+
+/* ---------- 源 id:与名字解耦 ---------- */
+// 老实现拿名字生成 id(name → slug),中文名整段被替换,最后只剩一串横线:
+//   -3 = 独播库、-5 = 厂长资源、-7 = 欧乐影视、-8 = 无水印资源
+// 两个中文源撞同一个 id 时,点 A 行会切到 B 源、删一个会删两个。
+// 现在 id 只跟地址有关(url 的 32 位短哈希):名字随便改都不影响 id,重复扫描也幂等。
+// 收藏与进度的键是「源id|片名」,所以换 id 时必须同步改写那些键 —— 见 rewriteIdKeys()。
+
+/** FNV-1a 32 位 → 8 位十六进制。同一地址永远得到同一个 id,迁移可以反复跑 */
+function shortHash(text) {
+  const s = String(text == null ? "" : text);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+function randId() {
+  try {
+    if (window.crypto && window.crypto.randomUUID) {
+      return window.crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+    }
+  } catch (_) {
+    /* 没有 crypto:退到 Math.random */
+  }
+  return Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+}
+
+/** 取一个新 id:优先地址短哈希(幂等);撞车了加 -2 / -3 */
+function freshSourceId(seed, taken) {
+  const base = String(seed || "").trim() ? shortHash(seed) : randId();
+  let id = base;
+  let n = 2;
+  while (taken.has(id)) {
+    id = base + "-" + n;
+    n++;
+  }
+  taken.add(id);
+  return id;
+}
+
+/** 老算法:名字 → slug;只用来认出"名字塌掉了"的 id */
+function legacySlug(name) {
+  return String(name || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/gi, "-").slice(0, 24);
+}
+
+/**
+ * 这个 id 靠不住吗?
+ *   空的 / 和前一个重复 / 名字塌成一串横线(-3、-、--)/
+ *   中文名派生出来的(老算法把汉字全换成 -,id 名字已经无关了)
+ */
+function weakSourceId(id, name, seen) {
+  const s = String(id || "").trim();
+  if (!s) return true;
+  if (seen && seen.has(s)) return true;
+  // 能用的 id:ASCII 字母数字开头,后面只跟字母数字 / - / _(老配置里的 dytt、user-4kvm 都在此列)。
+  // "-3" / "-" / "--" / 中文 一概算坏 id —— 它们都是"名字塌成一串横线"的产物。
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(s)) return true;
+  if (!/[\u0080-\uffff]/.test(String(name || ""))) return false;
+  const base = legacySlug(name).replace(/-+$/, "");
+  const tail = s.replace(/-\d+$/, "").replace(/-+$/, "");
+  return !!base && base === tail;
+}
+
+/**
+ * 扫一遍源列表:靠不住的 id 换成地址短哈希,靠得住的保持原样(收藏和进度都指着它)。
+ * 返回 { list, remap } —— remap 只收「老 id 现在已经没有主人」的那些,
+ * 重复 id 时第一个占住原 id,后面的换新,键跟着留在原主身上(不然分不清是谁的)。
+ */
+function normalizeSourceIds(list) {
+  const src = Array.isArray(list) ? list : [];
+  const seen = new Set();
+  const taken = new Set();
+  const keeps = [];
+  src.forEach((s, i) => {
+    const id = String((s && s.id) || "").trim();
+    const ok = !weakSourceId(id, s && s.name, seen);
+    if (id) seen.add(id);
+    keeps[i] = ok;
+    if (ok) taken.add(id);
+  });
+  const out = src.map((s, i) => {
+    const id = String((s && s.id) || "").trim();
+    if (keeps[i]) return id === (s.id || "") ? s : Object.assign({}, s, { id: id });
+    return Object.assign({}, s, { id: freshSourceId(s && s.url, taken) });
+  });
+  const alive = new Set(out.map((s) => s.id));
+  const remap = new Map();
+  src.forEach((s, i) => {
+    const old = String((s && s.id) || "").trim();
+    const next = out[i].id;
+    if (old && old !== next && !alive.has(old) && !remap.has(old)) remap.set(old, next);
+  });
+  return { list: out, remap };
+}
+
+/**
+ * 换 id 的连带修改:收藏 / 进度 / 最近使用 / 当前源 全都拿源 id 当键。
+ * 不跟着改的话,用户点过的收藏与看到一半的进度会全部失联。
+ */
+function rewriteIdKeys(remap) {
+  if (!remap || !remap.size) return;
+  const pick = (id) => {
+    let cur = String(id || "");
+    for (let i = 0; i < 8 && remap.has(cur); i++) cur = remap.get(cur);
+    return cur;
+  };
+  const splitKey = (k) => {
+    const s = String(k || "");
+    const at = s.indexOf("|");
+    return at < 0 ? [s, ""] : [s.slice(0, at), s.slice(at + 1)];
+  };
+  const mkKey = (sid, rest) => sid + "|" + rest;
+
+  // 收藏:键与条目里的 sourceId 都要改
+  const favs = favAll();
+  let favHit = 0;
+  const nextFavs = {};
+  for (const k of Object.keys(favs)) {
+    const [sid, rest] = splitKey(k);
+    const sid2 = remap.has(sid) ? pick(sid) : sid;
+    const k2 = mkKey(sid2, rest);
+    if (k2 !== k) favHit++;
+    nextFavs[k2] = Object.assign({}, favs[k], { sourceId: sid2 });
+  }
+  if (favHit) favSave(nextFavs);
+
+  // 进度:键是「源id|片名」
+  const prog = progAll();
+  let progHit = 0;
+  const nextProg = {};
+  for (const k of Object.keys(prog)) {
+    const [sid, rest] = splitKey(k);
+    const sid2 = remap.has(sid) ? pick(sid) : sid;
+    const k2 = mkKey(sid2, rest);
+    if (k2 !== k) progHit++;
+    nextProg[k2] = prog[k];
+  }
+  if (progHit) progWrite(nextProg);
+
+  // 最近使用 / 当前源 / 直播源:值是 id
+  const recent = recentIds();
+  const nextRecent = recent.map((id) => (remap.has(id) ? pick(id) : id));
+  if (nextRecent.some((id, i) => id !== recent[i])) saveRecent(nextRecent);
+  [LS.currentSource, LS.currentLiveSource].forEach((key) => {
+    const v = prefGet(key, "");
+    if (v && remap.has(v)) prefSet(key, pick(v));
+  });
+  log("id remap", "fav=" + favHit, "prog=" + progHit, "n=" + remap.size);
+}
+
+/** 启动/导入时跑一遍:换掉靠不住的 id,并把收藏与进度的键搬过去 */
+function migrateSourceIds() {
+  const { list, remap } = normalizeSourceIds(S.sources || []);
+  const changed =
+    remap.size > 0 ||
+    list.some((s, i) => s.id !== ((S.sources[i] || {}).id || ""));
+  if (!changed) return false;
+  const before = (S.sources || []).map((s) => s.id).join(",");
+  S.sources = list;
+  rewriteIdKeys(remap);
+  persistSources();
+  log(
+    "source ids migrated",
+    before + " → " + list.map((s) => s.id).join(","),
+    "remap=" + remap.size
+  );
+  return true;
 }
 
 /** 源的 kind:后端序列化叫 type,早期前端写的是 kind,两个都认 */
@@ -1408,12 +1585,14 @@ function renderSourceManager() {
       '<p class="hint">这个类型下还没有源。点下面的「添加源」加一个,或者切回「全部」。</p>';
     return;
   }
+  // 行上用「列表下标」而不是 id:同 id 的两条源不会互相误伤(A1)
   box.innerHTML = list
     .map((s) => {
       const active = !!(S.source && S.source.id === s.id);
       const crawl = isCrawlSource(s);
+      const idx = all.indexOf(s);
       return (
-        '<div class="m3e-list-item" data-id="' + esc(s.id) + '"' + (active ? ' data-active="1"' : "") + ">" +
+        '<div class="m3e-list-item" data-idx="' + idx + '"' + (active ? ' data-active="1"' : "") + ">" +
           '<span class="m3e-list-item__leading"><span class="m3e-icon" aria-hidden="true">' +
             (isPluginSource(s) ? "extension" : "dns") + "</span></span>" +
           '<span class="m3e-list-item__content">' +
@@ -1427,8 +1606,8 @@ function renderSourceManager() {
           "</span>" +
           '<span class="m3e-list-item__trailing">' +
             statusDotHtml(s) +
-            '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="more" data-id="' +
-              esc(s.id) + '" aria-haspopup="menu" aria-label="更多 · ' + esc(s.name) + '">' +
+            '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="more" data-idx="' +
+              idx + '" aria-haspopup="menu" aria-label="更多 · ' + esc(s.name) + '">' +
               '<span class="m3e-icon" aria-hidden="true">more_vert</span></button>' +
           "</span>" +
         "</div>"
@@ -1440,7 +1619,7 @@ function renderSourceManager() {
 /** 行「更多」菜单:编辑 / 测试连接 / 设为当前 / 置顶 / 复制地址 / 删除 */
 function openSourceRowMenu(src, anchor) {
   const active = !!(S.source && S.source.id === src.id);
-  const firstInList = (S.sources || []).findIndex((s) => s.id === src.id) === 0;
+  const firstInList = (S.sources || []).indexOf(src) === 0;
   return openMenu(
     anchor,
     [
@@ -1467,7 +1646,7 @@ async function onSourceRowAction(id, src) {
   if (id === "current") return setCurrentSource(src);
   if (id === "pin") return pinSource(src);
   if (id === "copy") return copySourceUrl(src);
-  if (id === "del") return removeSource(src.id);
+  if (id === "del") return removeSource(src);
 }
 
 /** 设为当前:走统一的 switchSource(会写 recent 与 currentSource) */
@@ -1480,12 +1659,9 @@ async function setCurrentSource(src) {
 
 /** 置顶 = 把它挪到列表第一个,顺序本身要落盘 */
 async function pinSource(src) {
-  const list = (S.sources || []).filter((s) => s.id !== src.id);
+  const list = (S.sources || []).filter((s) => s !== src);
   if (list.length === (S.sources || []).length) return;
-  S.sources = [src].concat(list);
-  await persistSources();
-  renderSourceManager();
-  renderSources();
+  await applySources([src].concat(list));
   toast("已置顶「" + src.name + "」");
 }
 
@@ -1529,6 +1705,23 @@ async function persistSources() {
     log("SOURCES SAVE FAIL", errText(e));
     toast("保存源列表失败:" + errText(e), { dismissible: true });
   }
+}
+
+/**
+ * 源列表变了(加/改/删/导入/置顶)统一走这里:补 id(与名字解耦)、
+ * 换 id 时把收藏与进度的键搬过去、落盘、重画所有相关视图。
+ */
+async function applySources(list) {
+  const { list: fixed, remap } = normalizeSourceIds(list || []);
+  S.sources = fixed;
+  if (remap.size) {
+    rewriteIdKeys(remap);
+    renderFavs();
+  }
+  await persistSources();
+  renderSourceManager();
+  renderSources();
+  syncSetSummaries();
 }
 
 /** 类型下拉跟着地址走:认出来了就锁死并说明,认不出来才放开手选 */
@@ -1593,7 +1786,8 @@ async function editSource(src, preset) {
   if (!src2) return;
   const list = S.sources.slice();
   if (src) {
-    const i = list.findIndex((x) => x.id === src.id);
+    // 按对象找位置(不是按 id):同 id 的两条源不会互相误伤
+    const i = list.indexOf(src);
     if (i >= 0) list[i] = Object.assign({}, src2, { id: src.id });
     else list.push(src2);
   } else {
@@ -1603,10 +1797,7 @@ async function editSource(src, preset) {
     }
     list.push(src2);
   }
-  S.sources = list;
-  await persistSources();
-  renderSourceManager();
-  renderSources();
+  await applySources(list);
   toast(src ? "已保存「" + src2.name + "」" : "已添加「" + src2.name + "」");
 }
 
@@ -1638,9 +1829,9 @@ async function addFromClipboard() {
   });
 }
 
-async function removeSource(id) {
-  const src = (S.sources || []).find((x) => x.id === id);
-  if (!src) return;
+async function removeSource(src) {
+  // 按对象删:同 id 的两条源只删点中的那条
+  if (!src || !(S.sources || []).includes(src)) return;
   const ok = await confirmDialog(
     "删除源「" + src.name + "」?",
     "删掉之后可以在「添加源」里重新加回来。",
@@ -1648,18 +1839,15 @@ async function removeSource(id) {
     true
   );
   if (!ok) return;
-  const list = S.sources.filter((x) => x.id !== id);
+  const list = S.sources.filter((x) => x !== src);
   if (!list.length) {
     toast("至少得留一个源");
     return;
   }
-  S.sources = list;
-  dropRecent(id); // 删掉的源不该再出现在「最近使用」里
-  await persistSources();
-  renderSourceManager();
-  renderSources();
+  dropRecent(src.id); // 删掉的源不该再出现在「最近使用」里
+  await applySources(list);
   toast("已删除「" + src.name + "」");
-  if (S.source && S.source.id === id) await switchSource(list[0]);
+  if (S.source === src) await switchSource(list[0]);
 }
 
 /** 网络导入:跳过的 iplayr 爬取配置要明说,不能静默丢 */
@@ -1679,10 +1867,7 @@ async function importFromIndex() {
     const have = new Set(S.sources.map((x) => x.url));
     const fresh = list.filter((x) => !have.has(x.url));
     const dup = list.length - fresh.length;
-    S.sources = S.sources.concat(fresh);
-    await persistSources();
-    renderSourceManager();
-    renderSources();
+    await applySources(S.sources.concat(fresh));
     log(
       "index imported",
       "new=" + fresh.length,
@@ -1715,12 +1900,7 @@ async function importPluginFile(e) {
     const text = await f.text();
     const res = await invoke("save_plugin", { fileName: f.name, text: text });
     const exists = S.sources.some((x) => x.id === res.id);
-    if (!exists) {
-      S.sources = S.sources.concat([{ id: res.id, name: res.name, type: "webox", url: res.path }]);
-      await persistSources();
-    }
-    renderSourceManager();
-    renderSources();
+    if (!exists) await applySources(S.sources.concat([{ id: res.id, name: res.name, type: "webox", url: res.path }]));
     log("plugin imported", res.id);
     toast("已导入插件:" + res.name);
   } catch (err) {
@@ -1741,10 +1921,7 @@ async function importJsonFile(e) {
     const merged = uniqSources(S.sources.concat(raw.map(normSource).filter(Boolean)));
     if (!merged.length) throw new Error("没有识别到可用的源");
     const added = merged.length - S.sources.length;
-    S.sources = merged;
-    await persistSources();
-    renderSourceManager();
-    renderSources();
+    await applySources(merged);
     log("sources imported", String(merged.length));
     toast("已导入,新增 " + Math.max(0, added) + " 个,当前共 " + merged.length + " 个源");
   } catch (err) {
@@ -1761,12 +1938,13 @@ function bindSourceManager() {
   const box = $("srcmgr");
   if (box && !box.dataset.bound) {
     box.dataset.bound = "1";
+    // 行按「列表下标」解析成源对象:同 id 的两条源不会误伤(A1)
+    const srcAt = (el) => (S.sources || [])[Number(el && el.getAttribute("data-idx"))];
     box.onclick = (e) => {
       const b = e.target.closest("button[data-act]");
       if (b) {
         const act = b.getAttribute("data-act");
-        const id = b.getAttribute("data-id");
-        const src = (S.sources || []).find((x) => x.id === id);
+        const src = srcAt(b);
         if (!src) return;
         // 再点同一个「更多」= 收起来
         if (act === "more") {
@@ -1778,18 +1956,14 @@ function bindSourceManager() {
           openSourceRowMenu(src, b);
           return;
         }
-        if (act === "edit") return editSource(src);
-        if (act === "del") return removeSource(id);
+        if (act === "home") return showView("home");
         return;
       }
-      // 点整行 = 切到那个源
-      const row = e.target.closest(".m3e-list-item[data-id]");
+      // 点整行 = 设为当前源,但留在源页(I5)
+      const row = e.target.closest(".m3e-list-item[data-idx]");
       if (!row) return;
-      const src = S.sources.find((x) => x.id === row.getAttribute("data-id"));
-      if (src && (!S.source || src.id !== S.source.id)) {
-        renderSources();
-        switchSource(src);
-      }
+      const src = srcAt(row);
+      if (src && S.source !== src) setCurrentSource(src, { stay: true });
     };
   }
   if ($("srcAdd") && !$("srcAdd").dataset.bound) {
@@ -2293,7 +2467,11 @@ function progSet(key, val) {
   if (!key) return;
   const all = progAll();
   all[key] = val;
-  try { localStorage.setItem(PROG_KEY, JSON.stringify(all)); } catch (_) {}
+  progWrite(all);
+}
+/** 整表写回(换源 id 时要搬键,见 rewriteIdKeys) */
+function progWrite(all) {
+  try { localStorage.setItem(PROG_KEY, JSON.stringify(all || {})); } catch (_) {}
 }
 function fmtTime(sec) {
   sec = Math.max(0, Math.round(sec || 0));

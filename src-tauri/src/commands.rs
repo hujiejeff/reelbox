@@ -87,12 +87,14 @@ pub async fn import_index(url: String) -> Result<ImportReport, String> {
                 report.skipped_names.push(name);
                 continue;
             }
-            let slug: String = name
-                .chars()
-                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-                .collect();
-            let n = report.sources.len() + 1;
-            report.sources.push(Source { id: format!("{}-{}", slug.trim_matches('-'), n), name, kind, url, health: None });
+            // id 由地址决定,与名字无关:中文名不会再被压成一串 "-"(A1)
+            let mut id = source::id_for_url(&url);
+            let mut n = 2;
+            while report.sources.iter().any(|s| s.id == id) {
+                id = format!("{}-{}", source::id_for_url(&url), n);
+                n += 1;
+            }
+            report.sources.push(Source { id, name, kind, url, health: None });
         }
         Ok(report)
     })

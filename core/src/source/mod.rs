@@ -33,6 +33,20 @@ pub struct Health {
     pub note: String,
 }
 
+/// 源的 id:地址的 32 位短哈希(FNV-1a,8 位十六进制)。
+///
+/// id 只跟地址有关,和名字无关 —— 中文名不会再被压成一串 `-`(见
+/// `docs/REVIEW-2026-11-14.md` A1)。和 `ui/app.js` 的 `shortHash` 是同一个算法
+/// (按 UTF-16 码元算),所以两边算出来一样,迁移可以反复跑。
+pub fn id_for_url(url: &str) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for unit in url.encode_utf16() {
+        h ^= unit as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("{h:08x}")
+}
+
 /// 当前时间的 UTC ISO8601(`2026-11-14T13:45:07Z`)。
 /// 只为了写进 health.checked_at,不值得引 chrono。
 pub fn now_iso() -> String {
@@ -143,7 +157,23 @@ pub fn defaults() -> Vec<Source> {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, is_crawl_config, now_iso, Health, Source};
+    use super::{civil_from_days, id_for_url, is_crawl_config, now_iso, Health, Source};
+
+    #[test]
+    fn source_id_depends_on_url_not_name() {
+        let a = id_for_url("https://example.com/api.php/provide/vod");
+        assert_eq!(a.len(), 8, "8 位十六进制: {a}");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "只该有十六进制: {a}");
+        // 同一地址永远同一个 id(迁移幂等的前提)
+        assert_eq!(a, id_for_url("https://example.com/api.php/provide/vod"));
+        // 不同地址不同 id
+        assert_ne!(a, id_for_url("https://example.com/other"));
+        // 中文名不再参与:两个中文名源的 id 各自独立,不会塌成 "-3"
+        let dbk = id_for_url("https://raw.githubusercontent.com/m3u8playlist/dp/master/iplayr/dbk.json");
+        let cz = id_for_url("https://raw.githubusercontent.com/m3u8playlist/dp/master/iplayr/cz.json");
+        assert_ne!(dbk, cz);
+        assert!(!dbk.starts_with('-'), "不该是名字塌出来的样子: {dbk}");
+    }
 
     #[test]
     fn skips_iplayr_crawl_configs() {
