@@ -213,8 +213,9 @@ function appendCards(from) {
     .slice(from)
     .map(
       (it, k) =>
-        '<article class="card" data-i="' + (from + k) + '"><div class="poster"><img alt="" loading="lazy"></div>' +
-        '<div class="meta"><b>' + esc(it.title) + "</b><span>" + esc(it.subtitle || "") + "</span></div></article>"
+        '<article class="card" data-i="' + (from + k) + '"><div class="poster"><img alt="" loading="lazy">' +
+        (it.subtitle ? '<span class="badge">' + esc(it.subtitle) + "</span>" : "") +
+        '</div><div class="meta"><b>' + esc(it.title) + "</b></div></article>"
     )
     .join("");
   const added = Array.from(frag.children);
@@ -376,6 +377,21 @@ function esc(s) {
   })[c]);
 }
 
+function applyTheme(t) {
+  document.documentElement.setAttribute("data-theme", t);
+  const icon = $("btnTheme").querySelector(".m3e-icon");
+  if (icon) icon.textContent = t === "dark" ? "light_mode" : "dark_mode";
+  try { localStorage.setItem("reelbox-theme", t); } catch (_) {}
+}
+
+function initTheme() {
+  let t = "dark";
+  try { t = localStorage.getItem("reelbox-theme") || "dark"; } catch (_) {}
+  applyTheme(t);
+  $("btnTheme").onclick = () =>
+    applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
+}
+
 function layoutControls() {
   const controls = $("controls");
   const wide = window.matchMedia("(min-width: 840px)").matches;
@@ -397,4 +413,5 @@ $("scroll").addEventListener("scroll", () => {
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) loadMore();
 });
 
+initTheme();
 init();
