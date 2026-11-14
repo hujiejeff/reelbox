@@ -23,32 +23,16 @@
 
   .rail { flex: none; display: none; }
   .rail__grow { flex: 1; }
-  /* 窄屏:悬浮胶囊(浮在内容上方) */
+  /* 窄屏:官方 floating toolbar(纯图标) */
   .float-tabs {
-    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
-    display: flex; gap: 4px; padding: 6px; z-index: 30;
-    border-radius: 999px;
-    background: var(--m3e-sys-color-surface-container-high);
-    box-shadow: 0 8px 24px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.10);
-    -webkit-backdrop-filter: blur(12px);
-    backdrop-filter: blur(12px);
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30;
   }
-  .ftab {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 2px; height: 58px; padding: 6px 18px; flex: none;
-    border: none; cursor: pointer; border-radius: 999px; background: transparent;
-    color: var(--m3e-sys-color-on-surface-variant);
-    font: 600 13px/1 system-ui, "PingFang SC", sans-serif;
-    transition: background-color .22s cubic-bezier(.2,.9,.3,1.05),
-                color .22s cubic-bezier(.2,.9,.3,1.05),
-                padding .22s cubic-bezier(.2,.9,.3,1.05);
-  }
-  .ftab .m3e-icon { font-size: 22px; flex: none; }
-  .ftab span:last-child { font: 600 11px/1 system-ui, "PingFang SC", sans-serif; white-space: nowrap; }
-  .ftab[aria-current="page"] {
+  .float-tabs .m3e-floating-toolbar__bar { border-radius: 999px; }
+  .float-tabs .m3e-icon-button[aria-current="page"] {
     background: var(--m3e-sys-color-secondary-container);
     color: var(--m3e-sys-color-on-secondary-container);
   }
+  @media (min-width: 600px) { .float-tabs { display: none; } }
 
   /* 桌面:一列侧栏,导航和分类在同一列 */
   .side { flex: none; display: none; width: 232px; flex-direction: column;
@@ -134,7 +118,6 @@
 
   /* medium: rail 出现 */
   @media (min-width: 600px) {
-    .float-tabs { display: none; }
     .rail { display: flex; width: 84px; }
     .grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
     .scroll { padding-bottom: 32px; }
@@ -282,11 +265,19 @@
     </div>
   </div>
 
-  <nav class="float-tabs" aria-label="主导航">
-    <button class="ftab" type="button" data-nav="home" aria-current="page"><span class="m3e-icon">home</span><span>首页</span></button>
-    <button class="ftab" type="button" data-nav="fav"><span class="m3e-icon">favorite</span><span>喜欢</span></button>
-    <button class="ftab" type="button" data-nav="settings"><span class="m3e-icon">settings</span><span>设置</span></button>
-  </nav>
+  <div class="float-tabs m3e-floating-toolbar" role="toolbar" aria-label="主导航">
+    <div class="m3e-floating-toolbar__bar">
+      <button class="m3e-icon-button m3e-icon-button--standard" type="button" data-nav="home" aria-current="page" aria-label="首页">
+        <span class="m3e-icon" aria-hidden="true">home</span>
+      </button>
+      <button class="m3e-icon-button m3e-icon-button--standard" type="button" data-nav="fav" aria-label="喜欢">
+        <span class="m3e-icon" aria-hidden="true">favorite</span>
+      </button>
+      <button class="m3e-icon-button m3e-icon-button--standard" type="button" data-nav="settings" aria-label="设置">
+        <span class="m3e-icon" aria-hidden="true">settings</span>
+      </button>
+    </div>
+  </div>
 </div>
 
 <script>
