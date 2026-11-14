@@ -97,6 +97,46 @@ pub async fn search(source: Source, keyword: String, page: u32) -> Result<Page, 
 
 #[tauri::command]
 pub async fn detail(source: Source, id: String) -> Result<Detail, String> {
+    if is_plugin(&source) {
+        return blocking(move || {
+            use reelbox_core::model::{Detail, Episode, Group};
+            let path = std::path::PathBuf::from(&source.url);
+            let did = id.clone();
+            let arg = format!("{{\"id\":\"{}\"}}", id.replace('"', ""));
+            let out = plugin::run_file(&path, "detail", &arg, plugin_fetch())?;
+            let v: serde_json::Value =
+                serde_json::from_str(&out).map_err(|e| format!("detail 返回值不是 JSON: {e}"))?;
+            let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let mut groups = Vec::new();
+            if let Some(gs) = v.get("groups").and_then(|x| x.as_array()) {
+                for (i, g) in gs.iter().enumerate() {
+                    let mut eps = Vec::new();
+                    if let Some(es) = g.get("episodes").and_then(|x| x.as_array()) {
+                        for (j, e) in es.iter().enumerate() {
+                            let eid = e.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            if eid.is_empty() {
+                                continue;
+                            }
+                            let name = e
+                                .get("name")
+                                .and_then(|x| x.as_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| format!("第 {} 集", j + 1));
+                            eps.push(Episode { id: eid, name });
+                        }
+                    }
+                    let gname = g
+                        .get("name")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("线路 {}", i + 1));
+                    groups.push(Group { id: format!("g{}", i), name: gname, episodes: eps });
+                }
+            }
+            Ok(Detail { id: did, title: s("title"), poster: s("poster"), summary: s("summary"), groups })
+        })
+        .await;
+    }
     blocking(move || Client::new(source).detail(&id)).await
 }
 
