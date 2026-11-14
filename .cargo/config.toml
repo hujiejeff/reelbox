@@ -1,8 +1,0 @@
-# Windows + MinGW(GNU) 工具链:全部装在 D 盘,免管理员。
-# target-dir 放在无空格路径:windres 处理不了带空格的路径。
-[build]
-target-dir = "D:/rt"
-
-[target.x86_64-pc-windows-gnu]
-linker = "D:/rust/w64devkit/bin/gcc.exe"
-ar = "D:/rust/w64devkit/bin/ar.exe"

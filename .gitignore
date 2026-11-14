@@ -9,3 +9,4 @@ src-tauri/gen/
 docs/dev/
 .reelbox-scratch/
 *.tmp
+.cargo/config.toml

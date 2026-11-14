@@ -1,0 +1,11 @@
+# 复制成 config.toml 后按本机路径修改(该文件不进版本库)。
+#
+# target-dir 建议放在没有空格的路径:windres 处理不了带空格的路径。
+# 使用 MSVC 工具链时下面整段 [target.x86_64-pc-windows-gnu] 可以删掉。
+
+[build]
+target-dir = "/path/to/target"
+
+[target.x86_64-pc-windows-gnu]
+linker = "/path/to/w64devkit/bin/gcc.exe"
+ar = "/path/to/w64devkit/bin/ar.exe"
