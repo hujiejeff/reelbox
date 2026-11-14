@@ -26,10 +26,11 @@ async function init() {
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d")) {
       e.preventDefault();
-      toggleDebug();
+      if (debugOn()) toggleDebug();
     }
   });
   log("init start");
+  if (!debugOn()) { const d = document.getElementById("dbg"); if (d) d.hidden = true; }
   bindPlayer();
   document.addEventListener("keydown", (e) => {
     const box = $("player");
@@ -379,6 +380,41 @@ function log() {
   } catch (e) { LOG_BUF.push("LOGFAIL " + e); }
   const box = document.getElementById("dbg");
   if (box && !box.hidden) { box.textContent = LOG_BUF.join(NL); box.scrollTop = box.scrollHeight; }
+}
+
+const DEBUG_KEY = "reelbox.debug";
+
+function debugOn() {
+  try { return localStorage.getItem(DEBUG_KEY) === "1"; } catch (_) { return false; }
+}
+
+function setDebug(on) {
+  try { localStorage.setItem(DEBUG_KEY, on ? "1" : "0"); } catch (_) {}
+  const box = document.getElementById("dbg");
+  if (box && !on) box.hidden = true;
+  syncDebugButtons();
+  log("debug", on ? "on" : "off");
+}
+
+function syncDebugButtons() {
+  const seg = document.getElementById("segDebug");
+  if (!seg) return;
+  const on = debugOn() ? "1" : "0";
+  seg.querySelectorAll("button").forEach((b) => {
+    b.setAttribute("aria-selected", b.getAttribute("data-debug") === on ? "true" : "false");
+  });
+}
+
+function bindDebugToggle() {
+  const seg = document.getElementById("segDebug");
+  if (!seg || seg.dataset.bound) return;
+  seg.dataset.bound = "1";
+  seg.onclick = (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    setDebug(b.getAttribute("data-debug") === "1");
+  };
+  syncDebugButtons();
 }
 
 function toggleDebug() {
@@ -778,6 +814,7 @@ function showView(key) {
   if (list) list.style.display = onHome ? "" : "none";
   if (divider) divider.style.display = onHome ? "" : "none";
   if (onHome) renderParents();
+  if (key === "settings") bindDebugToggle();
 }
 
 function bindSourceMenu() {
