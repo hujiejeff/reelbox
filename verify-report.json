@@ -1,9 +1,9 @@
 ﻿{
     "goal":  "commit + playback implementation",
-    "commit":  "36cc455",
+    "commit":  "7f98661",
     "dirty":  true,
     "tests":  {
-                  "passed":  29,
+                  "passed":  34,
                   "failed":  0
               },
     "checks":  [
@@ -58,8 +58,76 @@
                    {
                        "ok":  true,
                        "name":  "screenshot"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "iframe sandbox=allow-scripts"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "postMessage bridge"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "http.get -\u003e Rust plugin_fetch"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "native DOM selectors"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "wasm in compute.run"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "plugin JS source runner"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "DOMParser html.load"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "app.js -\u003e sandbox hooks"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "stream allowlist registration"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "plugin_read command"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "plugin_fetch command"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "allowlist command"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "boa fallback switch"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "SSRF guard"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "runtime docs"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "sandbox is opaque origin"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "SSRF blocks link-local"
                    }
                ],
     "result":  "PASS",
-    "at":  "2026-11-14T17:11:44"
+    "at":  "2026-11-14T18:45:01"
 }

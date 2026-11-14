@@ -77,7 +77,7 @@ foreach ($c in $pluginChecks) {
 }
 
 # 沙箱必须是不透明 origin:属性值里绝对不能出现 allow-same-origin
-$sandboxAttr = (Select-String -Path "ui/plugin-host.js" -Pattern 'setAttribute\("sandbox"' | ForEach-Object { $_.Line }) -join " "
+$sandboxAttr = (Select-String -Path "ui/plugin-host.js" -Pattern 'setAttribute("sandbox",s*"([^"]*)")' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value }) -join " "
 if ($sandboxAttr -match "allow-same-origin") {
   Write-Host "  [UNSAFE] iframe 带了 allow-same-origin" -ForegroundColor Red; $fail = 1
   $results += @{ name = "sandbox is opaque origin"; ok = $false }
@@ -103,16 +103,22 @@ if ($Live) {
   } else {
     Stop-Process -Name reelbox -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 800
+    $before = 0
+    if (Test-Path $log) { $before = (Get-Item $log).Length }   # 只看本次启动追加的那段
     Start-Process -FilePath $exe -ArgumentList "--selftest" -WorkingDirectory $PSScriptRoot
     $deadline = (Get-Date).AddSeconds(180)
-    $tail = ""
+    $session = ""
     while ((Get-Date) -lt $deadline) {
       Start-Sleep -Seconds 2
-      if (Test-Path $log) { $tail = (Get-Content $log -Raw) }
-      if ($tail -match "SELFTEST DONE") { break }
+      if (Test-Path $log) {
+        $bytes = [System.IO.File]::ReadAllBytes($log)
+        if ($bytes.Length -gt $before) {
+          $session = [System.Text.Encoding]::UTF8.GetString($bytes, $before, $bytes.Length - $before)
+        }
+      }
+      if ($session -match "SELFTEST DONE") { break }
     }
     Stop-Process -Name reelbox -Force -ErrorAction SilentlyContinue
-    $session = ($tail -split "---- boot ----")[-1]
     ($session -split "`n") | Where-Object { $_ -match "SELFTEST|sandbox ready" } | ForEach-Object { Write-Host "  $_" }
     if ($session -match "SELFTEST PASS") {
       Write-Host "  [OK] live selftest" -ForegroundColor Green

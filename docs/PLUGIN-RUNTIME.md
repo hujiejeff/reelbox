@@ -1,5 +1,9 @@
 # 插件运行时(两套引擎)
 
+> 相关文件:`ui/plugin-host.js`(父页桥)、`ui/plugin-sandbox.js`(iframe 内宿主桩)、
+> `src-tauri/src/commands.rs`(IO 与白名单)、`core/src/plugin/net.rs`(内网拦截)、
+> `docs/PLUGIN-RUNTIME.md`(本文)。
+
 Reelbox 的 `.webox.js` / `.reelbox.js` 插件由 JS 执行。同一份插件现在有两套引擎:
 
 | 引擎 | 跑在哪 | 默认 | 怎么开 |

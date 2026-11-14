@@ -49,7 +49,8 @@ export function initPluginHost(opts) {
   });
 
   const box = document.createElement("iframe");
-  box.setAttribute("sandbox", "allow-scripts"); // 关键:绝对不要加 allow-same-origin
+  // 关键:属性值只给 allow-scripts,绝对不要加 allow-same-origin
+  box.setAttribute("sandbox", "allow-scripts");
   box.setAttribute("aria-hidden", "true");
   box.setAttribute("tabindex", "-1");
   box.title = "plugin sandbox";
