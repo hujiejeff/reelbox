@@ -103,8 +103,8 @@
   .scroll { flex: 1; overflow-y: auto; padding: 14px 16px 96px; }
   .grid {
     display: grid; gap: 18px 14px;
-    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-    max-width: 1240px; margin-inline: auto;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    max-width: 1290px; margin-inline: auto;
   }
   .card { cursor: pointer; }
   .poster { aspect-ratio: 2 / 3; border-radius: 18px;
@@ -127,7 +127,7 @@
   /* medium: rail 出现 */
   @media (min-width: 600px) {
     .rail { display: flex; width: 84px; }
-    .grid { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
     .scroll { padding-bottom: 32px; }
   }
   /* expanded: 单列侧栏,顶部 Tab 藏起来 */
@@ -138,10 +138,7 @@
     .topbar { padding: 12px 24px 4px; }
     .toolbar { padding-inline: 24px; }
     .scroll { padding-inline: 24px; }
-    .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
-  }
-  @media (min-width: 1280px) {
-    .grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
   }
 
   /* 真实数据用到的补充样式 */
@@ -195,6 +192,74 @@
   }
   .search-go:hover { background: var(--m3e-sys-color-surface-container-highest); }
   .side__brand { display: none; }
+
+  /* 配色方案:只覆盖真正被界面用到的几个角色 */
+  html[data-accent="blue"] {
+    --m3e-sys-color-primary: #1a5fd0;
+    --m3e-sys-color-on-primary: #ffffff;
+    --m3e-sys-color-secondary-container: #d7e3ff;
+    --m3e-sys-color-on-secondary-container: #001b3f;
+  }
+  html[data-theme="dark"][data-accent="blue"] {
+    --m3e-sys-color-primary: #adc7ff;
+    --m3e-sys-color-on-primary: #002f68;
+    --m3e-sys-color-secondary-container: #2b4678;
+    --m3e-sys-color-on-secondary-container: #d7e3ff;
+  }
+  html[data-accent="green"] {
+    --m3e-sys-color-primary: #2e6b3e;
+    --m3e-sys-color-on-primary: #ffffff;
+    --m3e-sys-color-secondary-container: #c9eed3;
+    --m3e-sys-color-on-secondary-container: #00210d;
+  }
+  html[data-theme="dark"][data-accent="green"] {
+    --m3e-sys-color-primary: #9dd6ab;
+    --m3e-sys-color-on-primary: #00391b;
+    --m3e-sys-color-secondary-container: #2b5037;
+    --m3e-sys-color-on-secondary-container: #c9eed3;
+  }
+  html[data-accent="orange"] {
+    --m3e-sys-color-primary: #a4420a;
+    --m3e-sys-color-on-primary: #ffffff;
+    --m3e-sys-color-secondary-container: #ffdbc9;
+    --m3e-sys-color-on-secondary-container: #351000;
+  }
+  html[data-theme="dark"][data-accent="orange"] {
+    --m3e-sys-color-primary: #ffb592;
+    --m3e-sys-color-on-primary: #572200;
+    --m3e-sys-color-secondary-container: #6f3517;
+    --m3e-sys-color-on-secondary-container: #ffdbc9;
+  }
+  html[data-accent="rose"] {
+    --m3e-sys-color-primary: #a83b62;
+    --m3e-sys-color-on-primary: #ffffff;
+    --m3e-sys-color-secondary-container: #ffd9e2;
+    --m3e-sys-color-on-secondary-container: #3e001d;
+  }
+  html[data-theme="dark"][data-accent="rose"] {
+    --m3e-sys-color-primary: #ffb1c8;
+    --m3e-sys-color-on-primary: #5f1134;
+    --m3e-sys-color-secondary-container: #5f2843;
+    --m3e-sys-color-on-secondary-container: #ffd9e2;
+  }
+
+  /* 设置页 */
+  .settings { padding: 24px; max-width: 560px; }
+  .settings h3 { font-size: 15px; margin: 0 0 14px; font-weight: 700; }
+  .accents { display: flex; gap: 12px; margin-bottom: 10px; }
+  .accent {
+    width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
+    border: 2px solid transparent; padding: 0;
+    box-shadow: inset 0 0 0 2px var(--m3e-sys-color-surface);
+  }
+  .accent[aria-selected="true"] { border-color: var(--m3e-sys-color-on-surface); }
+  .hint { font-size: 12px; color: var(--m3e-sys-color-on-surface-variant); margin: 6px 0 0; }
+
+  /* 无封面时的中性占位,避免任何亮边 */
+  .poster { background: var(--m3e-sys-color-surface-container-high); }
+  /* 有图之后去掉底色,避免圆角处透出一圈亮边 */
+  .poster.has-img { background: transparent; }
+  .poster img { display: block; }
 </style>
 </head>
 <body>
@@ -252,7 +317,11 @@
       </div>
 
       <div class="view" id="v-settings">
-        <div class="placeholder"><span class="m3e-icon">settings</span><b>设置</b><span>源管理、播放器选项</span></div>
+        <div class="settings">
+          <h3>配色</h3>
+          <div class="accents" id="accents"></div>
+          <p class="hint">深色 / 浅色用左侧的日月光按钮切换</p>
+        </div>
       </div>
 
       <div class="view" id="v-detail"></div>

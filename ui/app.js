@@ -213,7 +213,7 @@ function appendCards(from) {
     .slice(from)
     .map(
       (it, k) =>
-        '<article class="card" data-i="' + (from + k) + '"><div class="poster"><img alt="" loading="lazy">' +
+        '<article class="card" data-i="' + (from + k) + '"><div class="poster">' +
         (it.subtitle ? '<span class="badge">' + esc(it.subtitle) + "</span>" : "") +
         '</div><div class="meta"><b>' + esc(it.title) + "</b></div></article>"
     )
@@ -224,8 +224,16 @@ function appendCards(from) {
   added.forEach((el, k) => {
     const it = S.items[from + k];
     if (!it || !it.poster) return;
-    const img = el.querySelector("img");
-    posterFor(it.poster).then((u) => { if (img) img.src = u; }).catch(() => {});
+    const box = el.querySelector(".poster");
+    posterFor(it.poster)
+      .then((u) => {
+        const img = document.createElement("img");
+        img.alt = "";
+        img.src = u;
+        box.classList.add("has-img");
+        box.prepend(img);
+      })
+      .catch(() => {});
   });
 }
 
@@ -351,11 +359,17 @@ document.addEventListener("click", (e) => {
   }
 });
 
+const SPINNER =
+  '<div class="m3e-circular-progress" role="progressbar" aria-label="加载中">' +
+  '<svg class="m3e-circular-progress__svg" aria-hidden="true" focusable="false">' +
+  '<circle class="m3e-circular-progress__track"></circle>' +
+  '<circle class="m3e-circular-progress__indicator"></circle></svg></div>';
+
 function setStatus() {
   const el = $("empty");
-  if (S.loading) {
+  if (S.loading && !S.items.length) {
     el.style.display = "";
-    el.textContent = "加载中…";
+    el.innerHTML = SPINNER;
   }
 }
 
@@ -381,15 +395,49 @@ function applyTheme(t) {
   document.documentElement.setAttribute("data-theme", t);
   const icon = $("btnTheme").querySelector(".m3e-icon");
   if (icon) icon.textContent = t === "dark" ? "light_mode" : "dark_mode";
-  try { localStorage.setItem("reelbox-theme", t); } catch (_) {}
+  try { localStorage.setItem("reelbox.theme", t); } catch (_) {}
 }
 
 function initTheme() {
   let t = "dark";
-  try { t = localStorage.getItem("reelbox-theme") || "dark"; } catch (_) {}
+  try { t = localStorage.getItem("reelbox.theme") || "dark"; } catch (_) {}
   applyTheme(t);
   $("btnTheme").onclick = () =>
     applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
+}
+
+const ACCENTS = [
+  { id: "", label: "紫", color: "#6750a4" },
+  { id: "blue", label: "蓝", color: "#1a5fd0" },
+  { id: "green", label: "绿", color: "#2e6b3e" },
+  { id: "orange", label: "橙", color: "#a4420a" },
+  { id: "rose", label: "玫红", color: "#a83b62" },
+];
+
+function applyAccent(id) {
+  if (id) document.documentElement.setAttribute("data-accent", id);
+  else document.documentElement.removeAttribute("data-accent");
+  document.querySelectorAll(".accent").forEach((el) => {
+    el.setAttribute("aria-selected", el.getAttribute("data-accent") === id ? "true" : "false");
+  });
+  try { localStorage.setItem("reelbox.accent", id); } catch (_) {}
+}
+
+function renderAccents() {
+  const box = $("accents");
+  if (!box) return;
+  box.innerHTML = ACCENTS.map(
+    (a) =>
+      '<button class="accent" data-accent="' + a.id + '" title="' + a.label +
+      '" aria-selected="false" style="background:' + a.color + '"></button>'
+  ).join("");
+  box.onclick = (e) => {
+    const b = e.target.closest(".accent");
+    if (b) applyAccent(b.getAttribute("data-accent"));
+  };
+  let cur = "";
+  try { cur = localStorage.getItem("reelbox.accent") || ""; } catch (_) {}
+  applyAccent(cur);
 }
 
 function layoutControls() {
@@ -414,4 +462,5 @@ $("scroll").addEventListener("scroll", () => {
 });
 
 initTheme();
+renderAccents();
 init();
