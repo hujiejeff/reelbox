@@ -5,6 +5,7 @@
 //! 不需要跑代码就能拿到 —— 先支持"只读清单"的插件。
 
 pub mod adapt;
+pub mod net;
 pub mod runtime;
 
 use std::collections::BTreeMap;
