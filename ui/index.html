@@ -6,30 +6,17 @@
 <title>Reelbox</title>
 <link rel="stylesheet" href="vendor/m3e.css">
 <style>
-  @font-face {
-    font-family: "Material Symbols Outlined";
-    font-style: normal;
-    font-weight: 100 700;
-    src: url("vendor/material-symbols.woff2") format("woff2");
-  }
-  .m3e-icon {
-    font-family: "Material Symbols Outlined", sans-serif;
-    font-weight: normal; font-style: normal; font-size: 24px; line-height: 1;
-    letter-spacing: normal; text-transform: none; display: inline-block;
-    white-space: nowrap; direction: ltr;
-    font-feature-settings: "liga";
-    -webkit-font-feature-settings: "liga";
-  }
+  @font-face { font-family: "Material Symbols Outlined"; font-style: normal; font-weight: 100 700;
+    src: url("vendor/material-symbols.woff2") format("woff2"); }
+  .m3e-icon { font-family: "Material Symbols Outlined", sans-serif; font-weight: normal; font-style: normal;
+    font-size: 24px; line-height: 1; letter-spacing: normal; text-transform: none; display: inline-block;
+    white-space: nowrap; direction: ltr; font-feature-settings: "liga"; -webkit-font-feature-settings: "liga"; }
 
   html, body { margin: 0; height: 100%; }
   body {
-    background: var(--m3e-sys-color-surface);
-    color: var(--m3e-sys-color-on-surface);
-    font-family: system-ui, "Segoe UI", "PingFang SC", sans-serif;
-    overflow: hidden;
+    background: var(--m3e-sys-color-surface); color: var(--m3e-sys-color-on-surface);
+    font-family: system-ui, "Segoe UI", "PingFang SC", sans-serif; overflow: hidden;
   }
-
-  /* 三档窗口:compact <600 / medium 600-840 / expanded >=840 */
   .app { display: flex; flex-direction: column; height: 100vh; }
   .body { display: flex; flex: 1; min-height: 0; }
 
@@ -37,87 +24,90 @@
   .rail__grow { flex: 1; }
   .bottombar { flex: none; display: flex; }
 
+  /* 宽屏才出现的分类面板 */
+  .catpanel { flex: none; display: none; width: 196px; overflow-y: auto; padding: 8px 8px 24px;
+    scrollbar-width: none; }
+  .catpanel::-webkit-scrollbar { display: none; }
+  .catgroup { font: 600 11px/1 system-ui; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--m3e-sys-color-on-surface-variant); padding: 16px 12px 6px; }
+  .cat { display: block; width: 100%; text-align: left; border: none; cursor: pointer;
+    height: 40px; padding: 0 12px; border-radius: 20px; background: transparent; color: inherit;
+    font: 500 14px/1 system-ui, "PingFang SC", sans-serif; }
+  .cat:hover { background: var(--m3e-sys-color-surface-container-high); }
+  .cat[aria-selected="true"] { background: var(--m3e-sys-color-secondary-container);
+    color: var(--m3e-sys-color-on-secondary-container); }
+  .cat--child { padding-left: 24px; }
+
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
-  .topbar {
-    flex: none; display: flex; align-items: center; gap: 8px;
-    padding: 8px 16px 4px;
-  }
-  .src-btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    height: 44px; padding: 0 12px 0 14px; border: none; cursor: pointer;
-    border-radius: 22px; background: transparent; color: inherit;
-    font: 600 17px/1 system-ui, "PingFang SC", sans-serif;
-  }
+  .topbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 16px 4px; }
+  .src-btn { display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0 12px 0 14px;
+    border: none; cursor: pointer; border-radius: 22px; background: transparent; color: inherit;
+    font: 600 17px/1 system-ui, "PingFang SC", sans-serif; }
   .src-btn:hover { background: var(--m3e-sys-color-surface-container-high); }
   .src-btn .m3e-icon { font-size: 20px; color: var(--m3e-sys-color-on-surface-variant); }
-  .srcmenu {
-    position: absolute; z-index: 20; min-width: 220px; padding: 8px;
-    border-radius: 20px; display: none;
+  .srcmenu { position: absolute; z-index: 20; min-width: 220px; padding: 8px; border-radius: 20px; display: none;
     background: var(--m3e-sys-color-surface-container);
-    box-shadow: 0 8px 28px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.10);
-  }
+    box-shadow: 0 8px 28px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.10); }
   .srcmenu[data-open] { display: block; }
-  .srcmenu button {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    width: 100%; height: 48px; padding: 0 14px; border: none; cursor: pointer;
-    border-radius: 14px; background: transparent; color: inherit;
-    font: 500 14px/1 system-ui, "PingFang SC", sans-serif; text-align: left;
-  }
+  .srcmenu button { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    width: 100%; height: 48px; padding: 0 14px; border: none; cursor: pointer; border-radius: 14px;
+    background: transparent; color: inherit; font: 500 14px/1 system-ui, "PingFang SC", sans-serif; text-align: left; }
   .srcmenu button:hover { background: var(--m3e-sys-color-surface-container-highest); }
   .srcmenu button[aria-checked="true"] { background: var(--m3e-sys-color-secondary-container); }
   .srcmenu .m3e-icon { font-size: 20px; }
 
   .toolbar { flex: none; display: flex; gap: 12px; align-items: center; padding: 6px 16px 12px; }
-  .searchbox {
-    flex: 1; display: flex; align-items: center; gap: 10px; height: 52px;
-    padding: 0 18px; border-radius: 26px; min-width: 0;
-    background: var(--m3e-sys-color-surface-container-high);
-    color: var(--m3e-sys-color-on-surface-variant);
-  }
+  .searchbox { flex: 1; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 18px;
+    border-radius: 26px; min-width: 0; background: var(--m3e-sys-color-surface-container-high);
+    color: var(--m3e-sys-color-on-surface-variant); }
   .searchbox .m3e-icon { font-size: 22px; }
 
-  .chips {
-    flex: none; display: flex; gap: 8px; padding: 0 16px 12px;
-    overflow-x: auto; scrollbar-width: none;
-  }
+  /* 窄/中屏:一级分类做 Tab,二级做 chips */
+  .cattabs { flex: none; display: flex; gap: 4px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; }
+  .cattabs::-webkit-scrollbar { display: none; }
+  .cattab { flex: none; height: 44px; padding: 0 16px; border: none; cursor: pointer; background: transparent;
+    color: var(--m3e-sys-color-on-surface-variant); font: 600 14px/1 system-ui, "PingFang SC", sans-serif;
+    border-bottom: 3px solid transparent; }
+  .cattab[aria-selected="true"] { color: var(--m3e-sys-color-primary); border-bottom-color: var(--m3e-sys-color-primary); }
+
+  .chips { flex: none; display: flex; gap: 8px; padding: 10px 16px 12px; overflow-x: auto; scrollbar-width: none; }
   .chips::-webkit-scrollbar { display: none; }
   .m3e-filter-chip { flex: none; }
 
   .scroll { flex: 1; overflow-y: auto; padding: 0 16px 96px; }
-  .grid {
-    display: grid; gap: 18px 16px;
-    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-  }
+  .grid { display: grid; gap: 18px 16px; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
   .card { cursor: pointer; }
-  .poster {
-    aspect-ratio: 2 / 3; border-radius: 18px;
-    background: linear-gradient(160deg,
-      hsl(calc(212deg + var(--h, 0deg)) 40% 50%),
-      hsl(calc(258deg + var(--h, 0deg)) 46% 22%));
-    transition: transform .18s cubic-bezier(.2,.9,.3,1.2), box-shadow .18s ease;
-  }
+  .poster { aspect-ratio: 2 / 3; border-radius: 18px;
+    background: linear-gradient(160deg, hsl(calc(212deg + var(--h,0deg)) 40% 50%), hsl(calc(258deg + var(--h,0deg)) 46% 22%));
+    transition: transform .18s cubic-bezier(.2,.9,.3,1.2), box-shadow .18s ease; }
   .card:hover .poster { transform: translateY(-3px) scale(1.015); box-shadow: 0 10px 24px rgba(0,0,0,.16); }
   .meta { padding: 9px 2px 0; display: flex; flex-direction: column; gap: 3px; }
   .meta b { font-size: 13px; font-weight: 600; }
   .meta span { font-size: 12px; color: var(--m3e-sys-color-on-surface-variant); }
 
-  .empty { padding: 48px 8px; color: var(--m3e-sys-color-on-surface-variant); }
+  .view { display: none; }
+  .view[data-on] { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; flex: 1; color: var(--m3e-sys-color-on-surface-variant); }
+  .placeholder .m3e-icon { font-size: 48px; opacity: .5; }
 
-  /* medium: 图标栏 */
+  /* medium: rail 出现 */
   @media (min-width: 600px) {
     .bottombar { display: none; }
     .rail { display: flex; width: 84px; }
     .grid { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
     .scroll { padding-bottom: 32px; }
   }
-  /* expanded: 完整导航栏 */
+  /* expanded: rail + 分类面板,顶部 Tab 藏起来 */
   @media (min-width: 840px) {
-    .rail { width: 112px; }
-    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+    .rail { width: 92px; }
+    .catpanel { display: block; }
+    .cattabs, .chips { display: none; }
     .topbar { padding: 12px 24px 4px; }
-    .toolbar, .chips { padding-inline: 24px; }
+    .toolbar { padding-inline: 24px; }
     .scroll { padding-inline: 24px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   }
   @media (min-width: 1280px) {
     .grid { grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); }
@@ -128,35 +118,13 @@
 <div class="app">
   <div class="body">
     <nav class="m3e-navigation-rail rail" aria-label="主导航">
-      <button type="button" class="m3e-navigation-item" data-nav="movie">
+      <button type="button" class="m3e-navigation-item" data-nav="home">
         <span class="m3e-navigation-item__content">
           <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">movie</span>
-          <span class="m3e-navigation-item__label">电影</span>
+          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">home</span>
+          <span class="m3e-navigation-item__label">首页</span>
         </span>
       </button>
-      <button type="button" class="m3e-navigation-item" data-nav="tv">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">live_tv</span>
-          <span class="m3e-navigation-item__label">连续剧</span>
-        </span>
-      </button>
-      <button type="button" class="m3e-navigation-item" data-nav="show">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">celebration</span>
-          <span class="m3e-navigation-item__label">综艺</span>
-        </span>
-      </button>
-      <button type="button" class="m3e-navigation-item" data-nav="anime">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">animation</span>
-          <span class="m3e-navigation-item__label">动漫</span>
-        </span>
-      </button>
-      <div class="rail__grow"></div>
       <button type="button" class="m3e-navigation-item" data-nav="fav">
         <span class="m3e-navigation-item__content">
           <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
@@ -173,6 +141,31 @@
       </button>
     </nav>
 
+    <aside class="catpanel" id="catpanel">
+      <button class="cat" data-cat="" aria-selected="true">全部</button>
+        <div class="catgroup">电影片</div>
+        <button class="cat cat--child" data-cat="动作片" type="button">动作片</button>
+        <button class="cat cat--child" data-cat="喜剧片" type="button">喜剧片</button>
+        <button class="cat cat--child" data-cat="爱情片" type="button">爱情片</button>
+        <button class="cat cat--child" data-cat="科幻片" type="button">科幻片</button>
+        <button class="cat cat--child" data-cat="恐怖片" type="button">恐怖片</button>
+        <button class="cat cat--child" data-cat="剧情片" type="button">剧情片</button>
+        <div class="catgroup">连续剧</div>
+        <button class="cat cat--child" data-cat="国产剧" type="button">国产剧</button>
+        <button class="cat cat--child" data-cat="香港剧" type="button">香港剧</button>
+        <button class="cat cat--child" data-cat="韩国剧" type="button">韩国剧</button>
+        <button class="cat cat--child" data-cat="欧美剧" type="button">欧美剧</button>
+        <button class="cat cat--child" data-cat="日本剧" type="button">日本剧</button>
+        <div class="catgroup">综艺片</div>
+        <button class="cat cat--child" data-cat="大陆综艺" type="button">大陆综艺</button>
+        <button class="cat cat--child" data-cat="港台综艺" type="button">港台综艺</button>
+        <button class="cat cat--child" data-cat="日韩综艺" type="button">日韩综艺</button>
+        <div class="catgroup">动漫片</div>
+        <button class="cat cat--child" data-cat="国产动漫" type="button">国产动漫</button>
+        <button class="cat cat--child" data-cat="日韩动漫" type="button">日韩动漫</button>
+        <button class="cat cat--child" data-cat="欧美动漫" type="button">欧美动漫</button>
+    </aside>
+
     <div class="main">
       <header class="topbar">
         <button class="src-btn" id="srcBtn" aria-haspopup="true" aria-expanded="false">
@@ -185,135 +178,84 @@
           <button role="menuitemradio" aria-checked="false" data-src="lzzy">量子资源<span class="m3e-icon"></span></button>
         </div>
         <div style="flex:1"></div>
-        <button class="m3e-icon-button m3e-icon-button--filled" id="cfgBtn" aria-label="设置" style="display:none">
-          <span class="m3e-icon" aria-hidden="true">settings</span>
-        </button>
       </header>
 
-      <div class="toolbar">
-        <div class="searchbox">
-          <span class="m3e-icon" aria-hidden="true">search</span>
-          <span>搜索影片</span>
+      <div class="view" data-on id="v-home">
+        <div class="toolbar">
+          <div class="searchbox"><span class="m3e-icon" aria-hidden="true">search</span><span>搜索影片</span></div>
+          <button class="m3e-button m3e-button--filled m3e-button--size-m" type="button">筛选</button>
         </div>
-        <button class="m3e-button m3e-button--filled m3e-button--size-m" type="button">筛选</button>
+        <div class="cattabs" id="cattabs">
+          <button class="cattab" aria-selected="true" data-parent="">全部</button>
+          <button class="cattab" data-parent="电影片">电影片</button>
+          <button class="cattab" data-parent="连续剧">连续剧</button>
+          <button class="cattab" data-parent="综艺片">综艺片</button>
+          <button class="cattab" data-parent="动漫片">动漫片</button>
+        </div>
+        <div class="chips" id="childchips">
+          <button class="m3e-filter-chip" type="button">动作片</button>
+          <button class="m3e-filter-chip" type="button">喜剧片</button>
+          <button class="m3e-filter-chip" type="button">爱情片</button>
+          <button class="m3e-filter-chip" type="button">科幻片</button>
+          <button class="m3e-filter-chip" type="button">恐怖片</button>
+          <button class="m3e-filter-chip" type="button">剧情片</button>
+        </div>
+        <div class="scroll"><div class="grid">
+        <article class="card"><div class="poster" style="--h:0deg"></div>
+          <div class="meta"><b>片名 1</b><span>更新至第3集</span></div></article>
+        <article class="card"><div class="poster" style="--h:11deg"></div>
+          <div class="meta"><b>片名 2</b><span>更新至第4集</span></div></article>
+        <article class="card"><div class="poster" style="--h:22deg"></div>
+          <div class="meta"><b>片名 3</b><span>更新至第5集</span></div></article>
+        <article class="card"><div class="poster" style="--h:33deg"></div>
+          <div class="meta"><b>片名 4</b><span>更新至第6集</span></div></article>
+        <article class="card"><div class="poster" style="--h:44deg"></div>
+          <div class="meta"><b>片名 5</b><span>更新至第7集</span></div></article>
+        <article class="card"><div class="poster" style="--h:55deg"></div>
+          <div class="meta"><b>片名 6</b><span>更新至第8集</span></div></article>
+        <article class="card"><div class="poster" style="--h:0deg"></div>
+          <div class="meta"><b>片名 7</b><span>更新至第9集</span></div></article>
+        <article class="card"><div class="poster" style="--h:11deg"></div>
+          <div class="meta"><b>片名 8</b><span>更新至第10集</span></div></article>
+        <article class="card"><div class="poster" style="--h:22deg"></div>
+          <div class="meta"><b>片名 9</b><span>更新至第11集</span></div></article>
+        <article class="card"><div class="poster" style="--h:33deg"></div>
+          <div class="meta"><b>片名 10</b><span>更新至第12集</span></div></article>
+        <article class="card"><div class="poster" style="--h:44deg"></div>
+          <div class="meta"><b>片名 11</b><span>更新至第13集</span></div></article>
+        <article class="card"><div class="poster" style="--h:55deg"></div>
+          <div class="meta"><b>片名 12</b><span>更新至第14集</span></div></article>
+        <article class="card"><div class="poster" style="--h:0deg"></div>
+          <div class="meta"><b>片名 13</b><span>更新至第15集</span></div></article>
+        <article class="card"><div class="poster" style="--h:11deg"></div>
+          <div class="meta"><b>片名 14</b><span>更新至第16集</span></div></article>
+        <article class="card"><div class="poster" style="--h:22deg"></div>
+          <div class="meta"><b>片名 15</b><span>更新至第17集</span></div></article>
+        <article class="card"><div class="poster" style="--h:33deg"></div>
+          <div class="meta"><b>片名 16</b><span>更新至第18集</span></div></article>
+        <article class="card"><div class="poster" style="--h:44deg"></div>
+          <div class="meta"><b>片名 17</b><span>更新至第19集</span></div></article>
+        <article class="card"><div class="poster" style="--h:55deg"></div>
+          <div class="meta"><b>片名 18</b><span>更新至第20集</span></div></article>
+        </div></div>
       </div>
 
-      <div class="chips">
-        <button class="m3e-filter-chip" type="button" aria-selected="true">全部</button>
-        <button class="m3e-filter-chip" type="button">动作片</button>
-        <button class="m3e-filter-chip" type="button">喜剧片</button>
-        <button class="m3e-filter-chip" type="button">科幻片</button>
-        <button class="m3e-filter-chip" type="button">恐怖片</button>
-        <button class="m3e-filter-chip" type="button">剧情片</button>
+      <div class="view" id="v-fav">
+        <div class="placeholder"><span class="m3e-icon">favorite</span><b>还没有收藏</b><span>在详情页点 ♡ 收藏</span></div>
       </div>
 
-      <div class="scroll">
-        <div class="grid" id="grid">
-        <article class="card" data-id="0">
-          <div class="poster" style="--h:0deg"></div>
-          <div class="meta"><b>片名 1</b><span>更新至第3集</span></div>
-        </article>
-        <article class="card" data-id="1">
-          <div class="poster" style="--h:11deg"></div>
-          <div class="meta"><b>片名 2</b><span>更新至第4集</span></div>
-        </article>
-        <article class="card" data-id="2">
-          <div class="poster" style="--h:22deg"></div>
-          <div class="meta"><b>片名 3</b><span>更新至第5集</span></div>
-        </article>
-        <article class="card" data-id="3">
-          <div class="poster" style="--h:33deg"></div>
-          <div class="meta"><b>片名 4</b><span>更新至第6集</span></div>
-        </article>
-        <article class="card" data-id="4">
-          <div class="poster" style="--h:44deg"></div>
-          <div class="meta"><b>片名 5</b><span>更新至第7集</span></div>
-        </article>
-        <article class="card" data-id="5">
-          <div class="poster" style="--h:55deg"></div>
-          <div class="meta"><b>片名 6</b><span>更新至第8集</span></div>
-        </article>
-        <article class="card" data-id="6">
-          <div class="poster" style="--h:0deg"></div>
-          <div class="meta"><b>片名 7</b><span>更新至第9集</span></div>
-        </article>
-        <article class="card" data-id="7">
-          <div class="poster" style="--h:11deg"></div>
-          <div class="meta"><b>片名 8</b><span>更新至第10集</span></div>
-        </article>
-        <article class="card" data-id="8">
-          <div class="poster" style="--h:22deg"></div>
-          <div class="meta"><b>片名 9</b><span>更新至第11集</span></div>
-        </article>
-        <article class="card" data-id="9">
-          <div class="poster" style="--h:33deg"></div>
-          <div class="meta"><b>片名 10</b><span>更新至第12集</span></div>
-        </article>
-        <article class="card" data-id="10">
-          <div class="poster" style="--h:44deg"></div>
-          <div class="meta"><b>片名 11</b><span>更新至第13集</span></div>
-        </article>
-        <article class="card" data-id="11">
-          <div class="poster" style="--h:55deg"></div>
-          <div class="meta"><b>片名 12</b><span>更新至第14集</span></div>
-        </article>
-        <article class="card" data-id="12">
-          <div class="poster" style="--h:0deg"></div>
-          <div class="meta"><b>片名 13</b><span>更新至第15集</span></div>
-        </article>
-        <article class="card" data-id="13">
-          <div class="poster" style="--h:11deg"></div>
-          <div class="meta"><b>片名 14</b><span>更新至第16集</span></div>
-        </article>
-        <article class="card" data-id="14">
-          <div class="poster" style="--h:22deg"></div>
-          <div class="meta"><b>片名 15</b><span>更新至第17集</span></div>
-        </article>
-        <article class="card" data-id="15">
-          <div class="poster" style="--h:33deg"></div>
-          <div class="meta"><b>片名 16</b><span>更新至第18集</span></div>
-        </article>
-        <article class="card" data-id="16">
-          <div class="poster" style="--h:44deg"></div>
-          <div class="meta"><b>片名 17</b><span>更新至第19集</span></div>
-        </article>
-        <article class="card" data-id="17">
-          <div class="poster" style="--h:55deg"></div>
-          <div class="meta"><b>片名 18</b><span>更新至第20集</span></div>
-        </article>
-        </div>
-        <div class="empty" id="empty" style="display:none">这里还没有内容</div>
+      <div class="view" id="v-settings">
+        <div class="placeholder"><span class="m3e-icon">settings</span><b>设置</b><span>源管理、播放器选项</span></div>
       </div>
     </div>
   </div>
 
   <nav class="m3e-navigation-bar bottombar" aria-label="主导航">
-      <button type="button" class="m3e-navigation-item" data-nav="movie">
+      <button type="button" class="m3e-navigation-item" data-nav="home">
         <span class="m3e-navigation-item__content">
           <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">movie</span>
-          <span class="m3e-navigation-item__label">电影</span>
-        </span>
-      </button>
-      <button type="button" class="m3e-navigation-item" data-nav="tv">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">live_tv</span>
-          <span class="m3e-navigation-item__label">连续剧</span>
-        </span>
-      </button>
-      <button type="button" class="m3e-navigation-item" data-nav="show">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">celebration</span>
-          <span class="m3e-navigation-item__label">综艺</span>
-        </span>
-      </button>
-      <button type="button" class="m3e-navigation-item" data-nav="anime">
-        <span class="m3e-navigation-item__content">
-          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
-          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">animation</span>
-          <span class="m3e-navigation-item__label">动漫</span>
+          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">home</span>
+          <span class="m3e-navigation-item__label">首页</span>
         </span>
       </button>
       <button type="button" class="m3e-navigation-item" data-nav="fav">
@@ -323,68 +265,83 @@
           <span class="m3e-navigation-item__label">喜欢</span>
         </span>
       </button>
+      <button type="button" class="m3e-navigation-item" data-nav="settings">
+        <span class="m3e-navigation-item__content">
+          <span class="m3e-navigation-item__indicator" aria-hidden="true"></span>
+          <span class="m3e-icon m3e-navigation-item__icon" aria-hidden="true">settings</span>
+          <span class="m3e-navigation-item__label">设置</span>
+        </span>
+      </button>
   </nav>
 </div>
 
 <script>
 (function () {
-  var btn = document.getElementById("srcBtn");
-  var menu = document.getElementById("srcMenu");
-  var name = document.getElementById("srcName");
+  var views = { home: "v-home", fav: "v-fav", settings: "v-settings" };
+  var catpanel = document.getElementById("catpanel");
 
-  btn.addEventListener("click", function (e) {
-    e.stopPropagation();
-    var open = menu.hasAttribute("data-open");
-    if (open) { menu.removeAttribute("data-open"); btn.setAttribute("aria-expanded","false"); }
-    else {
-      var r = btn.getBoundingClientRect();
-      menu.style.left = r.left + "px";
-      menu.style.top = (r.bottom + 6) + "px";
-      menu.setAttribute("data-open", "");
-      btn.setAttribute("aria-expanded","true");
-    }
-  });
-
-  menu.addEventListener("click", function (e) {
-    var item = e.target.closest("button[data-src]");
-    if (!item) return;
-    name.textContent = item.textContent.replace(/\s+/g, " ").replace(" check","").trim();
-    menu.querySelectorAll("button[data-src]").forEach(function (b) {
-      var on = b === item;
-      b.setAttribute("aria-checked", on ? "true" : "false");
-      b.querySelector(".m3e-icon").textContent = on ? "check" : "";
-    });
-    menu.removeAttribute("data-open");
-    btn.setAttribute("aria-expanded","false");
-  });
-
-  document.addEventListener("click", function () {
-    menu.removeAttribute("data-open");
-    btn.setAttribute("aria-expanded","false");
-  });
-
-  // 导航选中态:三处 rail / bar 同步
   document.querySelectorAll("[data-nav]").forEach(function (el) {
     el.addEventListener("click", function () {
       var key = el.getAttribute("data-nav");
       document.querySelectorAll("[data-nav]").forEach(function (o) {
-        var on = o.getAttribute("data-nav") === key;
-        if (on) o.setAttribute("aria-current", "page");
+        if (o.getAttribute("data-nav") === key) o.setAttribute("aria-current", "page");
         else o.removeAttribute("aria-current");
       });
-      var fav = key === "fav" || key === "settings";
-      document.getElementById("grid").style.display = fav ? "none" : "";
-      document.getElementById("empty").style.display = fav ? "" : "none";
+      Object.keys(views).forEach(function (k) {
+        var v = document.getElementById(views[k]);
+        if (k === key) v.setAttribute("data-on", ""); else v.removeAttribute("data-on");
+      });
+      catpanel.style.visibility = key === "home" ? "" : "hidden";
+      catpanel.style.display = key === "home" ? (window.matchMedia("(min-width:840px)").matches ? "block" : "none") : "none";
     });
   });
 
-  // compact 下把设置放到顶栏
-  var cfg = document.getElementById("cfgBtn");
-  function syncCompact() {
-    cfg.style.display = window.matchMedia("(max-width: 599px)").matches ? "" : "none";
-  }
-  syncCompact();
-  window.addEventListener("resize", syncCompact);
+  // 源下拉
+  var btn = document.getElementById("srcBtn"), menu = document.getElementById("srcMenu"),
+      name = document.getElementById("srcName");
+  btn.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (menu.hasAttribute("data-open")) { menu.removeAttribute("data-open"); return; }
+    var r = btn.getBoundingClientRect();
+    menu.style.left = r.left + "px"; menu.style.top = (r.bottom + 6) + "px";
+    menu.setAttribute("data-open", "");
+  });
+  document.addEventListener("click", function () { menu.removeAttribute("data-open"); });
+  menu.addEventListener("click", function (e) {
+    var it = e.target.closest("button[data-src]"); if (!it) return;
+    name.textContent = it.textContent.replace("check", "").trim();
+    menu.querySelectorAll("button[data-src]").forEach(function (b) {
+      var on = b === it;
+      b.setAttribute("aria-checked", on ? "true" : "false");
+      b.querySelector(".m3e-icon").textContent = on ? "check" : "";
+    });
+    menu.removeAttribute("data-open");
+  });
+
+  // 一级分类 Tab
+  var chips = document.getElementById("childchips");
+  document.querySelectorAll(".cattab").forEach(function (t) {
+    t.addEventListener("click", function () {
+      document.querySelectorAll(".cattab").forEach(function (o) { o.removeAttribute("aria-selected"); });
+      t.setAttribute("aria-selected", "true");
+      var p = t.getAttribute("data-parent");
+      chips.innerHTML = "";
+      if (!p) return;
+      (window.__kids[p] || []).forEach(function (k) {
+        var b = document.createElement("button");
+        b.className = "m3e-filter-chip"; b.type = "button"; b.textContent = k;
+        chips.appendChild(b);
+      });
+    });
+  });
+  window.__kids = {"电影片":["动作片","喜剧片","爱情片","科幻片","恐怖片","剧情片"],"连续剧":["国产剧","香港剧","韩国剧","欧美剧","日本剧"],"综艺片":["大陆综艺","港台综艺","日韩综艺"],"动漫片":["国产动漫","日韩动漫","欧美动漫"]};
+
+  // 面板里的分类选中
+  catpanel.addEventListener("click", function (e) {
+    var b = e.target.closest(".cat"); if (!b) return;
+    catpanel.querySelectorAll(".cat").forEach(function (o) { o.removeAttribute("aria-selected"); });
+    b.setAttribute("aria-selected", "true");
+  });
 })();
 </script>
 </body>
