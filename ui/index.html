@@ -307,7 +307,13 @@
   }
   .searchbox input::placeholder { color: var(--m3e-sys-color-on-surface-variant); }
   #v-detail { overflow-y: auto; overflow-x: hidden; }
-  .detail-wrap { width: 100%; max-width: 780px; min-width: 0; margin-inline: auto; padding: 8px 22px 44px; }
+  /* padding 用 border-box:780 是含 padding 的整宽,padding 再加在 780 之外时
+     右边会被滚动条挤掉(窄窗口直接顶到边缘),左右也不等 */
+  .detail-wrap {
+    width: 100%; max-width: 780px; min-width: 0; margin-inline: auto;
+    box-sizing: border-box;
+    padding-block: 8px 44px; padding-inline: clamp(16px, 3vw, 32px);
+  }
   .back {
     width: 40px; height: 40px; margin: 2px 0 6px -8px; border: none; border-radius: 50%;
     display: grid; place-items: center; cursor: pointer; color: inherit; background: transparent;
@@ -368,7 +374,7 @@
 
   /* 详情页:窄屏(手机) */
   @media (max-width: 599px) {
-    .detail-wrap { padding: 4px 14px 36px; }
+    .detail-wrap { padding-inline: 14px; padding-block: 4px 36px; }
     .detail-top { gap: 14px; padding-bottom: 16px; }
     .detail-top .hero { width: 104px; border-radius: 14px; }
     .detail-top h2 { font-size: 17px; margin-bottom: 8px; }
@@ -924,6 +930,9 @@
     scrollbar-color: transparent transparent;
     scrollbar-gutter: stable;
   }
+  /* 详情页两边都留槽:只留右边时,滚动条吃掉的 10px 会让 `margin-inline: auto`
+     在"去掉滚动条的 clientWidth"里居中,视觉上右内边距永远比左边大 10px */
+  #v-detail { scrollbar-gutter: stable both-edges; }
   .scroll::-webkit-scrollbar, .side__scroll::-webkit-scrollbar,
   .chips::-webkit-scrollbar, .cattabs::-webkit-scrollbar,
   #v-detail::-webkit-scrollbar { width: 8px; height: 8px; }
