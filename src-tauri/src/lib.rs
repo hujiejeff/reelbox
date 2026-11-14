@@ -5,6 +5,9 @@ mod proxy;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 启动参数:--selftest 跑插件验收流程,--engine=boa 回退到 Rust 里的引擎
+    let args: Vec<String> = std::env::args().collect();
+    commands::apply_engine_arg(&args);
     // 启动标记:用来区分"路径不可写"和"前端没调用"
     {
         use std::io::Write as _;
@@ -32,6 +35,10 @@ pub fn run() {
             commands::poster,
             commands::append_log,
             commands::save_plugin,
+            commands::plugin_read,
+            commands::plugin_fetch,
+            commands::plugin_stream_allow,
+            commands::selftest_mode,
         ])
         .run(tauri::generate_context!())
         .expect("reelbox: 启动失败");
