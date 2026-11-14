@@ -40,15 +40,26 @@ pub fn load_sources() -> Vec<Source> {
     source::defaults()
 }
 
+/// 网络导入的结果:真正能用的源 + 被跳过的"不支持的源"。
+/// 跳过要说出来,不然用户只会以为索引坏了一半。
+#[derive(Debug, Default, serde::Serialize)]
+pub struct ImportReport {
+    pub sources: Vec<Source>,
+    /// 跳过的条数
+    pub skipped: usize,
+    /// 跳过的名字,前端在提示里点名
+    pub skipped_names: Vec<String>,
+}
+
 /// 从网络索引批量导入源。索引格式:
 /// { "name": "...", "sources": [ { "name": "...", "type": "json|vod|xml", "url": "..." } ] }
 #[tauri::command]
-pub async fn import_index(url: String) -> Result<Vec<Source>, String> {
+pub async fn import_index(url: String) -> Result<ImportReport, String> {
     let u = url.trim().to_string();
     if !(u.starts_with("http://") || u.starts_with("https://")) {
         return Err("索引地址必须是 http(s)".into());
     }
-    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<Source>, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<ImportReport, String> {
         let resp = fetch_guarded(&u, None)?;
         let body = resp.body;
         let v: serde_json::Value =
@@ -57,7 +68,7 @@ pub async fn import_index(url: String) -> Result<Vec<Source>, String> {
             .get("sources")
             .and_then(|x| x.as_array())
             .ok_or("索引里没有 sources 数组")?;
-        let mut out: Vec<Source> = Vec::new();
+        let mut report = ImportReport::default();
         for it in arr {
             let name = it.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
             let url = it.get("url").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
@@ -70,13 +81,20 @@ pub async fn import_index(url: String) -> Result<Vec<Source>, String> {
                 _ => "vod",
             }
             .to_string();
+            if source::is_crawl_config(&kind, &url) {
+                crate::logging::event(&format!("IMPORT skip unsupported source name={name} url={url}"));
+                report.skipped += 1;
+                report.skipped_names.push(name);
+                continue;
+            }
             let slug: String = name
                 .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
                 .collect();
-            out.push(Source { id: format!("{}-{}", slug.trim_matches('-'), out.len() + 1), name, kind, url });
+            let n = report.sources.len() + 1;
+            report.sources.push(Source { id: format!("{}-{}", slug.trim_matches('-'), n), name, kind, url });
         }
-        Ok(out)
+        Ok(report)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -596,6 +614,67 @@ fn classify_stream(mime: &str, head: &[u8]) -> &'static str {
 #[tauri::command]
 pub fn append_log(line: String) {
     crate::logging::append(&line);
+}
+
+/// 设置页「调试 → 打开日志」:定位到日志文件(Windows 资源管理器 /select)。
+#[tauri::command]
+pub fn open_log() -> Result<String, String> {
+    let path = crate::logging::log_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败: {e}"))?;
+    }
+    if !path.exists() {
+        // 还没写过日志:先落一个空文件,否则"定位到文件"会落到目录上
+        std::fs::write(&path, b"").map_err(|e| format!("建日志文件失败: {e}"))?;
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+            .map_err(|e| format!("打开日志失败: {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("打开日志失败: {e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = path.parent().unwrap_or(&path).to_path_buf();
+        std::process::Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| format!("打开日志失败: {e}"))?;
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 设置页「关于」用的构建信息。
+#[derive(Debug, serde::Serialize)]
+pub struct AppInfo {
+    pub version: String,
+    /// release / debug · os · arch
+    pub build: String,
+    pub log_path: String,
+    pub sources_path: String,
+    /// 插件钩子现在跑在哪套引擎里
+    pub plugin_engine: String,
+}
+
+#[tauri::command]
+pub fn app_info() -> AppInfo {
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    AppInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        build: format!("{} · {} {}", profile, std::env::consts::OS, std::env::consts::ARCH),
+        log_path: crate::logging::log_path().to_string_lossy().to_string(),
+        sources_path: sources_path().to_string_lossy().to_string(),
+        plugin_engine: if boa_engine() { "Boa(Rust)".to_string() } else { "WebView 沙箱".to_string() },
+    }
 }
 
 /// 自检摘要落盘:`docs/selftest-report.json`(找不到就退回 %APPDATA%/reelbox/)。

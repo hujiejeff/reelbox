@@ -34,6 +34,8 @@ pub fn run() {
             commands::filters,
             commands::poster,
             commands::append_log,
+            commands::open_log,
+            commands::app_info,
             commands::save_plugin,
             commands::plugin_read,
             commands::plugin_fetch,
