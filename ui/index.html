@@ -13,6 +13,8 @@
     white-space: nowrap; direction: ltr; font-feature-settings: "liga"; -webkit-font-feature-settings: "liga"; }
 
   html, body { margin: 0; height: 100%; }
+  * { scrollbar-width: none; -ms-overflow-style: none; }
+  *::-webkit-scrollbar { width: 0; height: 0; }
   body {
     background: var(--m3e-sys-color-surface); color: var(--m3e-sys-color-on-surface);
     font-family: system-ui, "Segoe UI", "PingFang SC", sans-serif; overflow: hidden;
@@ -64,9 +66,9 @@
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
   .topbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 16px 4px; }
-  .src-btn { display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0 12px 0 14px;
+  .src-btn { display: inline-flex; align-items: center; gap: 4px; height: 44px; padding: 0 12px 0 10px;
     border: none; cursor: pointer; border-radius: 22px; background: transparent; color: inherit;
-    font: 600 17px/1 system-ui, "PingFang SC", sans-serif; }
+    font: 600 16px/1 system-ui, "PingFang SC", sans-serif; }
   .src-btn:hover { background: var(--m3e-sys-color-surface-container-high); }
   .src-btn .m3e-icon { font-size: 20px; color: var(--m3e-sys-color-on-surface-variant); }
   .srcmenu { position: absolute; z-index: 20; min-width: 220px; padding: 8px; border-radius: 20px; display: none;
@@ -81,8 +83,8 @@
   .srcmenu .m3e-icon { font-size: 20px; }
 
   .toolbar { flex: none; display: flex; gap: 12px; align-items: center; padding: 6px 16px 12px; }
-  .searchbox { flex: 1; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 18px;
-    border-radius: 26px; min-width: 0; background: var(--m3e-sys-color-surface-container-high);
+  .searchbox { flex: 1; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 10px 0 6px;
+    border-radius: 22px; min-width: 0; background: var(--m3e-sys-color-surface-container-high);
     color: var(--m3e-sys-color-on-surface-variant); }
   .searchbox .m3e-icon { font-size: 22px; }
 
@@ -166,8 +168,8 @@
 
   /* 控件组:宽屏在侧栏纵向,窄屏在顶栏横向 */
   .controls { display: flex; gap: 8px; align-items: center; min-width: 0; }
-  .side .controls { flex-direction: column; align-items: stretch; padding: 14px 12px 6px; }
-  .side .controls .src-btn { align-self: flex-start; }
+  .side .controls { flex-direction: column; align-items: stretch; padding: 14px 10px 4px; gap: 4px; }
+  .side .controls .src-btn { align-self: flex-start; margin-left: 2px; }
   .controls .searchbox { flex: 1; }
   .search-go {
     display: grid; place-items: center; width: 32px; height: 32px; flex: none;
