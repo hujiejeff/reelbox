@@ -186,8 +186,10 @@ function renderChildren() {
   box.innerHTML = kids
     .map(
       (c) =>
-        '<button class="m3e-filter-chip" type="button" data-child="' + esc(c.value) + '"' +
-        (S.child === c.value ? ' aria-selected="true"' : "") + ">" + esc(c.label) + "</button>"
+        '<label class="m3e-filter-chip" data-child="' + esc(c.value) + '">' +
+        '<input class="m3e-filter-chip__input" type="checkbox"' + (S.child === c.value ? " checked" : "") + ">" +
+        '<span class="m3e-filter-chip__leading"><span class="m3e-icon m3e-filter-chip__check">check</span></span>' +
+        '<span class="m3e-filter-chip__label">' + esc(c.label) + "</span></label>"
     )
     .join("");
 }
@@ -240,6 +242,7 @@ function appendCards(from) {
 }
 
 function resetGrid() {
+  clearSkeleton();
   $("grid").innerHTML = "";
 }
 
@@ -350,7 +353,9 @@ document.addEventListener("click", (e) => {
   }
   const chip = e.target.closest("[data-child]");
   if (chip) {
-    S.child = chip.getAttribute("data-child");
+    const next = chip.getAttribute("data-child");
+    if (next === S.child) return;
+    S.child = next;
     renderChildren();
     return loadItems();
   }
@@ -361,17 +366,29 @@ document.addEventListener("click", (e) => {
   }
 });
 
-const SPINNER =
-  '<div class="m3e-circular-progress" role="progressbar" aria-label="加载中">' +
-  '<svg class="m3e-circular-progress__svg" aria-hidden="true" focusable="false">' +
-  '<circle class="m3e-circular-progress__track"></circle>' +
-  '<circle class="m3e-circular-progress__indicator"></circle></svg></div>';
+let SKEL_N = 0;
+
+function renderSkeleton() {
+  const g = $("grid");
+  const w = g.clientWidth || 900;
+  const n = Math.max(6, Math.round(w / 170) * 3);
+  if (SKEL_N === n && g.querySelector(".skel")) return;
+  SKEL_N = n;
+  g.innerHTML = '<article class="card skel"><div class="poster"></div><div class="meta"><i></i></div></article>'.repeat(n);
+}
+
+function clearSkeleton() {
+  SKEL_N = 0;
+  $("grid").querySelectorAll(".skel").forEach((n) => n.remove());
+}
 
 function setStatus() {
   const el = $("empty");
   if (S.loading && !S.items.length) {
-    el.style.display = "";
-    el.innerHTML = SPINNER;
+    el.style.display = "none";
+    renderSkeleton();
+  } else {
+    clearSkeleton();
   }
 }
 

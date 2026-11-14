@@ -115,17 +115,28 @@ export function initTheme() {
   load();
   const box = document.getElementById("swatches");
   if (box) {
-    box.innerHTML = SEEDS.map(
-      (s) =>
-        '<button class="swatch" data-seed="' + s.id + '" title="' + s.label +
-        '" aria-selected="false" style="background:' + s.id + '"></button>'
-    ).join("");
+    box.innerHTML =
+      SEEDS.map(
+        (s) =>
+          '<button class="swatch" data-seed="' + s.id + '" title="' + s.label +
+          '" aria-selected="false" style="background:' + s.id + '"></button>'
+      ).join("") +
+      '<label class="swatch custom" title="自定义">' +
+      '<input type="color" id="seedPick" value="' + state.seed + '">' +
+      '<span class="m3e-icon">palette</span></label>';
     box.onclick = (e) => {
       const b = e.target.closest(".swatch");
-      if (!b) return;
+      if (!b || b.classList.contains("custom")) return;
       state.seed = b.getAttribute("data-seed");
       save(); apply();
     };
+    const pick = document.getElementById("seedPick");
+    if (pick) {
+      pick.oninput = () => {
+        state.seed = pick.value;
+        save(); apply();
+      };
+    }
   }
   const bind = (id, attr, fn) => {
     const el = document.getElementById(id);
