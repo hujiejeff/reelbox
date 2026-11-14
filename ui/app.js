@@ -384,6 +384,10 @@ function pStatus(msg) {
   el.innerHTML = '<span class="spin"></span><span>' + esc(msg) + "</span>";
 }
 
+// 用路径画图标:字体字形带侧边距,画不准中心
+const PLAY_PATH = "M9.2 5.6v12.8L19 12z";
+const PAUSE_PATH = "M8.6 5.8h2.9v12.4H8.6z M12.5 5.8h2.9v12.4h-2.9z";
+
 function pSync() {
   const v = $("video");
   const dur = isFinite(v.duration) ? v.duration : 0;
@@ -398,7 +402,7 @@ function pSync() {
   $("buf").style.width = Math.min(100, buffered) + "%";
   const playing = !v.paused && !v.ended;
   $("pPlayIcon").textContent = playing ? "pause" : "play_arrow";
-  $("pBigIcon").textContent = playing ? "pause" : "play_arrow";
+  $("pBigPath").setAttribute("d", playing ? PAUSE_PATH : PLAY_PATH);
   $("player").classList.toggle("playing", playing);
   if (!playing) $("player").classList.remove("idle");
   const vol = v.muted ? 0 : v.volume;

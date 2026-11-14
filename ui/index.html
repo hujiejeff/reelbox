@@ -397,9 +397,7 @@
     background: rgba(0,0,0,.66); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
     transition: opacity .2s, transform .2s;
   }
-  /* 播放三角字形偏右,做光学左移才看起来居中 */
-  .p-big .m3e-icon { font-size: 44px; line-height: 1; display: block; color: #fff;
-    transform: translate(-2px, 0); filter: drop-shadow(0 1px 2px rgba(0,0,0,.45)); }
+  .p-big svg { display: block; filter: drop-shadow(0 1px 2px rgba(0,0,0,.45)); }
   .player.playing .p-big { display: none; }
   .p-big:hover { transform: translate(-50%, -50%) scale(1.06); }
 
@@ -650,7 +648,9 @@
     </div>
 
     <button class="p-big" id="pBig" aria-label="播放/暂停">
-      <span class="m3e-icon" id="pBigIcon">play_arrow</span>
+      <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true">
+        <path id="pBigPath" d="M9.2 5.6v12.8L19 12z" fill="#fff"/>
+      </svg>
     </button>
 
     <div class="p-bottom">
