@@ -14,8 +14,38 @@ export function sandboxMain() {
 
   // 这个 iframe 是 unique origin(没有 allow-same-origin),本来就碰不到父页的
   // localStorage 和 Tauri IPC。万一宿主把初始化脚本注进了子框架,先把入口删掉。
-  try { delete window.__TAURI_INTERNALS__; } catch (e) {}
-  try { delete window.__TAURI__; } catch (e) {}
+  // 这个 iframe 是 unique origin(没有 allow-same-origin),读不到父页的 localStorage。
+  // 但 WebView2 的初始化脚本会注进**所有** frame,__TAURI_INTERNALS__ 可能就在这儿:
+  // 先把宿主桥废掉再让插件跑。删不掉(不可配置)就改写对象里的入口。
+  function blindHostBridge() {
+    const deny = function () {
+      throw new Error("sandbox: 宿主能力不可用");
+    };
+    try { delete window.__TAURI_INTERNALS__; } catch (e) {}
+    try { delete window.__TAURI__; } catch (e) {}
+    try { delete window.ipc; } catch (e) {}
+    let bridge = null;
+    try { bridge = window.__TAURI_INTERNALS__; } catch (e) {}
+    if (bridge) {
+      try {
+        Object.defineProperty(window, "__TAURI_INTERNALS__", {
+          value: undefined, writable: false, configurable: false,
+        });
+      } catch (e) {}
+      try { bridge = window.__TAURI_INTERNALS__; } catch (e) { bridge = null; }
+    }
+    if (bridge) {
+      ["invoke", "postMessage", "transformCallback", "callbacks", "metadata", "convertFileSrc"].forEach(function (k) {
+        try { bridge[k] = deny; } catch (e) {}
+        try { Object.defineProperty(bridge, k, { value: deny, writable: false, configurable: false }); } catch (e) {}
+      });
+    }
+    // WebView2 的原始通道:插件直接 postMessage 也能绕
+    try {
+      if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage = deny;
+    } catch (e) {}
+  }
+  blindHostBridge();
 
   const rpcPending = new Map();
   let rpcSeq = 0;
@@ -473,5 +503,48 @@ export function sandboxMain() {
     if (d.kind === "run") runHook(d);
   });
 
-  post({ kind: "ready" });
+  // ready 报文里带上实测结果:沙箱到底封没封住(自检和文档都靠它)
+  (async function () {
+    const probe = probeSandbox();
+    // 真的调一次不存在的命令:能调到就说明宿主桥还活着
+    try {
+      const bridge = window.__TAURI_INTERNALS__;
+      if (bridge && typeof bridge.invoke === "function") {
+        await Promise.race([
+          bridge.invoke("__rb_probe_should_not_exist__", {}),
+          new Promise(function (r) { setTimeout(function () { r("timeout"); }, 1500); }),
+        ]);
+        probe.ipcReachable = "yes";
+      } else {
+        probe.ipcReachable = "no";
+      }
+    } catch (e) {
+      probe.ipcReachable = "blocked:" + ((e && (e.name || e.message)) || "Error");
+    }
+    post({ kind: "ready", probe: probe });
+  })();
+
+  /** 自检用:把"沙箱到底有多封"的实测结果带出去 */
+  function probeSandbox() {
+    function probe(fn) {
+      try {
+        fn();
+        return "ok";
+      } catch (e) {
+        return "blocked:" + ((e && e.name) || "Error");
+      }
+    }
+    return {
+      tauriIpc: typeof window.__TAURI_INTERNALS__,
+      tauriGlobal: typeof window.__TAURI__,
+      ipcInvoke: (function () { try { return typeof window.__TAURI_INTERNALS__.invoke; } catch (e) { return "err"; } })(),
+      parentDoc: probe(function () {
+        if (parent.document) throw new Error("parent.document 竟然可读");
+      }),
+      storage: probe(function () {
+        localStorage.getItem("reelbox.debug");
+      }),
+      origin: String((function () { try { return window.origin; } catch (e) { return "blocked"; } })()),
+    };
+  }
 }

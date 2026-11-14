@@ -142,15 +142,40 @@ async function runSelfTest() {
 
     const t2 = Date.now();
     await playEpisode(eps[0].id, eps[0].name, eps[0].group || "");
+    const hookMs = Date.now() - t2;
     const v = $("video");
     // 自检不需要声音:静音播放在任何策略下都能起来
     try { v.muted = true; v.play().catch(() => {}); } catch (_) {}
-    const moved = await waitFor(() => v.currentTime > 0.05 && !v.paused, 25000);
+    // 从头放 0.5 秒:currentTime 真的往前走 + 有画面尺寸,才算"视频能播"
+    try { if (v.currentTime > 1) v.currentTime = 0; } catch (_) {}
+    const startAt = Number(v.currentTime || 0);
+    const moved = await waitFor(() => v.currentTime > startAt + 0.5 && v.videoWidth > 0, 25000);
     say(
-      "play ms=" + (Date.now() - t2) + " readyState=" + v.readyState +
-      " t=" + Number(v.currentTime || 0).toFixed(2) + " playing=" + moved
+      "play ms=" + hookMs + " readyState=" + v.readyState + " t=" + Number(v.currentTime || 0).toFixed(2) +
+      " size=" + v.videoWidth + "x" + v.videoHeight + " playing=" + moved
     );
     if (!moved) return stop("视频没有真正播起来");
+
+    // 内置源回归:确认插件化改动没把共享的 player_url / HLS 路径弄坏(只告警不判死)
+    const cms = S.sources.find((s) => !isPluginSource(s) && /dytt|ffzy|lzzy/.test(String(s.url)));
+    if (cms) {
+      try {
+        await switchSource(cms);
+        const one = (S.items || [])[0];
+        if (!one) throw new Error("列表为空");
+        await openDetail(one);
+        const ep = (S.detailEps || [])[0];
+        if (!ep) throw new Error("没有分集");
+        await playEpisode(ep.id, ep.name, ep.group || "");
+        const cv = $("video");
+        try { cv.muted = true; cv.play().catch(() => {}); } catch (_) {}
+        const okCms = await waitFor(() => cv.currentTime > 0.05 && !cv.paused, 20000);
+        say("cms " + (okCms ? "ok" : "warn 没播起来") + " source=" + cms.name);
+      } catch (e) {
+        say("cms warn " + (e && e.message ? e.message : e));
+      }
+    }
+
     say("PASS");
     say("DONE");
   } catch (e) {

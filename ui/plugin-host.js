@@ -80,7 +80,7 @@ function onMessage(ev) {
   if (!d || d.__rb !== TAG) return;
   if (d.kind === "ready") {
     readyFlag = true;
-    logFn("sandbox ready");
+    logFn("sandbox ready " + (d.probe ? JSON.stringify(d.probe) : ""));
     if (markReady) { markReady(); markReady = null; }
     return;
   }
