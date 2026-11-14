@@ -690,7 +690,7 @@ async function openDetail(item) {
   // 记下来源视图:从「喜欢」进来的详情,返回该回「喜欢」,不是永远甩回首页(第 6 组)
   if (currentView !== "detail") S.detailFrom = currentView;
   showView("detail");
-  $("v-detail").innerHTML = DETAIL_SKELETON;
+  renderDetailSkeleton();
   try {
     const d = await fetchDetail(item.id);
     S.detailId = d.id || item.id;
@@ -1412,22 +1412,22 @@ function renderDetail(d) {
     )
     .join("");
 
-  $("v-detail").innerHTML =
-    '<div class="detail-wrap">' +
-      '<button class="back" id="btnBack" aria-label="返回">' +
-        '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>' +
-      "</button>" +
-      '<div class="detail-top">' +
-        '<div class="hero"><img alt=""></div>' +
-        '<div class="hero-meta">' +
-          '<div class="detail-title"><h2>' + esc(d.title) + "</h2>" + favBtnHtml(d) + "</div>" +
-          (summary ? '<p id="sum">' + esc(summary) + "</p>" : "") +
-          (summary.length > 90 ? '<button class="more" id="btnMore">展开</button>' : "") +
-        "</div>" +
+  const body = detailBody();
+  body.parentElement.removeAttribute("data-skel");
+  body.innerHTML =
+    '<button class="back" id="btnBack" aria-label="返回">' +
+      '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>' +
+    "</button>" +
+    '<div class="detail-top">' +
+      '<div class="hero"><img alt=""></div>' +
+      '<div class="hero-meta">' +
+        '<div class="detail-title"><h2>' + esc(d.title) + "</h2>" + favBtnHtml(d) + "</div>" +
+        (summary ? '<p id="sum">' + esc(summary) + "</p>" : "") +
+        (summary.length > 90 ? '<button class="more" id="btnMore">展开</button>' : "") +
       "</div>" +
-      resumeBtn +
-      (groups || '<p class="noep">这个源没给剧集列表</p>') +
-    "</div>";
+    "</div>" +
+    resumeBtn +
+    (groups || '<p class="noep">这个源没给剧集列表</p>');
 
   $("btnBack").onclick = () => closeDetail();
 
@@ -3154,8 +3154,9 @@ function closePlayer() {
 }
 
 function refreshResume() {
-  const wrap = $("v-detail").querySelector(".detail-wrap");
-  if (!wrap) return;
+  // 内容都在 .detail-body 里(外壳固定,见 detailBody),插入点也要在这一层
+  const body = $("v-detail").querySelector(".detail-body");
+  if (!body) return;
   const rec = progGet(detailKey());
   let btn = $("btnResume");
   if (!resumeOn() || !rec || !rec.id) {
@@ -3166,8 +3167,8 @@ function refreshResume() {
     btn = document.createElement("button");
     btn.className = "resume";
     btn.id = "btnResume";
-    const anchor = wrap.querySelector(".epgroup") || wrap.querySelector(".noep");
-    wrap.insertBefore(btn, anchor || null);
+    const anchor = body.querySelector(".epgroup") || body.querySelector(".noep");
+    body.insertBefore(btn, anchor || null);
   }
   btn.textContent = "继续观看 · " + (rec.name || "") + " · " + fmtTime(rec.t);
   btn.onclick = () => playEpisode(rec.id, rec.name, rec.group || "");
@@ -3552,11 +3553,33 @@ function armListTimeout() {
 }
 
 const DETAIL_SKELETON =
-  '<div class="detail-wrap">' +
-    '<div class="skel-hero"><div class="sk"></div>' +
-      '<div class="sk-lines"><i></i><i></i><i></i><i></i></div></div>' +
-    '<div class="skel-chips">' + "<i></i>".repeat(14) + "</div>" +
-  "</div>";
+  '<div class="skel-hero"><div class="sk"></div>' +
+    '<div class="sk-lines">' + "<i></i>".repeat(6) + "</div></div>" +
+  '<div class="skel-chips"><i></i><i></i></div>' +
+  '<div class="skel-epgrid">' + "<i></i>".repeat(12) + "</div>";
+
+/**
+ * 详情页外壳:结构固定成 `#v-detail > .detail-wrap > .detail-body`。
+ * 骨架、真实内容、错误态都只替换 `.detail-body` 的子节点,容器本身不重建 ——
+ * 以前整体重写 #v-detail,一次切换就是一次全页重新布局,首屏会闪一下。
+ */
+function detailBody() {
+  const box = $("v-detail");
+  let body = box.querySelector(".detail-body");
+  if (!body) {
+    box.innerHTML = '<div class="detail-wrap"><div class="detail-body"></div></div>';
+    body = box.querySelector(".detail-body");
+  }
+  return body;
+}
+
+/** 详情骨架屏:结构与真实布局同构,首屏高度也贴着真实页(样式见 index.html .skel-*) */
+function renderDetailSkeleton() {
+  const body = detailBody();
+  body.parentElement.setAttribute("data-skel", "");
+  body.innerHTML = DETAIL_SKELETON;
+  $("v-detail").scrollTop = 0;
+}
 
 /** 列表:加载中(骨架屏 + 10s 超时兜底) */
 function showListLoading() {
@@ -3630,28 +3653,27 @@ function showLoadMoreError(info, retry) {
 
 /** 详情:错误(原因 + 重试 / 换源) */
 function showDetailError(info, item) {
-  const box = $("v-detail");
+  const body = detailBody();
   const unsupported = info.kind === "unsupported";
-  box.innerHTML =
-    '<div class="detail-wrap">' +
-      '<button class="back" id="btnBack" aria-label="返回">' +
-        '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>' +
-      "</button>" +
-      stateCard({
-        error: true,
-        icon: unsupported ? "link_off" : "cloud_off",
-        title: info.title,
-        msg: info.hint,
-        actions: unsupported
-          ? [{ id: "switch", label: "去换源", primary: true }, { id: "retry", label: "重试" }]
-          : [{ id: "retry", label: "重试", primary: true }, { id: "switch", label: "源管理" }],
-        raw: info.raw,
-      }) +
-    "</div>";
+  body.parentElement.removeAttribute("data-skel");
+  body.innerHTML =
+    '<button class="back" id="btnBack" aria-label="返回">' +
+      '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" fill="currentColor"/></svg>' +
+    "</button>" +
+    stateCard({
+      error: true,
+      icon: unsupported ? "link_off" : "cloud_off",
+      title: info.title,
+      msg: info.hint,
+      actions: unsupported
+        ? [{ id: "switch", label: "去换源", primary: true }, { id: "retry", label: "重试" }]
+        : [{ id: "retry", label: "重试", primary: true }, { id: "switch", label: "源管理" }],
+      raw: info.raw,
+    });
   $("btnBack").onclick = () => closeDetail();
-  const retryBtn = box.querySelector('[data-act="retry"]');
+  const retryBtn = body.querySelector('[data-act="retry"]');
   if (retryBtn) retryBtn.onclick = () => openDetail(item || S.detailItem).catch(() => {});
-  const sw = box.querySelector('[data-act="switch"]');
+  const sw = body.querySelector('[data-act="switch"]');
   if (sw) sw.onclick = openSourceManager;
 }
 

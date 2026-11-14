@@ -310,9 +310,11 @@
   /* padding 用 border-box:780 是含 padding 的整宽,padding 再加在 780 之外时
      右边会被滚动条挤掉(窄窗口直接顶到边缘),左右也不等 */
   .detail-wrap {
+    --detail-pad-t: 8px; --detail-pad-b: 44px;
     width: 100%; max-width: 780px; min-width: 0; margin-inline: auto;
     box-sizing: border-box;
-    padding-block: 8px 44px; padding-inline: clamp(16px, 3vw, 32px);
+    padding-block: var(--detail-pad-t) var(--detail-pad-b);
+    padding-inline: clamp(16px, 3vw, 32px);
   }
   .back {
     width: 40px; height: 40px; margin: 2px 0 6px -8px; border: none; border-radius: 50%;
@@ -324,7 +326,7 @@
     width: 148px; flex: none; aspect-ratio: 2 / 3; border-radius: 18px; overflow: hidden;
     background: var(--m3e-sys-color-surface-container-high);
   }
-  .detail-top .hero:not(.has-img) { animation: skel 1.8s ease-in-out infinite; }
+  .detail-top .hero:not(.has-img) { animation: skel 1.6s cubic-bezier(.4,0,.6,1) infinite; }
   .detail-top .hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .hero-meta { min-width: 0; flex: 1; }
   .detail-top h2 { margin: 2px 0 10px; font-size: 21px; line-height: 1.35; letter-spacing: -.01em; }
@@ -374,7 +376,7 @@
 
   /* 详情页:窄屏(手机) */
   @media (max-width: 599px) {
-    .detail-wrap { padding-inline: 14px; padding-block: 4px 36px; }
+    .detail-wrap { --detail-pad-t: 4px; --detail-pad-b: 36px; padding-inline: 14px; }
     .detail-top { gap: 14px; padding-bottom: 16px; }
     .detail-top .hero { width: 104px; border-radius: 14px; }
     .detail-top h2 { font-size: 17px; margin-bottom: 8px; }
@@ -382,6 +384,13 @@
     .epgroup { margin-top: 18px; }
     .epgrid { grid-template-columns: repeat(auto-fill, 72px); gap: 6px; }
     .chip-ep { height: 34px; border-radius: 10px; font-size: 12px; }
+    /* 骨架跟着窄屏的真实尺寸走(封面 104、chip 34、72 列) */
+    .skel-hero { gap: 14px; padding-bottom: 16px; }
+    .skel-hero .sk { width: 104px; border-radius: 14px; }
+    .skel-chips, .skel-epgrid { margin-top: 18px; gap: 6px; }
+    .skel-chips i { width: 72px; height: 34px; border-radius: 10px; }
+    .skel-epgrid { grid-template-columns: repeat(auto-fill, 72px); }
+    .skel-epgrid i { height: 34px; border-radius: 10px; }
   }
   .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11px; word-break: break-all; max-width: 100%; }
   .placeholder span { max-width: 90%; }
@@ -710,16 +719,16 @@
     outline-offset: 2px;
   }
 
-  /* 骨架屏:呼吸式明暗,比转圈更贴合 M3E */
+  /* 骨架屏:呼吸式明暗,比转圈更贴合 M3E(周期 1600ms / opacity 1 → .55,见 §7) */
   .skel .poster, .skel .meta i {
     background: var(--m3e-sys-color-surface-container-high);
     border-radius: 18px;
-    animation: skel 1.8s ease-in-out infinite;
+    animation: skel 1.6s cubic-bezier(.4,0,.6,1) infinite;
   }
   .skel .meta i { display: block; height: 12px; margin: 10px auto 0; width: 72%; border-radius: 6px; }
   .skel:nth-child(3n) .meta i { width: 54%; animation-delay: .25s; }
   .skel:nth-child(4n) .poster { animation-delay: .5s; }
-  @keyframes skel { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+  @keyframes skel { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 
   /* 无封面时的中性占位,避免任何亮边 */
   .poster { background: var(--m3e-sys-color-surface-container-high); }
@@ -879,20 +888,37 @@
     font: 600 13px/1 system-ui, "PingFang SC", sans-serif;
   }
   .resume:hover { filter: brightness(.96); }
-  /* 详情骨架屏 */
-  .skel-hero { display: flex; gap: 20px; padding: 4px 0 22px; }
-  .skel-hero .sk { width: 148px; aspect-ratio: 2/3; border-radius: 18px; }
-  .skel-hero .sk-lines { flex: 1; display: flex; flex-direction: column; gap: 12px; padding-top: 8px; }
-  .skel-hero .sk-lines i { height: 14px; border-radius: 8px; display: block; }
-  .skel-hero .sk-lines i:nth-child(1) { height: 22px; width: 46%; }
-  .skel-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+  /* 详情骨架屏:与真实布局同构 —— 封面 148×2:3 r18、右侧标题/副标题/简介 4 行、
+     线路 chip 行 2 颗、选集网格 12 颗(尺寸同 .chip-ep),切换时首屏不重排。
+     顶部 52 是真实页 back 按钮(40 + 上下 2/6)加 detail-top 的 4,骨架留白对齐;
+     写成 padding 而不是 margin,免得 margin 穿过 .detail-body 把首屏撑高 48。 */
+  .skel-hero { display: flex; gap: 20px; padding: 52px 0 22px; }
+  .skel-hero .sk { width: 148px; flex: none; aspect-ratio: 2/3; border-radius: 18px; }
+  .skel-hero .sk-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding-top: 2px; }
+  .skel-hero .sk-lines i { display: block; height: 14px; border-radius: 8px; }
+  .skel-hero .sk-lines i:nth-child(1) { height: 28px; width: 46%; }   /* 标题 21/1.35 */
+  .skel-hero .sk-lines i:nth-child(2) { height: 20px; width: 70%; }   /* 副标题 14/20 */
+  .skel-hero .sk-lines i:nth-child(5) { width: 92%; }                 /* 简介 4 行 */
+  .skel-hero .sk-lines i:nth-child(6) { width: 60%; }
+  .skel-chips { display: flex; gap: 8px; margin-top: 24px; }
   .skel-chips i { width: 92px; height: 38px; border-radius: 12px; display: block; }
-  .sk, .skel-hero .sk-lines i, .skel-chips i {
-    background: var(--m3e-sys-color-surface-container-high);
-    animation: skel 1.8s ease-in-out infinite;
+  .skel-epgrid {
+    display: grid; grid-template-columns: repeat(auto-fill, 92px); gap: 8px;
+    justify-content: start; margin-top: 24px;
   }
-  .skel-chips i:nth-child(3n) { animation-delay: .3s; }
-  .skel-chips i:nth-child(4n) { animation-delay: .6s; }
+  .skel-epgrid i { height: 38px; border-radius: 12px; display: block; }
+  .sk, .skel-hero .sk-lines i, .skel-chips i, .skel-epgrid i {
+    background: var(--m3e-sys-color-surface-container-high);
+    animation: skel 1.6s cubic-bezier(.4,0,.6,1) infinite;
+  }
+  .skel-chips i:nth-child(3n), .skel-epgrid i:nth-child(3n) { animation-delay: .3s; }
+  .skel-chips i:nth-child(4n), .skel-epgrid i:nth-child(4n) { animation-delay: .6s; }
+  /* 骨架态把首屏撑满:上层 #v-detail 就是整块视口(top 0、高 100vh),
+     所以骨架内容高 = 视口 - 容器上下 padding,内容出现时首屏高度不变。
+     不用 100%:那要问"auto 高度"的父级要百分比,布局会成环 */
+  .detail-wrap[data-skel] .detail-body {
+    min-height: calc(100vh - var(--detail-pad-t) - var(--detail-pad-b));
+  }
 
   /* 加载指示器 */
   .spin {
