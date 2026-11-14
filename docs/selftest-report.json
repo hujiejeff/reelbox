@@ -1,0 +1,90 @@
+{
+  "at": "2026-11-14T10:58:14.172Z",
+  "exe": "reelbox --selftest",
+  "source": {
+    "name": "4k影视",
+    "url": "C:\\Users\\hujie\\AppData\\Roaming\\reelbox\\plugins\\user-4kvm.webox.js"
+  },
+  "list": {
+    "ms": 531,
+    "items": 30,
+    "first": "折月亮",
+    "poster": true,
+    "ok": true
+  },
+  "detail": {
+    "ms": 479,
+    "title": "折月亮",
+    "summary": 176,
+    "groups": 1,
+    "episodes": 22,
+    "ok": true
+  },
+  "play": {
+    "ms": 112078,
+    "tries": 3,
+    "passed": 0,
+    "needed": 2,
+    "attempts": [
+      {
+        "name": "第1集",
+        "id": "ch4sbrle8",
+        "ok": false,
+        "ms": 25827,
+        "from": 0,
+        "readyState": 0,
+        "videoWidth": 0,
+        "videoHeight": 0,
+        "to": 0,
+        "reason": "readyState=0 networkState=2 size=0x0 t=0.00 paused=false src=blob:http://tauri.localhost/9cf29c26-7855-428f-bad7-ab98c9712ef4",
+        "m3u8": {
+          "code": 200,
+          "bytes": 95373354,
+          "extm3u": false
+        },
+        "index": 1
+      },
+      {
+        "name": "第2集",
+        "id": "ch4sbrleo",
+        "ok": false,
+        "ms": 25684,
+        "from": 0,
+        "readyState": 0,
+        "videoWidth": 0,
+        "videoHeight": 0,
+        "to": 0,
+        "reason": "readyState=0 networkState=2 size=0x0 t=0.00 paused=false src=blob:http://tauri.localhost/856a3a67-41f8-4067-b5a9-51d86d240491",
+        "m3u8": {
+          "code": 200,
+          "bytes": 95472983,
+          "extm3u": false
+        },
+        "index": 2
+      },
+      {
+        "name": "第3集",
+        "id": "ch4sbrlf4",
+        "ok": false,
+        "ms": 25793,
+        "from": 0,
+        "readyState": 0,
+        "videoWidth": 0,
+        "videoHeight": 0,
+        "to": 0,
+        "reason": "readyState=0 networkState=2 size=0x0 t=0.00 paused=false src=blob:http://tauri.localhost/d30202d1-d05d-4626-9f60-7cd3762139e4",
+        "m3u8": {
+          "code": 200,
+          "bytes": 95478401,
+          "extm3u": false
+        },
+        "index": 3
+      }
+    ],
+    "ok": false
+  },
+  "cms": null,
+  "result": "FAIL",
+  "reason": "视频没有真正播起来(0/2):第1集 readyState=0 networkState=2 size=0x0 t=0.00 paused=false src=blob:http://tauri.localhost/9cf29c26-7855-428f-bad7-ab98c9712ef4 | 第2集 readyState=0 networkState=2 size=0x0 t=0.00 paused=false src=blob:http://tauri.localhost/856a3a67-41f8-4067-b5a9-51d86d240491 | 第3集 readyState=0 networkState=2 size=0x0 t=0.00 paused=false src=blob:http://tauri.localhost/d30202d1-d05d-4626-9f60-7cd3762139e4",
+  "durationMs": 113099
+}

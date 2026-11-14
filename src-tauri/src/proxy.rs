@@ -3,12 +3,15 @@
 //! 这里起一个 127.0.0.1 上的小服务,把 m3u8 和分片都代理一遍,顺手改写里面的地址。
 
 use std::io::Read;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine as _;
 use tiny_http::{Header, Response, Server};
+
+use crate::logging;
 
 static PORT: OnceLock<u16> = OnceLock::new();
 const MAX_BYTES: u64 = 96 << 20;
@@ -65,7 +68,12 @@ fn query(url: &str, key: &str) -> Option<String> {
 }
 
 fn send(req: tiny_http::Request, data: Vec<u8>, ct: &str) {
-    let mut r = Response::from_data(data);
+    send_status(req, 200, data, ct);
+}
+
+/// 带 CORS 的响应:状态码照抄源站,否则跨域下 hls.js 只能看到 CORS 错误
+fn send_status(req: tiny_http::Request, status: u16, data: Vec<u8>, ct: &str) {
+    let mut r = Response::from_data(data).with_status_code(status);
     for h in cors(ct) { r.add_header(h); }
     let _ = req.respond(r);
 }
@@ -78,6 +86,10 @@ fn cors(ct: &str) -> Vec<Header> {
     ]
 }
 
+/// 分片请求一集几十个,只把前几个写进日志;出错的全都写。
+static SEG_LOGGED: AtomicUsize = AtomicUsize::new(0);
+const SEG_LOG_FIRST: usize = 6;
+
 fn handle(req: tiny_http::Request) {
     let url = req.url().to_string();
     if !url.starts_with("/p?") {
@@ -88,35 +100,59 @@ fn handle(req: tiny_http::Request) {
         let _ = req.respond(Response::empty(400));
         return;
     };
+    // 头一次转成键值对:既要发给源站,也要写进日志
+    let pairs: Vec<(String, String)> = serde_json::from_str::<Vec<Vec<String>>>(&headers)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|kv| kv.len() == 2)
+        .map(|kv| (kv[0].clone(), kv[1].clone()))
+        .collect();
+    let header_note = describe_headers(&pairs);
 
     let mut call = ureq::get(&target)
         .timeout(Duration::from_secs(20))
-        .set("User-Agent", AGENT_UA);
-    if let Ok(list) = serde_json::from_str::<Vec<Vec<String>>>(&headers) {
-        for kv in list {
-            if kv.len() == 2 {
-                call = call.set(&kv[0], &kv[1]);
-            }
-        }
-    }
-    if !headers.is_empty() && headers.contains("Referer") {
-        // 已经通过 headers 设置
+        .set("User-Agent", AGENT_UA)
+        // 明确要原始字节:压缩过的 m3u8 交给 hls.js 只会得到 manifestParsingError
+        .set("Accept-Encoding", "identity");
+    for (k, v) in &pairs {
+        call = call.set(k, v);
     }
 
     let resp = match call.call() {
         Ok(r) => r,
+        // 源站 4xx/5xx:原样回给播放器,别用 502 把它糊掉(否则日志里看不出真实状态码)
+        Err(ureq::Error::Status(code, r)) => {
+            let (body, ct) = read_body(r);
+            logging::event(&format!(
+                "PROXY http status={code} ct={ct} target={} {header_note} body={}",
+                short(&target, 160),
+                logging::one_line(&String::from_utf8_lossy(&body), 160)
+            ));
+            send_status(req, code, body, &ct);
+            return;
+        }
         Err(e) => {
-            eprintln!("proxy: 取 {target} 失败: {e}");
+            logging::event(&format!(
+                "PROXY ERR transport target={} {header_note} err={e}",
+                short(&target, 160)
+            ));
             let _ = req.respond(Response::empty(502));
             return;
         }
     };
+
+    let status = resp.status();
     let ct = resp
         .header("content-type")
         .unwrap_or("application/octet-stream")
         .to_string();
-    let mut body = Vec::new();
-    if resp.into_reader().take(MAX_BYTES).read_to_end(&mut body).is_err() {
+    let ce = resp.header("content-encoding").unwrap_or("").to_string();
+    let (body, _) = read_body(resp);
+    if body.is_empty() {
+        logging::event(&format!(
+            "PROXY ERR empty status={status} ct={ct} target={}",
+            short(&target, 160)
+        ));
         let _ = req.respond(Response::empty(502));
         return;
     }
@@ -125,13 +161,85 @@ fn handle(req: tiny_http::Request) {
         || body.starts_with(b"#EXTM3U")
         || ct.contains("mpegurl");
     if is_playlist {
+        let extm3u = body.starts_with(b"#EXTM3U");
+        logging::event(&format!(
+            "PROXY m3u8 status={status} bytes={} ct={ct} ce={ce} extm3u={} target={} {header_note}",
+            body.len(),
+            if extm3u { "yes" } else { "NO" },
+            short(&target, 160)
+        ));
+        if !extm3u {
+            // 这就是 hls.js 报 manifestParsingError 的直接证据:拿到的根本不是清单
+            logging::event(&format!(
+                "PROXY NOT-M3U8 target={} head={}",
+                short(&target, 160),
+                logging::one_line(&String::from_utf8_lossy(&body[..body.len().min(400)]), 160)
+            ));
+            send_status(req, status, body, &ct);
+            return;
+        }
         let text = String::from_utf8_lossy(&body).to_string();
         let out = rewrite(&text, &target, &headers);
         send(req, out.into_bytes(), "application/vnd.apple.mpegurl");
     } else {
+        let n = SEG_LOGGED.fetch_add(1, Ordering::Relaxed);
+        if n < SEG_LOG_FIRST || status != 200 {
+            logging::event(&format!(
+                "PROXY seg status={status} bytes={} ct={ct} target={}",
+                body.len(),
+                short(&target, 120)
+            ));
+        }
         send(req, body, &ct);
     }
 }
+
+fn read_body(resp: ureq::Response) -> (Vec<u8>, String) {
+    let ct = resp
+        .header("content-type")
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let mut body = Vec::new();
+    let _ = resp.into_reader().take(MAX_BYTES).read_to_end(&mut body);
+    (body, ct)
+}
+
+/// 请求带的头写进日志,但令牌类的一律打码
+fn describe_headers(pairs: &[(String, String)]) -> String {
+    if pairs.is_empty() {
+        return "h=none".into();
+    }
+    let mut out = String::from("h=");
+    for (i, (k, v)) in pairs.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let lk = k.to_ascii_lowercase();
+        let secret = lk.contains("cookie")
+            || lk.contains("auth")
+            || lk.contains("token")
+            || lk.contains("key");
+        out.push_str(k);
+        out.push('=');
+        if secret {
+            out.push_str("***");
+        } else {
+            out.push_str(&logging::one_line(v, 60));
+        }
+    }
+    out
+}
+
+/// 日志里的地址只留前 160 字符(签名串很长)
+fn short(url: &str, max: usize) -> String {
+    let n = url.chars().count();
+    if n <= max {
+        return url.to_string();
+    }
+    let head: String = url.chars().take(max).collect();
+    format!("{head}…({n})")
+}
+
 
 /// 把 m3u8 里的分片、子清单、密钥地址都换成代理地址
 fn rewrite(text: &str, base: &str, headers: &str) -> String {

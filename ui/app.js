@@ -108,57 +108,219 @@ function waitFor(check, ms) {
   });
 }
 
-/** 全流程验收:插件源 列表 → 详情 → 播放(视频真的在走) */
+const PLAY_TIMEOUT_MS = 25000; // 单集最多等这么久出画面
+const PLAY_TRIES = 3;          // 最多试几集
+const PLAY_NEED = 2;           // 至少几集真的播起来才算 PASS
+
+/** 播放判定:有画面尺寸 + 缓冲够 + currentTime 真的往前走 */
+function playingNow(v, from) {
+  return v.readyState >= 3 && v.videoWidth > 0 && Number(v.currentTime || 0) > from + 0.5;
+}
+
+/** 失败时把 <video> 和 hls.js 的现场抄下来 */
+function videoFailReason(v) {
+  const parts = [
+    "readyState=" + v.readyState,
+    "networkState=" + v.networkState,
+    "size=" + v.videoWidth + "x" + v.videoHeight,
+    "t=" + Number(v.currentTime || 0).toFixed(2),
+    "paused=" + v.paused,
+  ];
+  if (v.error) parts.push("mediaErr=" + v.error.code + "(" + (v.error.message || "") + ")");
+  if (v.currentSrc) parts.push("src=" + shortUrl(v.currentSrc, 90));
+  return parts.join(" ");
+}
+
+/** 自检失败时,直接再拉一次 m3u8,拿到 HTTP 码/字节数/是否真是清单 */
+async function probePlaylist(localUrl) {
+  if (!localUrl) return null;
+  try {
+    const r = await fetch(localUrl, { cache: "no-store" });
+    const text = await r.text();
+    const ext = text.startsWith("#EXTM3U");
+    log(
+      "M3U8 probe", "code=" + r.status, "bytes=" + text.length,
+      "extm3u=" + (ext ? "yes" : "NO"),
+      ext ? "" : "head=" + text.replace(/\s+/g, " ").slice(0, 160)
+    );
+    return { code: r.status, bytes: text.length, extm3u: ext };
+  } catch (e) {
+    log("M3U8 probe fail", String(e));
+    return { error: String(e && e.message ? e.message : e) };
+  }
+}
+
+/** 一次播放尝试:返回可写进报告的结构 */
+async function playAttempt(ep) {
+  const v = $("video");
+  const t0 = Date.now();
+  const res = { name: ep.name, id: ep.id, ok: false, ms: 0 };
+  try {
+    await playEpisode(ep.id, ep.name, ep.group || "");
+  } catch (e) {
+    res.ms = Date.now() - t0;
+    res.reason = "playEpisode: " + (e && e.message ? e.message : e);
+    return res;
+  }
+  // 自检不需要声音:静音播放在任何策略下都能起来
+  try { v.muted = true; v.play().catch(() => {}); } catch (_) {}
+  // 每次从当前位置往前推 0.5 秒才算"真的在走"
+  const startAt = Number(v.currentTime || 0);
+  res.from = Number(startAt.toFixed(2));
+  const ok = await waitFor(() => playingNow(v, startAt), PLAY_TIMEOUT_MS);
+  res.ms = Date.now() - t0;
+  res.ok = !!ok;
+  res.readyState = v.readyState;
+  res.videoWidth = v.videoWidth;
+  res.videoHeight = v.videoHeight;
+  res.to = Number(Number(v.currentTime || 0).toFixed(2));
+  if (!ok) {
+    res.reason = videoFailReason(v);
+    res.m3u8 = await probePlaylist(lastLocalUrl);
+  }
+  return res;
+}
+
+/** 把日志里和播放相关的行挑出来,失败时一起打出去 */
+function diagLines(lines, keep) {
+  const re = /HLS ERR|HLS FATAL|VIDEO ERR|M3U8 probe|STREAM FAIL|stream |PROXY /;
+  return lines.filter((l) => re.test(l)).slice(-(keep || 14));
+}
+
+let lastLocalUrl = "";
+
+/** 全流程验收:插件源 列表 → 详情 → 播放(多集,视频真的在走) */
 async function runSelfTest() {
   const say = (m) => log("SELFTEST " + m);
-  const stop = (m) => { say("FAIL " + m); say("DONE"); };
+  const startedAt = new Date();
+  const report = {
+    at: startedAt.toISOString(),
+    exe: "reelbox --selftest",
+    source: null,
+    list: null,
+    detail: null,
+    play: null,
+    cms: null,
+    result: "FAIL",
+    reason: "",
+  };
+
+  // 先写一版占位报告:进程被杀也不会一份都没有
+  async function flushReport() {
+    report.durationMs = Date.now() - startedAt.getTime();
+    try {
+      const p = await invoke("selftest_report", { json: JSON.stringify(report, null, 2) });
+      say("report " + p);
+    } catch (e) {
+      say("report fail " + (e && e.message ? e.message : e));
+    }
+  }
+
+  const stop = async (m) => {
+    report.result = "FAIL";
+    report.reason = String(m);
+    say("FAIL " + m);
+    const diag = diagLines(LOG_BUF, 20);
+    diag.forEach((l) => say("diag| " + l));
+    say("DONE");
+    await flushReport();
+  };
+
   try {
+    await flushReport();
     const src =
       S.sources.find((s) => isPluginSource(s) && /4k/i.test(String(s.name) + String(s.url))) ||
       S.sources.find((s) => isPluginSource(s));
-    if (!src) return stop("没有插件源");
+    if (!src) return await stop("没有插件源");
+    report.source = { name: src.name, url: src.url };
     say("source " + src.name);
 
+    /* ---- 列表 ---- */
     const t0 = Date.now();
     await switchSource(src);
     const items = S.items || [];
     const first = items[0] || {};
+    report.list = {
+      ms: Date.now() - t0,
+      items: items.length,
+      first: first.title || "",
+      poster: !!first.poster,
+      ok: items.length > 0 && /[\u4e00-\u9fa5]/.test(first.title || ""),
+    };
     say(
-      "list ms=" + (Date.now() - t0) + " n=" + items.length +
+      "list ms=" + report.list.ms + " n=" + items.length +
       " first=" + JSON.stringify(first.title || "") + " poster=" + (first.poster ? "yes" : "no")
     );
-    if (!items.length) return stop("列表为空");
-    if (!/[\u4e00-\u9fa5]/.test(first.title || "")) return stop("首个条目没有中文片名");
+    if (!items.length) return await stop("列表为空");
+    if (!report.list.ok) return await stop("首个条目没有中文片名");
 
+    /* ---- 详情 ---- */
     const t1 = Date.now();
     const d = await openDetail(first);
-    const eps = S.detailEps || [];
+    const eps = (S.detailEps || []).slice();
+    report.detail = {
+      ms: Date.now() - t1,
+      title: d.title || "",
+      summary: (d.summary || "").length,
+      groups: d.groups.length,
+      episodes: eps.length,
+      ok: !!d.title && eps.length > 0,
+    };
     say(
-      "detail ms=" + (Date.now() - t1) + " title=" + JSON.stringify(d.title || "") +
-      " summary=" + (d.summary || "").length + " groups=" + d.groups.length + " eps=" + eps.length
+      "detail ms=" + report.detail.ms + " title=" + JSON.stringify(d.title || "") +
+      " summary=" + report.detail.summary + " groups=" + d.groups.length + " eps=" + eps.length
     );
-    if (!d.title) return stop("详情没有标题");
-    if (!eps.length) return stop("详情没有分集");
+    if (!d.title) return await stop("详情没有标题");
+    if (!eps.length) return await stop("详情没有分集");
 
+    /* ---- 播放:最多试 3 集,至少 2 集真的播起来 ---- */
+    const picks = [];
+    for (const e of eps) {
+      if (picks.length >= PLAY_TRIES) break;
+      if (picks.some((p) => p.id === e.id)) continue;
+      picks.push(e);
+    }
+    const need = Math.min(PLAY_NEED, picks.length);
     const t2 = Date.now();
-    await playEpisode(eps[0].id, eps[0].name, eps[0].group || "");
-    const hookMs = Date.now() - t2;
-    const v = $("video");
-    // 自检不需要声音:静音播放在任何策略下都能起来
-    try { v.muted = true; v.play().catch(() => {}); } catch (_) {}
-    // 从头放 0.5 秒:currentTime 真的往前走 + 有画面尺寸,才算"视频能播"
-    try { if (v.currentTime > 1) v.currentTime = 0; } catch (_) {}
-    const startAt = Number(v.currentTime || 0);
-    const moved = await waitFor(() => v.currentTime > startAt + 0.5 && v.videoWidth > 0, 25000);
-    say(
-      "play ms=" + hookMs + " readyState=" + v.readyState + " t=" + Number(v.currentTime || 0).toFixed(2) +
-      " size=" + v.videoWidth + "x" + v.videoHeight + " playing=" + moved
-    );
-    if (!moved) return stop("视频没有真正播起来");
+    const attempts = [];
+    for (let i = 0; i < picks.length; i++) {
+      const mark = LOG_BUF.length;
+      const r = await playAttempt(picks[i]);
+      r.index = i + 1;
+      attempts.push(r);
+      say(
+        "play " + r.index + "/" + picks.length + " ep=" + JSON.stringify(r.name) +
+        " ok=" + (r.ok ? "yes" : "no") + " ms=" + r.ms +
+        " readyState=" + r.readyState + " size=" + r.videoWidth + "x" + r.videoHeight +
+        " t=" + r.from + "→" + r.to
+      );
+      if (!r.ok) {
+        say("play " + r.index + " reason " + r.reason);
+        diagLines(LOG_BUF.slice(mark), 10).forEach((l) => say("diag| " + l));
+      }
+      if (attempts.filter((a) => a.ok).length >= need) break; // 够了就别再耗时间
+    }
+    const passed = attempts.filter((a) => a.ok).length;
+    report.play = {
+      ms: Date.now() - t2,
+      tries: attempts.length,
+      passed: passed,
+      needed: need,
+      attempts: attempts,
+      ok: passed >= need,
+    };
+    say("play summary ok=" + passed + "/" + need + " tries=" + attempts.length + " ms=" + report.play.ms);
+    if (!report.play.ok) {
+      return await stop(
+        "视频没有真正播起来(" + passed + "/" + need + "):" +
+        attempts.filter((a) => !a.ok).map((a) => a.name + " " + (a.reason || "")).join(" | ")
+      );
+    }
 
-    // 内置源回归:确认插件化改动没把共享的 player_url / HLS 路径弄坏(只告警不判死)
+    /* ---- 内置 CMS 源回归:插件化改动别把共享的 player_url / HLS 弄坏 ---- */
     const cms = S.sources.find((s) => !isPluginSource(s) && /dytt|ffzy|lzzy/.test(String(s.url)));
     if (cms) {
+      const t3 = Date.now();
       try {
         await switchSource(cms);
         const one = (S.items || [])[0];
@@ -170,16 +332,26 @@ async function runSelfTest() {
         const cv = $("video");
         try { cv.muted = true; cv.play().catch(() => {}); } catch (_) {}
         const okCms = await waitFor(() => cv.currentTime > 0.05 && !cv.paused, 20000);
-        say("cms " + (okCms ? "ok" : "warn 没播起来") + " source=" + cms.name);
+        report.cms = {
+          name: cms.name,
+          ms: Date.now() - t3,
+          ok: !!okCms,
+          reason: okCms ? "" : videoFailReason(cv),
+        };
+        say("cms " + (okCms ? "ok" : "warn 没播起来 " + report.cms.reason) + " source=" + cms.name);
       } catch (e) {
-        say("cms warn " + (e && e.message ? e.message : e));
+        report.cms = { name: cms.name, ms: Date.now() - t3, ok: false, reason: String(e && e.message ? e.message : e) };
+        say("cms warn " + report.cms.reason);
       }
     }
 
-    say("PASS");
+    report.result = "PASS";
+    report.reason = "";
+    say("PASS play=" + passed + "/" + need);
     say("DONE");
+    await flushReport();
   } catch (e) {
-    stop(e && e.message ? e.message : String(e));
+    await stop(e && e.message ? e.message : String(e));
   }
 }
 
@@ -729,6 +901,13 @@ const LOG_MAX = 300;
 const LOG_BUF = [];
 const NL = String.fromCharCode(10);
 
+/** 签名地址动辄几百字符,日志里只留开头 */
+function shortUrl(u, n) {
+  const s = String(u == null ? "" : u);
+  const max = n || 120;
+  return s.length > max ? s.slice(0, max) + "…(" + s.length + ")" : s;
+}
+
 function log() {
   const t = new Date().toISOString().slice(11, 19);
   const line = t + " " + Array.prototype.map.call(arguments, String).join(" ");
@@ -1122,13 +1301,22 @@ function openPlayer(url, name, mime) {
     else pStatus("已经是最后一集");
   };
 
+  // 出错先记现场:<video> 自己的错误码往往比 hls.js 的 details 更直接
+  v.onerror = () => {
+    const e = v.error || {};
+    log(
+      "VIDEO ERR", "code=" + (e.code || 0), "msg=" + (e.message || ""),
+      "readyState=" + v.readyState, "networkState=" + v.networkState,
+      "src=" + shortUrl(v.currentSrc || v.src, 100)
+    );
+  };
+
   // 本地反代地址把真实地址 base64 掉了,看不出扩展名,所以以 mime 为准
   const hint = mime || (playCtx && playCtx.mime) || "";
   const isHls = /mpegurl|m3u8/i.test(hint) || url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
   if (window.Hls && Hls.isSupported() && isHls) {
     hls = new Hls({ maxBufferLength: 30, enableWorker: true });
-    hls.loadSource(url);
-    hls.attachMedia(v);
+    // 事件要先挂上再 loadSource,否则早期的清单错误会漏记
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       pStatus("");
       renderLevels();
@@ -1137,12 +1325,22 @@ function openPlayer(url, name, mime) {
     });
     hls.on(Hls.Events.LEVEL_SWITCHED, renderLevels);
     hls.on(Hls.Events.ERROR, (_e, d) => {
-      if (d && d.fatal) {
-        log("HLS FATAL", d.details);
-        pStatus("播放失败:" + d.details);
-        window.__err && window.__err("hls: " + d.details);
-      }
+      if (!d) return;
+      const resp = d.response || {};
+      const ctxUrl = d.url || (d.frag && d.frag.url) || (d.context && d.context.url) || "";
+      const reason = resp.text ? String(resp.text).replace(/\s+/g, " ").slice(0, 160) : "";
+      log(
+        "HLS ERR", "type=" + d.type, "details=" + d.details, "fatal=" + !!d.fatal,
+        "code=" + (resp.code || 0), "url=" + shortUrl(ctxUrl, 100),
+        reason ? "resp=" + reason : ""
+      );
+      if (!d.fatal) return;
+      log("HLS FATAL", d.details);
+      pStatus("播放失败:" + d.details);
+      window.__err && window.__err("hls: " + d.details);
     });
+    hls.loadSource(url);
+    hls.attachMedia(v);
   } else {
     $("pQuality").hidden = true;
     v.src = url;
@@ -1194,11 +1392,19 @@ async function playEpisode(id, name, groupId) {
   };
   openPlayer("", name);
   try {
+    const t0 = Date.now();
     const st = pluginMode()
       ? await pluginStream(groupId, id)
       : await invoke("play", { source: S.source, episodeId: id });
+    const hookMs = Date.now() - t0;
     if (playCtx) playCtx.mime = st.mime || "";
+    // 源头(插件 play 钩子给的)地址:签名串很长,只留开头,但要能看出主机和路径
+    log("play hook ms=" + hookMs + " mime=" + (st.mime || "") + " url=" + shortUrl(st.url, 160));
+    if (st.headers && Object.keys(st.headers).length) {
+      log("play headers " + Object.keys(st.headers).join(","));
+    }
     const local = await invoke("player_url", { stream: st });
+    lastLocalUrl = local;
     // 多清晰度:每档都给一个代理地址
     const opts = [];
     if (st.options && st.options.length > 1) {
@@ -1210,7 +1416,7 @@ async function playEpisode(id, name, groupId) {
       }
     }
     if (playCtx) playCtx.options = opts;
-    log("stream", st.mime, String(local).slice(0, 60));
+    log("stream " + st.mime + " local=" + shortUrl(local, 90) + " opts=" + opts.length);
     openPlayer(local, name, st.mime);
   } catch (e) {
     log("STREAM FAIL", e);

@@ -1,6 +1,7 @@
 // Reelbox 的 Tauri 外壳:窗口 + 命令注册。
 
 mod commands;
+mod logging;
 mod proxy;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -10,15 +11,12 @@ pub fn run() {
     commands::apply_engine_arg(&args);
     // 启动标记:用来区分"路径不可写"和"前端没调用"
     {
-        use std::io::Write as _;
-        let base = std::env::var_os("APPDATA")
-            .map(std::path::PathBuf::from)
+        let dir = logging::log_path()
+            .parent()
+            .map(|p| p.to_path_buf())
             .unwrap_or_else(std::env::temp_dir);
-        let dir = base.join("reelbox");
         let _ = std::fs::create_dir_all(&dir);
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("reelbox.log")) {
-            let _ = writeln!(f, "---- boot ----");
-        }
+        logging::append("---- boot ----");
         eprintln!("boot: log dir = {}", dir.display());
     }
     tauri::Builder::default()
@@ -39,6 +37,7 @@ pub fn run() {
             commands::plugin_fetch,
             commands::plugin_stream_allow,
             commands::selftest_mode,
+            commands::selftest_report,
         ])
         .run(tauri::generate_context!())
         .expect("reelbox: 启动失败");

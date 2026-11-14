@@ -435,25 +435,42 @@ pub fn player_url(stream: Stream) -> Result<String, String> {
     Ok(crate::proxy::wrap(&stream.url, &h))
 }
 
-/// 前端日志落盘:写到临时目录下的 reelbox/reelbox.log
+/// 前端日志落盘:写到 %APPDATA%/reelbox/reelbox.log(和反代日志同一个文件)
 #[tauri::command]
 pub fn append_log(line: String) {
-    use std::io::Write as _;
-    let base = std::env::var_os("APPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("reelbox");
-    let path = dir.join("reelbox.log");
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("log: 建目录失败 {e}");
-        return;
-    }
-    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(mut f) => { let _ = writeln!(f, "{line}"); }
-        Err(e) => eprintln!("log: 写 {} 失败: {e}", path.display()),
-    }
+    crate::logging::append(&line);
 }
 
+/// 自检摘要落盘:`docs/selftest-report.json`(找不到就退回 %APPDATA%/reelbox/)。
+/// 返回实际写入的路径,前端会把它写进日志。
+#[tauri::command]
+pub fn selftest_report(json: String) -> Result<String, String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut dir = cwd;
+    // 从当前目录往上找带 docs/ 的那一层(Start-Process 的 WorkingDirectory 是仓库根)
+    let mut target = None;
+    for _ in 0..4 {
+        if dir.join("docs").is_dir() {
+            target = Some(dir.join("docs").join("selftest-report.json"));
+            break;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    let path = target.unwrap_or_else(|| {
+        crate::logging::log_path()
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(std::env::temp_dir)
+            .join("selftest-report.json")
+    });
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("建目录失败: {e}"))?;
+    }
+    std::fs::write(&path, json).map_err(|e| format!("写报告失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
 
 /// 保存一个导入的插件文件,返回 (路径, 名称, id)
 #[tauri::command]
