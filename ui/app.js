@@ -22,6 +22,18 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- 数据 ----------
 
+function bindWheelScroll() {
+  // 非触摸屏:鼠标滚轮在横向 chip 行里改成左右滚动
+  const row = document.getElementById("childchips");
+  if (!row || row.dataset.wheel) return;
+  row.dataset.wheel = "1";
+  row.addEventListener("wheel", (e) => {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    e.preventDefault();
+    row.scrollLeft += e.deltaY;
+  }, { passive: false });
+}
+
 async function init() {
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d")) {
@@ -30,6 +42,7 @@ async function init() {
     }
   });
   bindDebugToggle();
+  bindWheelScroll();
   log("init start");
   {
     const d = document.getElementById("dbg");
@@ -233,7 +246,7 @@ function renderChildren() {
       (c) =>
         '<label class="m3e-filter-chip" data-child="' + esc(c.value) + '">' +
         '<input class="m3e-filter-chip__input" type="checkbox"' + (S.child === c.value ? " checked" : "") + ">" +
-        '<span class="m3e-filter-chip__leading"><span class="m3e-icon m3e-filter-chip__check">check</span></span>' +
+        '<span class="m3e-filter-chip__leading"><span class="m3e-filter-chip__check"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9.6 17.3 4.8 12.5l1.4-1.4 3.4 3.4 8.2-8.2 1.4 1.4z" fill="currentColor"/></svg></span></span>' +
         '<span class="m3e-filter-chip__label">' + esc(c.label) + "</span></label>"
     )
     .join("");

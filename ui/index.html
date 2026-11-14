@@ -523,6 +523,22 @@
   .dbg-fab[hidden] { display: none; }
   .dbg-fab:hover { background: rgba(32,32,38,.92); }
   .dbg-fab .m3e-icon { font-size: 20px; }
+  /* 桌面端滚动条:平时隐藏,悬停时出现细条 */
+  .scroll:hover, .side__scroll:hover, .chips:hover, .cattabs:hover, #v-detail:hover { scrollbar-width: thin; }
+  .scroll:hover::-webkit-scrollbar, .side__scroll:hover::-webkit-scrollbar,
+  .chips:hover::-webkit-scrollbar, .cattabs:hover::-webkit-scrollbar,
+  #v-detail:hover::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scroll:hover::-webkit-scrollbar-thumb, .side__scroll:hover::-webkit-scrollbar-thumb,
+  .chips:hover::-webkit-scrollbar-thumb, .cattabs:hover::-webkit-scrollbar-thumb,
+  #v-detail:hover::-webkit-scrollbar-thumb {
+    background: var(--m3e-sys-color-outline-variant); border-radius: 4px;
+  }
+  .scroll:hover::-webkit-scrollbar-track, .chips:hover::-webkit-scrollbar-track { background: transparent; }
+
+  /* 小分类的勾:字体字形有基线偏移,这里对齐 */
+  .m3e-filter-chip__leading { display: inline-flex; align-items: center; justify-content: center; }
+  .m3e-filter-chip__check { display: inline-flex; align-items: center; justify-content: center; }
+  .m3e-filter-chip__check svg { display: block; }
 </style>
 </head>
 <body>
