@@ -19,7 +19,7 @@
     background: var(--m3e-sys-color-surface); color: var(--m3e-sys-color-on-surface);
     font-family: system-ui, "Segoe UI", "PingFang SC", sans-serif; overflow: hidden;
   }
-  .app { display: flex; flex-direction: column; height: 100vh; }
+  .app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
   @media (max-width: 599px) { .scroll { padding-bottom: 104px; } }
   .body { display: flex; flex: 1; min-height: 0; }
 
@@ -918,6 +918,7 @@
      不用 100%:那要问"auto 高度"的父级要百分比,布局会成环 */
   .detail-wrap[data-skel] .detail-body {
     min-height: calc(100vh - var(--detail-pad-t) - var(--detail-pad-b));
+    min-height: calc(100dvh - var(--detail-pad-t) - var(--detail-pad-b));
   }
 
   /* 加载指示器 */

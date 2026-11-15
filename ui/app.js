@@ -3289,21 +3289,11 @@ function openPlayer(url, name, mime, kind) {
     (platform.nativeHlsOnly ? "(ios/AVPlayer)" : "") +
     " kind=" + (kind || "?") + " hint=" + hint
   );
-  // 探测说"既不是清单也不是媒体"时别硬塞给 hls.js,否则只会得到 manifestParsingError
+  // 探测失败(手机网络/超时)不等于"这不是流":只记一笔,继续按 mime 与后缀尝试
   if (kind === "unknown") {
     const probe = (playCtx && playCtx.probe) || {};
-    log("play abort kind=unknown head=" + (probe.head || ""));
-    pStatus("这条线路返回的是网页,不是播放流");
-    playerFail({
-      step: "stream",
-      kind: "unsupported",
-      title: "这条线路返回的是网页,不是播放流",
-      hint: "源站这一集给的不是 m3u8/mp4(可能是错误页或被拦了)。换一条线路试试。",
-      raw:
-        "kind=unknown status=" + (probe.status || 0) + " mime=" + (probe.mime || "") +
-        (probe.head ? "\n" + probe.head : ""),
-    });
-    return;
+    log("probe unknown, fallback to hint head=" + (probe.head || "") + " status=" + (probe.status || 0));
+    kind = "";
   }
 
   if (useHlsJs && window.Hls && Hls.isSupported()) {
