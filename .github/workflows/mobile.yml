@@ -16,13 +16,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
       - name: Android SDK / NDK
         run: |
-          sdkmanager "platforms;android-37" "build-tools;37.0.0" "ndk;27.0.12077973" || \
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> $GITHUB_ENV
+          set -o pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses > /dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+            "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973"
+          echo "NDK_HOME=$SDK/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -39,11 +42,11 @@ jobs:
       - name: Init android project
         run: |
           if [ ! -d src-tauri/gen/android ]; then
-            cargo tauri android init --ci
+            npx tauri android init --ci
           fi
 
       - name: Build apk
-        run: cargo tauri android build --apk --ci
+        run: npx tauri android build --apk --ci
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -79,11 +82,11 @@ jobs:
       - name: Init ios project
         run: |
           if [ ! -d src-tauri/gen/apple ]; then
-            cargo tauri ios init --ci
+            npx tauri ios init --ci
           fi
 
       - name: Build unsigned ipa
-        run: cargo tauri ios build --no-sign --ci
+        run: npx tauri ios build --no-sign --ci
 
       - uses: actions/upload-artifact@v4
         if: always()
