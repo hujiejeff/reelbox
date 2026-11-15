@@ -276,12 +276,20 @@ WeBox.define({
 });
 "#;
 
-    fn write_demo() -> std::path::PathBuf {
+    /// 每个测试用独立文件:多个测试并发写同一个文件名时,读到的可能是刚被截断的空文件
+    fn write_temp(tag: &str, body: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join("reelbox-plugin-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("demo.webox.js");
-        std::fs::write(&p, DEMO).unwrap();
+        let id = N.fetch_add(1, Ordering::Relaxed);
+        let p = dir.join(format!("{tag}-{}-{id}.js", std::process::id()));
+        std::fs::write(&p, body).unwrap();
         p
+    }
+
+    fn write_demo() -> std::path::PathBuf {
+        write_temp("demo.webox", DEMO)
     }
 
     #[test]
@@ -326,11 +334,7 @@ WeBox.define({
 });"#;
 
     fn write_native() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("reelbox-plugin-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("demo.reelbox.js");
-        std::fs::write(&p, NATIVE_DEMO).unwrap();
-        p
+        write_temp("demo.reelbox", NATIVE_DEMO)
     }
 
 
