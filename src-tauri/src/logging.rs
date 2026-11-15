@@ -1,19 +1,17 @@
 //! 诊断日志。
 //!
 //! 前端(`append_log`)、本地反代(proxy.rs)、自检摘要都写同一个文件
-//! `%APPDATA%/reelbox/reelbox.log`,这样一次失败的播放能在一处看全:
+//! `<数据目录>/reelbox.log`(桌面是 `%APPDATA%/reelbox/reelbox.log`,见 `paths.rs`),
+//! 这样一次失败的播放能在一处看全:
 //! 插件 play 钩子给的原地址 → 反代抓 m3u8 的 HTTP 码/字节数 → hls.js 报的错。
 //!
 //! 时间戳用 UTC 的 `HH:MM:SS`,和前端 `toISOString().slice(11,19)` 对齐。
 
 use std::io::Write as _;
 
-/// 日志文件路径
+/// 日志文件路径(目录解析见 `paths.rs`:移动端不能用 `%APPDATA%`)
 pub fn log_path() -> std::path::PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("reelbox").join("reelbox.log")
+    crate::paths::log_path()
 }
 
 /// 原样写一行(调用方自己带时间戳)

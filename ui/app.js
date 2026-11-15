@@ -3,6 +3,8 @@ import { initPluginHost, callPlugin, isPluginSource } from "./plugin-host.js";
 import { buildSrcPanel } from "./src-panel.js";
 import { openSheet } from "./sheet.js";
 import { closeMenu, menuOpen, openMenu } from "./menu.js";
+// 平台判断只有 platform.js 一处;桌面走的就是原有分支
+import { platform } from "./platform.js";
 import {
   alertDialog,
   confirmDialog,
@@ -76,6 +78,7 @@ async function init() {
   syncPlaySettings();
   loadAppInfo();
   bindPlayer();
+  bindLifecycle();
   document.addEventListener("keydown", (e) => {
     const box = $("player");
     if (box.hidden) return;
@@ -3005,6 +3008,34 @@ function renderLevels() {
   });
 }
 
+/**
+ * 移动端生命周期:切后台暂停播放 + 把进度落盘,回前台不自动播。
+ *
+ * 只在移动端挂(`platform.pauseOnHidden`)。桌面最小化窗口同样会触发
+ * visibilitychange,那属于原有行为,不在这里动。
+ */
+function bindLifecycle() {
+  if (!platform.pauseOnHidden || document.__reelboxLifecycle) return;
+  document.__reelboxLifecycle = true;
+
+  const flush = () => {
+    const v = $("video");
+    if (!v) return;
+    // 切后台先停,别在后台继续拉分片(移动端会掉电、也会被系统限流)
+    if (!v.paused) {
+      try { v.pause(); } catch (_) {}
+    }
+    // 一定要落盘:应用随时可能被系统直接杀掉
+    saveProgress(true);
+  };
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) flush();
+  });
+  // 兜底:iOS 进后台不保证每次都发 visibilitychange
+  window.addEventListener("pagehide", flush);
+}
+
 function bindPlayer() {
   const box = $("player");
   const v = $("video");
@@ -3074,6 +3105,8 @@ function bindPlayer() {
   $("pFull").onclick = () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else if (box.requestFullscreen) box.requestFullscreen();
+    // iOS 没有元素级全屏,只能让系统播放器接管(桌面/Android 走不到这条)
+    else if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
   };
   $("pQuality").onclick = (e) => {
     e.stopPropagation();
@@ -3249,7 +3282,13 @@ function openPlayer(url, name, mime, kind) {
   const hint = mime || (playCtx && playCtx.mime) || "";
   const hlsByHint = /mpegurl|m3u8/i.test(hint) || url.indexOf(".m3u8") >= 0 || url.indexOf("mpegurl") >= 0;
   const isHls = kind === "file" ? false : (kind === "hls" || hlsByHint);
-  logv("play mode " + (isHls ? "hls" : "native") + " kind=" + (kind || "?") + " hint=" + hint);
+  // iOS 的 WKWebView 没有 MSE:hls.js 用不了,直接把反代地址交给 <video>,由 AVPlayer 播 HLS
+  const useHlsJs = isHls && !platform.nativeHlsOnly;
+  logv(
+    "play mode " + (useHlsJs ? "hls" : "native") +
+    (platform.nativeHlsOnly ? "(ios/AVPlayer)" : "") +
+    " kind=" + (kind || "?") + " hint=" + hint
+  );
   // 探测说"既不是清单也不是媒体"时别硬塞给 hls.js,否则只会得到 manifestParsingError
   if (kind === "unknown") {
     const probe = (playCtx && playCtx.probe) || {};
@@ -3267,7 +3306,7 @@ function openPlayer(url, name, mime, kind) {
     return;
   }
 
-  if (window.Hls && Hls.isSupported() && isHls) {
+  if (useHlsJs && window.Hls && Hls.isSupported()) {
     hls = new Hls({ maxBufferLength: 30, enableWorker: true });
     // 事件要先挂上再 loadSource,否则早期的清单错误会漏记
     hls.on(Hls.Events.MANIFEST_PARSED, () => {

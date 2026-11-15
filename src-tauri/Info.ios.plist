@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  只写需要"覆盖/追加"的键,`tauri ios build` 会把它浅合并进生成的 Info.plist
+  (同名键以本文件为准),不需要改 src-tauri/gen/apple 里的任何东西。
+
+  这里放行的是本地反代:`src-tauri/src/proxy.rs` 在 127.0.0.1 上起 HTTP 服务,
+  <video src="http://127.0.0.1:<port>/p?..."> 交给 AVPlayer 播 HLS。
+  ATS 默认禁止明文 HTTP,NSAllowsLocalNetworking 只给本机/局域网开口子,
+  其余外网请求仍强制 HTTPS(不用 NSAllowsArbitraryLoads)。
+-->
+<plist version="1.0">
+<dict>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

@@ -8,9 +8,12 @@ rust-version = "1.77"
 
 [lib]
 name = "reelbox_lib"
-# MinGW 链接 cdylib 时会因导出序号超限失败;桌面只需要 rlib。
-# 以后做移动端再按需加回 staticlib/cdylib。
-crate-type = ["rlib"]
+# 三种产物都要:
+#   staticlib —— iOS(iOS 只能静态链接)
+#   cdylib    —— Android(lib<name>.so)
+#   rlib      —— 桌面(MinGW 下 cdylib 会因导出序号超限而链接失败,而桌面可执行文件只需要 rlib)
+# 注意:crate-type 不能按 target 分别配置,所以三个一起留着。
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

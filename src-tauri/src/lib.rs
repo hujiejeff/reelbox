@@ -2,6 +2,7 @@
 
 mod commands;
 mod logging;
+mod paths;
 mod proxy;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -9,18 +10,15 @@ pub fn run() {
     // 启动参数:--selftest 跑插件验收流程,--engine=boa 回退到 Rust 里的引擎
     let args: Vec<String> = std::env::args().collect();
     commands::apply_engine_arg(&args);
-    // 启动标记:用来区分"路径不可写"和"前端没调用"
-    {
-        let dir = logging::log_path()
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(std::env::temp_dir);
-        let _ = std::fs::create_dir_all(&dir);
-        logging::append("---- boot ----");
-        eprintln!("boot: log dir = {}", dir.display());
-    }
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            // 数据目录必须在这里解析:Android/iOS 上只有 Tauri 起来之后才知道应用私有目录在哪。
+            // 桌面解析结果仍然是 %APPDATA%/reelbox,老用户数据不受影响(见 paths.rs)。
+            paths::init(app.handle());
+            boot_log();
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_sources,
             commands::save_sources,
@@ -46,4 +44,16 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("reelbox: 启动失败");
+}
+
+/// 启动标记:用来区分"路径不可写"和"前端没调用"。
+/// 放在 setup 之后写,移动端才能落到真正的应用目录里。
+fn boot_log() {
+    let dir = logging::log_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(std::env::temp_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    logging::append("---- boot ----");
+    eprintln!("boot: log dir = {}", dir.display());
 }

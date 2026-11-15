@@ -19,12 +19,10 @@ where
         .map_err(|e| format!("TASK: {e}"))?
 }
 
-/// 源的持久化位置:%APPDATA%/reelbox/sources.json
+/// 源的持久化位置:桌面仍是 %APPDATA%/reelbox/sources.json,
+/// 移动端是应用私有目录(见 `paths.rs`)
 fn sources_path() -> std::path::PathBuf {
-    let base = std::env::var_os("APPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("reelbox").join("sources.json")
+    crate::paths::sources_path()
 }
 
 /// 读源列表:文件不存在或解析失败时回落到内置三个
@@ -714,10 +712,8 @@ pub fn selftest_report(json: String) -> Result<String, String> {
 #[tauri::command]
 pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value, String> {
     let meta = plugin::parse_meta(&text)?;
-    let base = std::env::var_os("APPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("reelbox").join("plugins");
+    // 和源配置同一个数据目录(移动端没有 %APPDATA%,见 paths.rs)
+    let dir = crate::paths::plugins_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
 
     let safe: String = meta
