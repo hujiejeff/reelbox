@@ -46,7 +46,7 @@ jobs:
           fi
 
       - name: Build apk
-        run: npx tauri android build --apk --ci
+        run: npx tauri android build --apk --debug --ci
 
       - uses: actions/upload-artifact@v4
         if: always()
