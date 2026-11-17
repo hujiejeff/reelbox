@@ -10,7 +10,6 @@ import {
   confirmDialog,
   dialog,
   formDialog,
-  promptDialog,
   toast,
 } from "./ui-dialog.js";
 
@@ -931,9 +930,9 @@ function mountSrcPanel(host, query) {
       openSourceManager();
       return;
     }
-    if (e.target.closest('[data-act="add"]')) {
+    if (e.target.closest('[data-act="import"]')) {
       closeSrcMenu();
-      editSource(null);
+      runImportFlow();
       return;
     }
     const row = e.target.closest("[data-idx]");
@@ -1496,7 +1495,6 @@ let dragging = false;
 /* ---------- 播放进度 ---------- */
 
 /* ---------- 设置 → 源 ---------- */
-const INDEX_URL = "https://ddgksf2013.top/webox/index.json";
 
 /** 类型下拉的四个取值;title 是给人看的说法 */
 const KIND_OPTIONS = [
@@ -1790,18 +1788,16 @@ function showSrcEmpty(box) {
     S.srcFilter === "live"
       ? "直播源要等 v0.3 才支持播放,现在导入只会登记。"
       : S.srcFilter === "all"
-      ? "可以从网络索引一次导入,或者手动加一个接口地址。"
-      : "切到「全部」看看,或者用下面的按钮加一个。";
+      ? "点「导入」,填链接或挑个文件:源、集合源、插件都认,类型自动判断。"
+      : "切到「全部」看看,或者用「导入」加一个。";
   box.innerHTML = stateCard({
     icon: S.srcFilter === "live" ? "live_tv" : "dns",
     title: label,
     msg: tip,
-    actions: S.srcFilter === "all" ? [{ id: "add", label: "添加源" }, { id: "idx", label: "网络导入", soft: true }] : [],
+    actions: S.srcFilter === "all" ? [{ id: "import", label: "导入" }] : [],
   });
-  const add = box.querySelector('[data-act="add"]');
-  if (add) add.onclick = () => editSource(null);
-  const idx = box.querySelector('[data-act="idx"]');
-  if (idx) idx.onclick = () => importFromIndex();
+  const imp = box.querySelector('[data-act="import"]');
+  if (imp) imp.onclick = () => runImportFlow();
 }
 
 /**
@@ -2080,7 +2076,7 @@ async function testAllSources() {
 }
 
 /** 类型下拉跟着地址走:认出来了就锁死并说明,认不出来才放开手选 */
-function wireKindGuess(d, src) {
+function wireKindGuess(d) {
   const url = d.querySelector("#dlg-url");
   const sel = d.querySelector("#dlg-kind");
   if (!url || !sel) return;
@@ -2100,67 +2096,54 @@ function wireKindGuess(d, src) {
   url.addEventListener("input", apply);
   url.addEventListener("change", apply);
   apply();
-  // 对话框自己会在 30ms 后聚焦第一个输入框;新增源时用户第一件事是贴地址,
-  // 所以这里稍晚一点把焦点要回地址栏
-  if (!src) setTimeout(() => { try { url.focus(); } catch (_) {} }, 60);
 }
 
 /**
- * 新增 / 编辑源:一个 m3e 对话框,三个字段。
- * preset.url 用来「从剪贴板」预填;preset.note 换掉底部说明。
+ * 编辑已有源:一个 m3e 对话框,三个字段。
+ * 新增不走这里 —— 新增就是「导入」:地址或文件进去,由内容判型(见 runImportFlow)。
  */
-async function editSource(src, preset) {
-  const p = preset || {};
-  const startUrl = src ? src.url : (p.url || "");
+async function editSource(src) {
+  if (!src) return;
   const res = await formDialog({
     icon: "dns",
-    headline: src ? "编辑源" : "添加源",
+    headline: "编辑源",
     okText: "保存",
     fields: [
-      { id: "name", label: "名称", value: src ? src.name : (p.name || ""), placeholder: "例如 我的源" },
+      { id: "name", label: "名称", value: src.name, placeholder: "例如 我的源" },
       {
         id: "url",
         label: "接口地址",
-        value: startUrl,
+        value: src.url,
         placeholder: "https://xxx/api.php/provide/vod",
       },
       {
         id: "kind",
         label: "类型",
         type: "select",
-        value: src ? normKind(srcKind(src), src.url) : (guessSourceKind(startUrl) || "vod"),
-        hint: "粘贴地址后会自动选好。",
+        value: normKind(srcKind(src), src.url),
+        hint: "地址能看出类型时会自动选好。",
         options: KIND_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
       },
     ],
-    note: p.note || "地址能看出类型就自动选好;认不出来时才需要手动选。以 .json 结尾的多半是 HTML 爬取配置,取不到数据。",
-    onOpen: (d) => wireKindGuess(d, src),
+    note: "地址能看出类型就自动选好;认不出来时才需要手动选。以 .json 结尾的多半是 HTML 爬取配置,取不到数据。",
+    onOpen: (d) => wireKindGuess(d),
   });
   if (!res) return;
   const src2 = normSource({ name: res.name, url: res.url, kind: res.kind });
   if (!src2) return;
   const list = S.sources.slice();
-  if (src) {
-    // 按对象找位置(不是按 id):同 id 的两条源不会互相误伤
-    const i = list.indexOf(src);
-    if (i >= 0) list[i] = Object.assign({}, src2, { id: src.id });
-    else list.push(src2);
-  } else {
-    if (list.some((x) => x.url === src2.url)) {
-      toast("这个地址已经加过了");
-      return;
-    }
-    list.push(src2);
-  }
+  // 按对象找位置(不是按 id):同 id 的两条源不会互相误伤
+  const i = list.indexOf(src);
+  if (i >= 0) list[i] = Object.assign({}, src2, { id: src.id });
+  else list.push(src2);
   await applySources(list);
-  toast(src ? "已保存「" + src2.name + "」" : "已添加「" + src2.name + "」");
+  toast("已保存「" + src2.name + "」");
 }
 
 /**
- * 从剪贴板添加源。
+ * 从剪贴板导入:剪贴板里是地址就直接预填进导入框,否则照常打开让用户自己粘。
  * Tauri 侧没有装剪贴板插件(离线环境引新依赖有风险),所以先走 WebView 的
- * navigator.clipboard.readText();读不到就退化成"打开对话框 + 提示粘贴",
- * 用户按 Ctrl+V 一样能贴进来。
+ * navigator.clipboard.readText();读不到就退化成"打开导入对话框"。
  */
 async function addFromClipboard() {
   let text = "";
@@ -2171,17 +2154,8 @@ async function addFromClipboard() {
   } catch (_) {
     text = "";
   }
-  const looksUrl = /^(https?:\/\/|[\w]:[\\/]|\/)/i.test(text);
-  if (text && looksUrl) {
-    await editSource(null, { url: text });
-    return;
-  }
-  await editSource(null, {
-    url: "",
-    note: text
-      ? "剪贴板里不是地址,把它粘进来(Ctrl+V)或用上面的「添加源」。"
-      : "这个环境读不到剪贴板。把地址粘进来(Ctrl+V),类型会按地址自动选好。",
-  });
+  const isAddr = /^(https?:\/\/|[a-z]:[\\/]|[\\/])/i.test(text);
+  await runImportFlow(text && isAddr ? { path: text } : undefined);
 }
 
 async function removeSource(src) {
@@ -2226,104 +2200,292 @@ async function removeSource(src) {
   if (S.source === src) await switchSource(list[0]);
 }
 
-/** 「导入」菜单:网络索引 / JSON 文件 / 插件文件。底栏只有这一个入口(§2.6) */
-function openImportMenu(anchor) {
-  return openMenu(
-    anchor,
-    [
-      { type: "label", label: "导入源" },
-      { id: "index", label: "从网络索引导入", icon: "public" },
-      { id: "json", label: "导入 JSON 文件", icon: "data_object" },
-      { id: "plugin", label: "导入插件(.webox.js)", icon: "extension" },
-    ],
-    (id) => {
-      if (id === "index") importFromIndex();
-      else if (id === "json") $("srcFile").click();
-      else if (id === "plugin") $("pluginFile").click();
-    }
-  );
+/* ---------- 导入:一个入口,自动判型 ---------- */
+// 用户的心智模型很简单:所有导入最终都是文件 —— 源是 json 或 xml,集合源是带
+// sources 数组的 json,插件是 js;来源要么是网络链接,要么是本地文件。
+// 所以界面只留一个「导入」:先把内容拿到手(链接用 plugin_fetch 抓,本地文件直接读),
+// 再由内容说明自己是什么(analyzeImport),判不出来才让用户手选。
+
+/** 判型失败时才出现的手选清单 */
+const IMPORT_TYPE_OPTIONS = [
+  { value: "plugin", label: "插件(JS)" },
+  { value: "json", label: "源(JSON)" },
+  { value: "xml", label: "源(XML)" },
+  { value: "collection", label: "集合源(批量)" },
+  { value: "live", label: "直播(m3u/m3u8)" },
+];
+
+/** 单源 JSON 里可能装着接口地址的字段 */
+const SINGLE_SOURCE_KEYS = ["api", "url", "apiurl", "api_url", "interface", "baseurl", "base_url"];
+
+/** 「选择文件」刚选中的 File:名字和输入框里的值一致时优先用它 */
+let importPicked = null;
+
+function looksLikeUrl(s) {
+  return /^https?:\/\//i.test(String(s == null ? "" : s).trim());
 }
 
-/** 网络导入:跳过的 iplayr 爬取配置要明说,不能静默丢 */
-async function importFromIndex() {
-  const url = await promptDialog("网络导入源", "索引地址", INDEX_URL, "https://.../index.json", "导入");
-  if (!url) return;
+/** 当 JSON 解析;不是 JSON(或空)返回 undefined —— 和「解析出 null」区分开 */
+function tryJson(text) {
+  const t = String(text == null ? "" : text).trim();
+  if (!t || (t[0] !== "{" && t[0] !== "[")) return undefined;
   try {
-    const res = await invoke("import_index", { url });
-    // 兼容旧返回(纯数组)
-    const list = (res && res.sources) || (Array.isArray(res) ? res : []);
-    const skipped = (res && res.skipped) || 0;
-    const skippedNames = (res && res.skipped_names) || [];
-    if (!list.length && !skipped) {
-      toast("索引里没有可用的源");
+    return JSON.parse(t);
+  } catch (_) {
+    return undefined;
+  }
+}
+
+/** 集合源:顶层数组,或 {sources:[...]} / {sites:[...]}(老索引格式) */
+function collectionOf(data) {
+  if (Array.isArray(data)) return data.length ? data : null;
+  if (!data || typeof data !== "object") return null;
+  if (Array.isArray(data.sources)) return data.sources.length ? data.sources : null;
+  if (Array.isArray(data.sites)) return data.sites.length ? data.sites : null;
+  return null;
+}
+
+/** 字段值可能是字符串,也可能是 {url} / {api} 这种小对象 */
+function urlField(v) {
+  if (typeof v === "string") return v.trim();
+  if (!v || typeof v !== "object") return "";
+  for (const k of ["url", "api", "src", "base"]) {
+    if (typeof v[k] === "string" && v[k].trim()) return v[k].trim();
+  }
+  return "";
+}
+
+/** 认单源配置:有 api / url / provide.vod 这类字段就算 */
+function singleSourceOf(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  let url = "";
+  for (const k of SINGLE_SOURCE_KEYS) {
+    url = urlField(data[k]);
+    if (url) break;
+  }
+  if (!url && data.provide) {
+    url = typeof data.provide === "object"
+      ? urlField(data.provide.vod) || urlField(data.provide)
+      : urlField(data.provide);
+  }
+  if (!url) return null;
+  return { name: String(data.name || data.title || "").trim(), url: url };
+}
+
+/**
+ * 判型表(内容优先,后缀兜底):
+ *   含 reelbox.define( / WeBox.define(   → 插件
+ *   以 <?xml 或 <rss 开头               → 源(XML)
+ *   JSON 顶层有 sources 数组             → 集合源(批量导入)
+ *   JSON 里有 api/url/provide.vod 等字段 → 源(JSON)
+ *   .js / .json / .xml 后缀              → 上面几种的辅助判断
+ * 认不出来返回 "" —— 只有这时才让用户手选类型。
+ */
+function analyzeImport(text, hint) {
+  const body = String(text == null ? "" : text).replace(/^\uFEFF/, "").trim();
+  const path = String(hint == null ? "" : hint).trim().toLowerCase().split(/[?#]/)[0];
+  // 1) 插件:源码里调了 define();两个前缀都认,老插件用的是前一个
+  if (/reelbox\.define\s*\(/.test(body) || /WeBox\.define\s*\(/.test(body)) return { type: "plugin" };
+  // 2) XML 源
+  if (/^<\?xml/i.test(body) || /^<rss/i.test(body)) return { type: "xml" };
+  // 3) JSON:先看是不是集合源,再看单源
+  const data = tryJson(body);
+  if (data !== undefined) {
+    const list = collectionOf(data);
+    if (list) return { type: "collection", list: list };
+    const one = singleSourceOf(data);
+    if (one) return { type: "json", source: one };
+  }
+  // 4) 后缀兜底:内容看不出门道时按扩展名猜
+  if (path.endsWith(".js")) return { type: "plugin" };
+  if (path.endsWith(".xml")) return { type: "xml" };
+  if (path.endsWith(".json")) return { type: "json" };
+  return { type: "" };
+}
+
+/** 名字兜底:域名,或文件名(后缀全去掉) */
+function nameFromTarget(target) {
+  const t = String(target == null ? "" : target).trim();
+  if (looksLikeUrl(t)) return t.split("://")[1].split(/[/?#]/)[0].replace(/^www\./i, "");
+  const base = t.split(/[\\/]/).pop() || "";
+  return base.replace(/(\.[^.]+)+$/, "") || base || "新源";
+}
+
+/** 导入对话框:地址/路径 + 可选名称 + 「选择文件」 */
+function importDialog(preset) {
+  const p = preset || {};
+  importPicked = p.file || null;
+  return formDialog({
+    icon: "file_upload",
+    headline: "导入",
+    okText: "导入",
+    fields: [
+      {
+        id: "path",
+        label: "地址或文件路径",
+        value: p.path || "",
+        placeholder: "https://…/api.php/provide/vod 或 D:\\…\\source.json",
+      },
+      {
+        id: "name",
+        label: "名称(可选)",
+        value: p.name || "",
+        placeholder: "留空用文件名或域名",
+        required: false,
+      },
+    ],
+    note: "链接和本地文件都行:插件是 js、源是 json/xml、集合源是带 sources 的 json。类型自动判断,认不出来才问你。",
+    onOpen: (d) => wireImportFile(d),
+  });
+}
+
+/** 对话框里的「选择文件」:本地优先走系统选择器,选完把文件名填进地址框 */
+function wireImportFile(d) {
+  const input = d.querySelector("#dlg-path");
+  const field = input ? input.closest(".dlg-field") : null;
+  const picker = $("importFile");
+  if (!input || !field || !picker) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "m3e-button m3e-button--outlined dlg-file";
+  btn.innerHTML = '<span class="m3e-icon" aria-hidden="true">folder_open</span>选择文件';
+  btn.onclick = () => picker.click();
+  field.appendChild(btn);
+  picker.onchange = () => {
+    const f = picker.files && picker.files[0];
+    if (!f) return;
+    importPicked = f;
+    input.value = f.name; // 只填文件名:内容已经由 File 拿着,不用再读一次盘
+    input.dispatchEvent(new Event("input"));
+  };
+}
+
+/** 判型失败:让人手选一次类型(界面上唯一需要用户选类型的地方) */
+async function askImportType(target) {
+  const res = await formDialog({
+    icon: "help",
+    headline: "无法自动识别",
+    okText: "继续导入",
+    fields: [
+      {
+        id: "type",
+        label: "类型",
+        type: "select",
+        value: "json",
+        hint: "内容里既没有 define(),也不是 XML,也不像源配置的 JSON。",
+        options: IMPORT_TYPE_OPTIONS,
+      },
+    ],
+    note: "地址:" + String(target || ""),
+  });
+  return res ? res.type : "";
+}
+
+/**
+ * 导入入口:读内容 → 判型 → 落地。
+ * 链接先抓(plugin_fetch,和插件走同一个带 SSRF 兜底的出口),本地文件直接读。
+ */
+async function runImportFlow(preset) {
+  const res = await importDialog(preset);
+  if (!res) return;
+  const target = String(res.path || "").trim();
+  if (!target) return;
+  let text = "";
+  let fileName = "";
+  try {
+    if (importPicked && importPicked.name === target) {
+      text = await importPicked.text();
+      fileName = importPicked.name;
+    } else if (looksLikeUrl(target)) {
+      const r = await invoke("plugin_fetch", { url: target, headers: null });
+      if (r && r.status >= 400) throw new Error("服务器返回 " + r.status);
+      text = String((r && r.body) || "");
+    } else {
+      text = await invoke("read_text_file", { path: target });
+      fileName = target.split(/[\\/]/).pop() || "";
+    }
+  } catch (e) {
+    log("IMPORT READ FAIL", errText(e));
+    alertDialog("读取失败", "没读到内容:" + errText(e));
+    return;
+  }
+  const hit = analyzeImport(text, fileName || target);
+  const type = hit.type || (await askImportType(target));
+  if (!type) return;
+  await applyImport(type, hit, {
+    target: target,
+    text: text,
+    fileName: fileName,
+    name: String(res.name || "").trim(),
+  });
+  importPicked = null;
+}
+
+/**
+ * 按判型结果落地:插件存进插件目录,集合源逐个加入,单源加进列表并设为当前。
+ * ctx = { target, text, fileName, name }
+ */
+async function applyImport(type, hit, ctx) {
+  const given = String(ctx.name || "").trim();
+
+  if (type === "plugin") {
+    try {
+      const res = await invoke("save_plugin", { fileName: ctx.fileName || "plugin.js", text: ctx.text });
+      const path = String((res && res.path) || "");
+      const known = (S.sources || []).find((x) => x.url === path || x.id === (res && res.id));
+      if (!known) {
+        await applySources(
+          S.sources.concat([{ id: res.id, name: given || res.name, type: "webox", url: path }])
+        );
+      }
+      const src = (S.sources || []).find((x) => x.url === path) || known;
+      log("plugin imported", String(res && res.id));
+      if (src) await setCurrentSource(src, { stay: true });
+      else toast("已导入插件:" + (given || (res && res.name) || ""));
+    } catch (e) {
+      log("PLUGIN IMPORT FAIL", errText(e));
+      alertDialog("导入失败", errText(e));
+    }
+    return;
+  }
+
+  if (type === "collection") {
+    const raw = hit.list || collectionOf(tryJson(ctx.text));
+    const items = (raw || []).map(normSource).filter(Boolean);
+    if (!items.length) {
+      alertDialog("导入失败", "这份集合里没有认出可用的源(每条要有名字和地址)。");
       return;
     }
-    const have = new Set(S.sources.map((x) => x.url));
-    const fresh = list.filter((x) => !have.has(x.url));
-    const dup = list.length - fresh.length;
-    await applySources(S.sources.concat(fresh));
-    log(
-      "index imported",
-      "new=" + fresh.length,
-      "dup=" + dup,
-      "skipped=" + skipped,
-      skippedNames.join(",")
-    );
-    let msg = "新增 " + fresh.length + " 个,跳过 " + skipped + " 个不支持的源";
-    if (dup) msg += "(重复 " + dup + " 个)";
-    toast(msg, {
-      actionLabel: skipped ? "看详情" : "",
-      onAction: () =>
-        alertDialog(
-          "跳过了 " + skipped + " 个源",
-          (skippedNames.length ? skippedNames.join("、") : "这些源") +
-            " 指向的是 HTML 爬取配置(iplayr 那种),不是点播接口地址,导进来也取不到数据,所以没有导入。",
-          "知道了"
-        ),
-    });
-  } catch (e) {
-    log("INDEX IMPORT FAIL", errText(e));
-    alertDialog("导入失败", errText(e));
-  }
-}
-
-async function importPluginFile(e) {
-  const f = e.target.files && e.target.files[0];
-  if (!f) return;
-  try {
-    const text = await f.text();
-    const res = await invoke("save_plugin", { fileName: f.name, text: text });
-    const exists = S.sources.some((x) => x.id === res.id);
-    if (!exists) await applySources(S.sources.concat([{ id: res.id, name: res.name, type: "webox", url: res.path }]));
-    log("plugin imported", res.id);
-    toast("已导入插件:" + res.name);
-  } catch (err) {
-    log("PLUGIN IMPORT FAIL", errText(err));
-    alertDialog("导入插件失败", errText(err));
-  } finally {
-    e.target.value = "";
-  }
-}
-
-async function importJsonFile(e) {
-  const f = e.target.files && e.target.files[0];
-  if (!f) return;
-  try {
-    const text = await f.text();
-    const data = JSON.parse(text);
-    const raw = Array.isArray(data) ? data : data.sites || data.sources || [];
-    const merged = uniqSources(S.sources.concat(raw.map(normSource).filter(Boolean)));
-    if (!merged.length) throw new Error("没有识别到可用的源");
-    const added = merged.length - S.sources.length;
+    const before = (S.sources || []).length;
+    const merged = uniqSources((S.sources || []).concat(items));
     await applySources(merged);
-    log("sources imported", String(merged.length));
-    toast("已导入,新增 " + Math.max(0, added) + " 个,当前共 " + merged.length + " 个源");
-  } catch (err) {
-    log("IMPORT FAIL", errText(err));
-    alertDialog("导入失败", errText(err));
-  } finally {
-    e.target.value = "";
+    const added = merged.length - before;
+    log("sources imported", "new=" + added, "n=" + merged.length);
+    toast("已导入 " + items.length + " 个源,新增 " + Math.max(0, added) + " 个,当前共 " + merged.length + " 个源");
+    return;
   }
+
+  // 单源(JSON / XML / 直播):地址优先用配置里带的那个,没有再退回用户填的
+  const one = hit.source || null;
+  const url = (one && one.url) || String(ctx.target || "").trim();
+  const name = given || (one && one.name) || nameFromTarget(ctx.target);
+  const kind = type === "xml" ? "xml" : type === "live" ? "live" : "vod";
+  const src = normSource({ name: name, url: url, kind: kind });
+  if (!src) {
+    alertDialog("导入失败", "没拿到可用的地址。");
+    return;
+  }
+  // 同一个地址已经在列表里:切过去就行,不用再加一条
+  const dup = (S.sources || []).find((x) => x.url === src.url);
+  if (dup) {
+    await setCurrentSource(dup, { stay: true });
+    return;
+  }
+  await applySources((S.sources || []).concat([src]));
+  const added = (S.sources || []).find((x) => x.url === src.url);
+  log("source imported", src.url);
+  if (added) await setCurrentSource(added, { stay: true });
+  else toast("已导入「" + name + "」");
 }
 
 let srcRowMenuAnchor = null; // 当前打开「更多」的按钮(再点同一个算收起)
@@ -2359,14 +2521,11 @@ function bindSourceManager() {
       if (src) setCurrentSource(src, { stay: true });
     };
   }
-  if ($("srcAdd") && !$("srcAdd").dataset.bound) {
-    $("srcAdd").dataset.bound = "1";
-    $("srcAdd").onclick = () => editSource(null);
+  if ($("srcImport") && !$("srcImport").dataset.bound) {
+    $("srcImport").dataset.bound = "1";
+    // 底栏唯一的键:一个对话框管所有导入(类型自动判,见 runImportFlow)
+    $("srcImport").onclick = () => runImportFlow();
     if ($("srcClip")) $("srcClip").onclick = () => addFromClipboard();
-    // 底栏只剩「添加源 / 导入」两个键:三个导入方式收进菜单(评审 V2)
-    if ($("srcImport")) $("srcImport").onclick = (e) => openImportMenu(e.currentTarget);
-    $("pluginFile").onchange = importPluginFile;
-    $("srcFile").onchange = importJsonFile;
     // 全部测速:之前 onclick 是空的,点了一点反应都没有(I6)
     if ($("btnTestAll")) $("btnTestAll").onclick = () => testAllSources();
     syncTestAllBtn();

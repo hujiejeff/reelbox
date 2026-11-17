@@ -49,7 +49,7 @@ export function buildSrcPanel(opts) {
       ? '<div class="src-panel__empty">' +
           '<span class="m3e-icon" aria-hidden="true">playlist_add</span>' +
           '<b>还没有源</b>' +
-          '<button type="button" class="m3e-button m3e-button--filled" data-act="add">添加源</button>' +
+          '<button type="button" class="m3e-button m3e-button--filled" data-act="import">导入</button>' +
         "</div>"
       : "") +
     (nothing && !opts.empty

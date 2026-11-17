@@ -22,7 +22,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_sources,
             commands::save_sources,
-            commands::import_index,
             commands::list_items,
             commands::search,
             commands::detail,
@@ -35,6 +34,7 @@ pub fn run() {
             commands::open_log,
             commands::app_info,
             commands::save_plugin,
+            commands::read_text_file,
             commands::plugin_read,
             commands::plugin_fetch,
             commands::plugin_stream_allow,

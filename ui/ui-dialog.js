@@ -6,7 +6,6 @@
 // 对外:
 //   alertDialog(headline, body, okText)              → Promise<void>
 //   confirmDialog(headline, body, okText, danger)    → Promise<boolean>
-//   promptDialog(headline, label, value, placeholder)→ Promise<string|null>
 //   formDialog({headline, icon, fields, okText, note})→ Promise<{字段:值}|null>
 //   toast(text, {actionLabel, onAction, dismissible, timeout}) → close()
 
@@ -179,15 +178,6 @@ export function formDialog(opts) {
       },
     ],
   });
-}
-
-export function promptDialog(headline, label, value, placeholder, okText) {
-  return formDialog({
-    icon: "link",
-    headline,
-    okText: okText || "确定",
-    fields: [{ id: "value", label, value: value || "", placeholder: placeholder || "" }],
-  }).then((v) => (v ? v.value : null));
 }
 
 /* ---------- snackbar ---------- */

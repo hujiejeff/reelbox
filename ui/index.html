@@ -624,6 +624,8 @@
   /* 主按钮吃满剩余宽度(上限 240),次按钮固定 96 —— 底栏永远只有这两个(§2.6) */
   .set-page__primary { flex: 1 1 auto; max-width: 240px; min-width: 96px; }
   .set-page__secondary { flex: 0 0 auto; width: 96px; }
+  /* 底栏只剩一个「导入」:吃满剩余宽度,但别在宽屏上拉成一条横幅 */
+  .set-page__footer .set-page__only { flex: 1 1 auto; max-width: 320px; }
   /* push 进入的二级页盖住主导航(M3 的 detail 页不显示底栏) */
   body[data-setpage] .float-tabs { display: none; }
   .set-acts { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1132,6 +1134,8 @@
   .dlg-text:empty { display: none; }
   .dlg-tip { margin-top: 10px; min-height: 1.2em; }
   .dlg-btn--danger { --_m3e-button-content: var(--m3e-sys-color-error); }
+  /* 导入对话框里的「选择文件」:挨着地址框,尺寸跟着 .dlg-input 的节奏 */
+  .dlg-file { align-self: flex-start; height: 40px; margin-top: 2px; }
   /* snackbar 要盖过播放器(z-index 100) */
   .m3e-snackbar-host { z-index: 320; }
 
@@ -1307,18 +1311,17 @@
                   <div class="srcmgr" id="srcmgr"></div>
                 </div>
               </div>
-              <!-- 底栏只留 2 个键:主(flex:1 max 240)+ 导入(96,开菜单三项)。
-                   390 视口放 5 个键会溢出,「导入插件」整颗看不见(评审 V2) -->
+              <!-- 底栏只有一个「导入」:所有导入最终都是文件 —— 源是 json/xml、
+                   集合源是带 sources 的 json、插件是 js,链接还是本地文件由内容
+                   自己说明,类型自动判断(见 app.js 的 analyzeImport)。
+                   新增源也走这里:贴地址就是一次导入,不再单开「添加源」。 -->
               <footer class="set-page__footer">
-                <button type="button" class="m3e-button set-page__primary" id="srcAdd">
-                  <span class="m3e-icon" aria-hidden="true">add</span>添加源
-                </button>
-                <button type="button" class="m3e-button m3e-button--outlined set-page__secondary"
-                  id="srcImport" aria-haspopup="menu">
+                <button type="button" class="m3e-button m3e-button--filled set-page__only" id="srcImport">
                   <span class="m3e-icon" aria-hidden="true">file_upload</span>导入
                 </button>
-                <input type="file" id="srcFile" accept=".json,application/json" hidden>
-                <input type="file" id="pluginFile" accept=".js,text/javascript" hidden>
+                <!-- 「选择文件」用的系统选择器:不接受 -webkit- 私有扩展名,只列文本类 -->
+                <input type="file" id="importFile"
+                  accept=".json,.xml,.js,application/json,application/xml,text/xml,text/javascript" hidden>
               </footer>
             </section>
 

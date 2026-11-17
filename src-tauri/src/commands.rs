@@ -38,68 +38,6 @@ pub fn load_sources() -> Vec<Source> {
     source::defaults()
 }
 
-/// 网络导入的结果:真正能用的源 + 被跳过的"不支持的源"。
-/// 跳过要说出来,不然用户只会以为索引坏了一半。
-#[derive(Debug, Default, serde::Serialize)]
-pub struct ImportReport {
-    pub sources: Vec<Source>,
-    /// 跳过的条数
-    pub skipped: usize,
-    /// 跳过的名字,前端在提示里点名
-    pub skipped_names: Vec<String>,
-}
-
-/// 从网络索引批量导入源。索引格式:
-/// { "name": "...", "sources": [ { "name": "...", "type": "json|vod|xml", "url": "..." } ] }
-#[tauri::command]
-pub async fn import_index(url: String) -> Result<ImportReport, String> {
-    let u = url.trim().to_string();
-    if !(u.starts_with("http://") || u.starts_with("https://")) {
-        return Err("索引地址必须是 http(s)".into());
-    }
-    tauri::async_runtime::spawn_blocking(move || -> Result<ImportReport, String> {
-        let resp = fetch_guarded(&u, None)?;
-        let body = resp.body;
-        let v: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| format!("索引不是合法 JSON: {e}"))?;
-        let arr = v
-            .get("sources")
-            .and_then(|x| x.as_array())
-            .ok_or("索引里没有 sources 数组")?;
-        let mut report = ImportReport::default();
-        for it in arr {
-            let name = it.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-            let url = it.get("url").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-            if name.is_empty() || url.is_empty() {
-                continue;
-            }
-            let kind = match it.get("type").and_then(|x| x.as_str()).unwrap_or("") {
-                "xml" => "xml",
-                "webox" => "webox",
-                _ => "vod",
-            }
-            .to_string();
-            if source::is_crawl_config(&kind, &url) {
-                crate::logging::event(&format!("IMPORT skip unsupported source name={name} url={url}"));
-                report.skipped += 1;
-                report.skipped_names.push(name);
-                continue;
-            }
-            // id 由地址决定,与名字无关:中文名不会再被压成一串 "-"(A1)
-            let mut id = source::id_for_url(&url);
-            let mut n = 2;
-            while report.sources.iter().any(|s| s.id == id) {
-                id = format!("{}-{}", source::id_for_url(&url), n);
-                n += 1;
-            }
-            report.sources.push(Source { id, name, kind, url, health: None });
-        }
-        Ok(report)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 #[tauri::command]
 pub fn save_sources(list: Vec<Source>) -> Result<(), String> {
     let path = sources_path();
@@ -154,6 +92,22 @@ pub fn plugin_read(path: String) -> Result<String, String> {
         return Err(format!("插件过大({} 字节): {path}", meta.len()));
     }
     std::fs::read_to_string(&p).map_err(|e| format!("读插件失败: {e}"))
+}
+
+/// 导入时读本地文件(源配置 / 集合 / 插件源码都可能是本地文件)。
+/// 前端只拿文本,判型在 ui/app.js 的 analyzeImport 里做。
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    const MAX_IMPORT_BYTES: u64 = 8 << 20;
+    let p = std::path::PathBuf::from(&path);
+    let meta = std::fs::metadata(&p).map_err(|e| format!("读文件失败: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("不是文件: {path}"));
+    }
+    if meta.len() > MAX_IMPORT_BYTES {
+        return Err(format!("文件过大({} 字节): {path}", meta.len()));
+    }
+    std::fs::read_to_string(&p).map_err(|e| format!("读文件失败: {e}"))
 }
 
 #[derive(Debug, serde::Serialize)]
