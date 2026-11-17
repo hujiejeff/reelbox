@@ -3019,7 +3019,7 @@ function pSync() {
   if (!playing) $("player").classList.remove("idle");
   const vol = v.muted ? 0 : v.volume;
   const volEl2 = $("vol");
-  if (volEl2 && document.activeElement !== volEl2) volEl2.value = String(Math.round(vol * 100));
+  if (volEl2 && document.activeElement !== volEl2) paintVol(vol * 100);
   $("pMuteIcon").textContent = vol === 0 ? "volume_off" : vol < 0.5 ? "volume_down" : "volume_up";
   const pv = $("pPrev"), nx = $("pNext");
   const list = (playCtx && playCtx.list) || [];
@@ -3157,7 +3157,7 @@ function bindPlayer() {
   }
 
   const volEl = $("vol");
-  volEl.value = String(Math.round(loadVolume() * 100));
+  paintVol(loadVolume() * 100);
   v.volume = loadVolume();
   // 拖滑块时浮层不收起:3s 空闲才收(移开鼠标那条 250ms 宽限在 mouseleave 里)
   volEl.addEventListener("pointerdown", keepVolumeOpen);
@@ -3236,6 +3236,18 @@ function saveVolume() {
 }
 
 /**
+ * 音量滑块的两件事一起做:value(拇指位置)和 --vol(轨道已播放部分),
+ * 少了后者轨道就永远是一根灰条,看不出音量到哪了。
+ */
+function paintVol(pct) {
+  const el = $("vol");
+  if (!el) return;
+  const p = Math.min(100, Math.max(0, Number(pct) || 0));
+  el.value = String(Math.round(p));
+  el.style.setProperty("--vol", p + "%");
+}
+
+/**
  * 音量落到 <video> 上并同步滑块:垂直滑块、静音键、上下方向键都走这里,
  * 免得三处各写一份「0 算静音」的规则。
  */
@@ -3244,8 +3256,7 @@ function setVolume(val) {
   const vol = Math.min(1, Math.max(0, Number(val) || 0));
   v.volume = vol;
   v.muted = vol === 0;
-  const el = $("vol");
-  if (el) el.value = String(Math.round(vol * 100));
+  paintVol(vol * 100);
   saveVolume();
   pSync();
 }
