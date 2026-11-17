@@ -24,7 +24,7 @@ jobs:
           - platform: macos-latest
             args: "--target universal-apple-darwin"
           - platform: ubuntu-22.04
-            args: ""
+            args: "--bundles deb,appimage"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -53,16 +53,6 @@ jobs:
       - name: Test core
         run: cargo test -p reelbox-core
 
-      - name: Portable zip (exe only)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          $v = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          New-Item -ItemType Directory -Force -Path dist-portable | Out-Null
-          Copy-Item target/release/reelbox.exe dist-portable/
-          Copy-Item README.md dist-portable/ -ErrorAction SilentlyContinue
-          Compress-Archive -Path dist-portable/* -DestinationPath "Reelbox_${v}_portable_x64.zip"
-
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -73,6 +63,16 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Portable zip (exe only)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $v = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path dist-portable | Out-Null
+          Copy-Item target/release/reelbox.exe dist-portable/
+          Copy-Item README.md dist-portable/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist-portable/* -DestinationPath "Reelbox_${v}_portable_x64.zip"
 
       - name: Attach portable zip
         if: matrix.platform == 'windows-latest'
@@ -112,7 +112,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - uses: swatinem/rust-cache@v2
 
@@ -167,11 +167,11 @@ jobs:
         env:
           KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: npx tauri android build --apk --ci
+        run: npx tauri android build --apk --split-per-abi --ci
 
       - name: Build apk (debug, unsigned)
         if: steps.sign.outputs.has != 'true'
-        run: npx tauri android build --apk --debug --ci
+        run: npx tauri android build --apk --debug --split-per-abi --ci
 
       - name: Attach apk
         uses: softprops/action-gh-release@v2
