@@ -938,7 +938,7 @@ function mountSrcPanel(host, query) {
     }
     if (e.target.closest('[data-act="import"]')) {
       closeSrcMenu();
-      runImportFlow();
+      runSingleImport(); // 面板里只给「导入源」:批量导入在源页底栏
       return;
     }
     const row = e.target.closest("[data-idx]");
@@ -1804,16 +1804,16 @@ function showSrcEmpty(box) {
     S.srcFilter === "live"
       ? "直播源要等 v0.3 才支持播放,现在导入只会登记。"
       : S.srcFilter === "all"
-      ? "点「导入」,填链接或挑个文件:源、集合源、插件都认,类型自动判断。"
-      : "切到「全部」看看,或者用「导入」加一个。";
+      ? "点「导入源」,填链接或挑个文件:源和插件都认,类型自动判断。"
+      : "切到「全部」看看,或者用「导入源」加一个。";
   box.innerHTML = stateCard({
     icon: S.srcFilter === "live" ? "live_tv" : "dns",
     title: label,
     msg: tip,
-    actions: S.srcFilter === "all" ? [{ id: "import", label: "导入" }] : [],
+    actions: S.srcFilter === "all" ? [{ id: "import", label: "导入源" }] : [],
   });
   const imp = box.querySelector('[data-act="import"]');
-  if (imp) imp.onclick = () => runImportFlow();
+  if (imp) imp.onclick = () => runSingleImport();
 }
 
 /**
@@ -2116,7 +2116,7 @@ function wireKindGuess(d) {
 
 /**
  * 编辑已有源:一个 m3e 对话框,三个字段。
- * 新增不走这里 —— 新增就是「导入」:地址或文件进去,由内容判型(见 runImportFlow)。
+ * 新增不走这里 —— 新增就是「导入源」:地址或文件进去,由内容判型(见 runSingleImport)。
  */
 async function editSource(src) {
   if (!src) return;
@@ -2157,7 +2157,7 @@ async function editSource(src) {
 }
 
 /**
- * 从剪贴板导入:剪贴板里是地址就直接预填进导入框,否则照常打开让用户自己粘。
+ * 从剪贴板导入:剪贴板里是地址就直接预填进「导入源」框,否则照常打开让用户自己粘。
  * Tauri 侧没有装剪贴板插件(离线环境引新依赖有风险),所以先走 WebView 的
  * navigator.clipboard.readText();读不到就退化成"打开导入对话框"。
  */
@@ -2171,7 +2171,7 @@ async function addFromClipboard() {
     text = "";
   }
   const isAddr = /^(https?:\/\/|[a-z]:[\\/]|[\\/])/i.test(text);
-  await runImportFlow(text && isAddr ? { path: text } : undefined);
+  await runSingleImport(text && isAddr ? { path: text } : undefined);
 }
 
 async function removeSource(src) {
@@ -2216,19 +2216,18 @@ async function removeSource(src) {
   if (S.source === src) await switchSource(list[0]);
 }
 
-/* ---------- 导入:一个入口,自动判型 ---------- */
-// 用户的心智模型很简单:所有导入最终都是文件 —— 源是 json 或 xml,集合源是带
-// sources 数组的 json,插件是 js;来源要么是网络链接,要么是本地文件。
-// 所以界面只留一个「导入」:先把内容拿到手(链接用 plugin_fetch 抓,本地文件直接读),
-// 再由内容说明自己是什么(analyzeImport),判不出来才让用户手选。
+/* ---------- 导入:两个入口,共用一套表单与判型 ---------- */
+// 用户的心智模型:一次加一条,和一次加一包,是两件事。
+//   「导入源」  单条源:JSON(苹果 CMS)、XML、JS 插件。判型后加一条并设为当前。
+//   「批量导入」集合/索引:JSON 里带 sources / sites 数组的那种,一次加入多条。
+// 两条路读内容、判型、落地都走同一批函数(analyzeImport / collectionOf /
+// singleSourceOf / applyImport),区别只在标题、允许的类型和落地行为。
 
-/** 判型失败时才出现的手选清单 */
-const IMPORT_TYPE_OPTIONS = [
+/** 「导入源」判型失败时才出现的手选清单 —— 单条源只有这三种 */
+const SINGLE_IMPORT_TYPES = [
   { value: "plugin", label: "插件(JS)" },
   { value: "json", label: "源(JSON)" },
   { value: "xml", label: "源(XML)" },
-  { value: "collection", label: "集合源(批量)" },
-  { value: "live", label: "直播(m3u/m3u8)" },
 ];
 
 /** 单源 JSON 里可能装着接口地址的字段 */
@@ -2327,30 +2326,35 @@ function nameFromTarget(target) {
   return base.replace(/(\.[^.]+)+$/, "") || base || "新源";
 }
 
-/** 导入对话框:地址/路径 + 可选名称 + 「选择文件」 */
-function importDialog(preset) {
-  const p = preset || {};
+/**
+ * 两个导入对话框共用的表单:地址/路径 + 可选名称 + 「选择文件」。
+ * cfg = { headline, okText, icon, note, placeholder, namePlaceholder, preset }
+ * —— 只有标题、提示文案和落地逻辑不同,输入这一套完全一样。
+ */
+function importForm(cfg) {
+  const c = cfg || {};
+  const p = c.preset || {};
   importPicked = p.file || null;
   return formDialog({
-    icon: "file_upload",
-    headline: "导入",
-    okText: "导入",
+    icon: c.icon || "file_upload",
+    headline: c.headline,
+    okText: c.okText,
     fields: [
       {
         id: "path",
         label: "地址或文件路径",
         value: p.path || "",
-        placeholder: "https://…/api.php/provide/vod 或 D:\\…\\source.json",
+        placeholder: c.placeholder || "https://…/api.php/provide/vod 或 D:\\…\\source.json",
       },
       {
         id: "name",
         label: "名称(可选)",
         value: p.name || "",
-        placeholder: "留空用文件名或域名",
+        placeholder: c.namePlaceholder || "留空用文件名或域名",
         required: false,
       },
     ],
-    note: "链接和本地文件都行:插件是 js、源是 json/xml、集合源是带 sources 的 json。类型自动判断,认不出来才问你。",
+    note: c.note,
     onOpen: (d) => wireImportFile(d),
   });
 }
@@ -2376,7 +2380,7 @@ function wireImportFile(d) {
   };
 }
 
-/** 判型失败:让人手选一次类型(界面上唯一需要用户选类型的地方) */
+/** 判型失败:让人手选一次类型(界面上唯一需要用户选类型的地方,只给单源的三种) */
 async function askImportType(target) {
   const res = await formDialog({
     icon: "help",
@@ -2389,7 +2393,7 @@ async function askImportType(target) {
         type: "select",
         value: "json",
         hint: "内容里既没有 define(),也不是 XML,也不像源配置的 JSON。",
-        options: IMPORT_TYPE_OPTIONS,
+        options: SINGLE_IMPORT_TYPES,
       },
     ],
     note: "地址:" + String(target || ""),
@@ -2398,42 +2402,91 @@ async function askImportType(target) {
 }
 
 /**
- * 导入入口:读内容 → 判型 → 落地。
- * 链接先抓(plugin_fetch,和插件走同一个带 SSRF 兜底的出口),本地文件直接读。
+ * 把「地址或文件」读成文本:本地文件直接读,链接先抓
+ * (plugin_fetch,和插件走同一个带 SSRF 兜底的出口)。
+ * 两个入口共用。
  */
-async function runImportFlow(preset) {
-  const res = await importDialog(preset);
-  if (!res) return;
+async function readImportText(target) {
+  if (importPicked && importPicked.name === target) {
+    return { text: await importPicked.text(), fileName: importPicked.name };
+  }
+  if (looksLikeUrl(target)) {
+    const r = await invoke("plugin_fetch", { url: target, headers: null });
+    if (r && r.status >= 400) throw new Error("服务器返回 " + r.status);
+    return { text: String((r && r.body) || ""), fileName: "" };
+  }
+  const text = await invoke("read_text_file", { path: target });
+  return { text: text, fileName: target.split(/[\\/]/).pop() || "" };
+}
+
+/** 对话框 → 读内容 → 判型;两个入口共用的前半段。读失败/取消返回 null */
+async function pickImportTarget(cfg) {
+  const res = await importForm(cfg);
+  if (!res) return null;
   const target = String(res.path || "").trim();
-  if (!target) return;
-  let text = "";
-  let fileName = "";
+  if (!target) return null;
+  let got;
   try {
-    if (importPicked && importPicked.name === target) {
-      text = await importPicked.text();
-      fileName = importPicked.name;
-    } else if (looksLikeUrl(target)) {
-      const r = await invoke("plugin_fetch", { url: target, headers: null });
-      if (r && r.status >= 400) throw new Error("服务器返回 " + r.status);
-      text = String((r && r.body) || "");
-    } else {
-      text = await invoke("read_text_file", { path: target });
-      fileName = target.split(/[\\/]/).pop() || "";
-    }
+    got = await readImportText(target);
   } catch (e) {
     log("IMPORT READ FAIL", errText(e));
     alertDialog("读取失败", "没读到内容:" + errText(e));
+    return null;
+  }
+  return {
+    target: target,
+    text: got.text,
+    fileName: got.fileName,
+    name: String(res.name || "").trim(),
+    hit: analyzeImport(got.text, got.fileName || target),
+  };
+}
+
+/** 「导入源」:单个源(JSON / XML / 插件)。判型后加一条并设为当前 */
+async function runSingleImport(preset) {
+  const ctx = await pickImportTarget({
+    preset: preset,
+    headline: "导入源",
+    okText: "导入",
+    icon: "file_upload",
+    placeholder: "https://…/api.php/provide/vod 或 D:\\…\\source.json",
+    note: "一个源:插件是 js、源是 json/xml;链接和本地文件都行。类型自动判断(define() → 插件,<?xml → XML,带 api/url/provide 的 JSON → 源),认不出来才问你。",
+  });
+  if (!ctx) return;
+  // 集合源里有几条说不清,不该悄悄只加第一条 —— 指到「批量导入」去
+  if (ctx.hit.type === "collection") {
+    alertDialog(
+      "这是集合源",
+      "这份内容里有 " + ctx.hit.list.length + " 条源,用「批量导入」一次加进去。"
+    );
     return;
   }
-  const hit = analyzeImport(text, fileName || target);
-  const type = hit.type || (await askImportType(target));
+  const type = ctx.hit.type || (await askImportType(ctx.target));
   if (!type) return;
-  await applyImport(type, hit, {
-    target: target,
-    text: text,
-    fileName: fileName,
-    name: String(res.name || "").trim(),
+  await applyImport(type, ctx.hit, ctx);
+  importPicked = null;
+}
+
+/** 「批量导入」:只吃集合/索引(JSON 里有 sources / sites 数组),一次加入多条 */
+async function runBatchImport(preset) {
+  const ctx = await pickImportTarget({
+    preset: preset,
+    headline: "批量导入",
+    okText: "导入",
+    icon: "playlist_add",
+    placeholder: "https://…/sources.json 或 D:\\…\\sources.json",
+    note: "只吃集合/索引:一份 JSON,里面有 sources 或 sites 数组。单条源(一个接口地址)用「导入源」。",
   });
+  if (!ctx) return;
+  const list = ctx.hit.type === "collection" ? ctx.hit.list : null;
+  if (!list) {
+    alertDialog(
+      "这不是集合源",
+      "「批量导入」只吃集合/索引格式(一份 JSON,里面有 sources 或 sites 数组)。这一个用「导入源」试试。"
+    );
+    return;
+  }
+  await applyImport("collection", ctx.hit, ctx);
   importPicked = null;
 }
 
@@ -2475,9 +2528,13 @@ async function applyImport(type, hit, ctx) {
     const before = (S.sources || []).length;
     const merged = uniqSources((S.sources || []).concat(items));
     await applySources(merged);
-    const added = merged.length - before;
-    log("sources imported", "new=" + added, "n=" + merged.length);
-    toast("已导入 " + items.length + " 个源,新增 " + Math.max(0, added) + " 个,当前共 " + merged.length + " 个源");
+    // 集合里已有的(同地址)算跳过:用户要的是"这份里加进来几条、跳了几条"
+    const added = Math.max(0, merged.length - before);
+    const skipped = Math.max(0, items.length - added);
+    log("sources imported", "new=" + added, "skip=" + skipped, "n=" + merged.length);
+    toast(
+      "新增 " + added + " 个,跳过 " + skipped + " 个,当前共 " + merged.length + " 个源"
+    );
     return;
   }
 
@@ -2539,8 +2596,9 @@ function bindSourceManager() {
   }
   if ($("srcImport") && !$("srcImport").dataset.bound) {
     $("srcImport").dataset.bound = "1";
-    // 底栏唯一的键:一个对话框管所有导入(类型自动判,见 runImportFlow)
-    $("srcImport").onclick = () => runImportFlow();
+    // 底栏两个键:导入源(单条,判型后设为当前)+ 批量导入(集合,一次多条)
+    $("srcImport").onclick = () => runSingleImport();
+    if ($("srcImportBatch")) $("srcImportBatch").onclick = () => runBatchImport();
     if ($("srcClip")) $("srcClip").onclick = () => addFromClipboard();
     // 全部测速:之前 onclick 是空的,点了一点反应都没有(I6)
     if ($("btnTestAll")) $("btnTestAll").onclick = () => testAllSources();
