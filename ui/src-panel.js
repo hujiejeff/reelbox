@@ -4,7 +4,10 @@
 // 结构:
 //   header(切换源 + 管理)
 //   search?(源总数 > 8 才出现)
-//   分组 × n(最近使用 / 点播 / 插件 / 直播)
+//   空态(没有可用的源)/ 分组 × n(点播 / 插件 / 直播)
+//
+// 只列「可用于当前功能」的源(判定在 app.js 的 isUsableSource 一处);
+// 面板本身不再维护任何历史/LRU 分组 —— 分组只按类型。
 //
 // 行:56 高、r28、leading 18 图标、名称 16/24、trailing 只有状态点(有 health 数据才显示)。
 // 当前源只靠 secondary-container 底 + 名称 600 表示,不加 check(评审 1)。
@@ -17,10 +20,9 @@ const esc = (s) =>
 /**
  * opts = {
  *   groups: [{ key, label, rows: [row] }],   // 已排好序、当前源已置顶
- *   recent: [row],                            // 最近使用(可以为空)
  *   total,                                    // 源总数(决定搜索框出现与否)
  *   query,                                    // 当前搜索词
- *   empty: false                              // 一个源都没有
+ *   empty: "none" | "unusable" | ""           // 没有源 / 有源但都不可用 / 有可用的行
  * }
  * row = { idx, id, name, type: "vod"|"plugin"|"live", icon, current, state, stateLabel }
  * idx = 该源在 sources 数组里的下标(行按它派发,同 id 的两条源不会误伤)
@@ -31,7 +33,7 @@ export function buildSrcPanel(opts) {
 
   const groups = (opts.groups || []).filter((g) => g.rows && g.rows.length);
   const showSearch = opts.total > 8;
-  const nothing = !groups.length && !(opts.recent || []).length;
+  const nothing = !groups.length;
 
   box.innerHTML =
     '<div class="src-panel__head">' +
@@ -45,31 +47,54 @@ export function buildSrcPanel(opts) {
           '" placeholder="搜索源名称或地址" aria-label="搜索源">' +
         "</label>"
       : "") +
-    (nothing && opts.empty
-      ? '<div class="src-panel__empty">' +
-          '<span class="m3e-icon" aria-hidden="true">playlist_add</span>' +
-          '<b>还没有源</b>' +
-          '<button type="button" class="m3e-button m3e-button--filled" data-act="import">导入源</button>' +
-        "</div>"
-      : "") +
-    (nothing && !opts.empty
-      ? '<div class="src-panel__empty"><b>没找到 「' + esc(opts.query || "") + '」</b>' +
-          '<span>换个词试试</span></div>'
-      : "") +
-    ((opts.recent || []).length
-      ? groupHtml({ key: "recent", label: "最近使用" }, opts.recent, true)
-      : "") +
-    groups.map((g) => groupHtml(g, g.rows, false)).join("");
+    (nothing ? emptyHtml(opts) : "") +
+    groups.map((g) => groupHtml(g, g.rows)).join("");
 
   return box;
 }
 
-function groupHtml(group, rows, isRecent) {
+/**
+ * 面板空态:一个能列的行都没有时才出现。
+ *   empty = "none"     一个源都还没有 → 「还没有源」+ 导入源
+ *   empty = "unusable" 有源,但没有一个能用于当前功能 → 说清楚为什么,同样给导入源
+ *   有搜索词但没命中            → 「没找到 xxx」
+ */
+function emptyHtml(opts) {
+  const q = String(opts.query || "").trim();
+  if (opts.empty === "none") {
+    return (
+      '<div class="src-panel__empty">' +
+        '<span class="m3e-icon" aria-hidden="true">playlist_add</span>' +
+        "<b>还没有源</b>" +
+        "<span>点「导入源」加一个接口地址,也可以批量导入集合。</span>" +
+        '<button type="button" class="m3e-button m3e-button--filled" data-act="import">导入源</button>' +
+      "</div>"
+    );
+  }
+  if (q) {
+    return (
+      '<div class="src-panel__empty">' +
+        "<b>没找到「" + esc(q) + "」</b>" +
+        "<span>换个词试试</span>" +
+      "</div>"
+    );
+  }
+  return (
+    '<div class="src-panel__empty">' +
+      '<span class="m3e-icon" aria-hidden="true">link_off</span>' +
+      "<b>没有可用的源</b>" +
+      "<span>直播源要等 v0.3;取不到数据的源点「管理」换掉,或者再导入一个。</span>" +
+      '<button type="button" class="m3e-button m3e-button--filled" data-act="import">导入源</button>' +
+    "</div>"
+  );
+}
+
+function groupHtml(group, rows) {
   return (
     '<section class="src-panel__group" data-group="' + esc(group.key) + '">' +
       '<h4 class="src-panel__gh">' + esc(group.label) + "</h4>" +
       '<div class="src-panel__rows">' +
-        rows.map((r) => rowHtml(r, isRecent)).join("") +
+        rows.map(rowHtml).join("") +
       "</div>" +
     "</section>"
   );
@@ -87,17 +112,14 @@ function trailHtml(r) {
   );
 }
 
-function rowHtml(r, isRecent) {
+function rowHtml(r) {
   return (
     '<button type="button" class="src-panel__row" data-idx="' + esc(r.idx) + '" data-src="' + esc(r.id) + '"' +
     (r.current ? ' aria-current="true"' : "") + ">" +
       '<span class="src-panel__lead" aria-hidden="true">' +
-        '<span class="m3e-icon">' + (isRecent ? "history" : esc(r.icon || "dns")) + "</span>" +
+        '<span class="m3e-icon">' + esc(r.icon || "dns") + "</span>" +
       "</span>" +
       '<span class="src-panel__name">' + esc(r.name) + "</span>" +
-      (isRecent && r.icon
-        ? '<span class="m3e-icon src-panel__type" aria-hidden="true">' + esc(r.icon) + "</span>"
-        : "") +
       trailHtml(r) +
     "</button>"
   );

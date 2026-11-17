@@ -519,8 +519,6 @@ async function switchSource(src, opts) {
   // 换代:上一个源发出去的请求从这里开始全部作废(I2)
   const seq = ++S.reqSeq;
   S.source = src;
-  // 最近使用靠这里喂:不接上「最近使用」永远是空的
-  pushRecent(src && src.id);
   rememberSource(src);
   S.parent = "";
   S.child = "";
@@ -862,36 +860,12 @@ function openSourceManager() {
 
 // ---------- 渲染 ----------
 
-/* ---------- 顶栏切源:按类型分组 + 最近使用 + 搜索 ---------- */
+/* ---------- 顶栏切源:按类型分组 + 搜索 ---------- */
 // <840 用 m3e bottom sheet(见 ui/sheet.js),≥840 挂进侧栏的弹出层(ui/src-panel.js
-// 是同一份内容)。当前源置顶到所属分组第一行;「最近使用」最多 3 个(LRU),
-// 允许与下方分组重复 —— 重复是有意的,为了缩短拇指行程。
+// 是同一份内容)。当前源置顶到所属分组第一行;分组只有类型这一种口径
+// (点播 / 插件 / 直播),不记任何「最近使用」历史。
 
-const RECENT_KEY = "reelbox.recentSources";
-const RECENT_MAX = 3;
 let srcMenuCloser = null; // 关掉当前这层容器(sheet.close / 去掉 data-open)
-
-function recentIds() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]");
-    return Array.isArray(raw) ? raw.filter((x) => typeof x === "string") : [];
-  } catch (_) {
-    return [];
-  }
-}
-
-function saveRecent(list) {
-  try { localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX))); } catch (_) {}
-}
-
-function pushRecent(id) {
-  if (!id) return;
-  saveRecent([id].concat(recentIds().filter((x) => x !== id)));
-}
-
-function dropRecent(id) {
-  saveRecent(recentIds().filter((x) => x !== id));
-}
 
 /** 健康状态 → 四态 + 文案(判定口径见 docs/DESIGN-SPEC-UI.md §2.5) */
 function fmtMs(ms) {
@@ -929,7 +903,7 @@ function srcTypeIcon(s) {
   return "ondemand_video";
 }
 
-/** 组好切源面板需要的数据(分组、当前源置顶、最近使用、搜索过滤) */
+/** 组好切源面板需要的数据(分组、当前源置顶、搜索过滤) */
 function srcPanelModel(query) {
   const q = String(query || "").trim().toLowerCase();
   const all = S.sources || [];
@@ -956,12 +930,7 @@ function srcPanelModel(query) {
     rows.sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0));
     return { key, label, rows };
   });
-  const recent = recentIds()
-    .map((id) => all.find((s) => s.id === id))
-    .filter((s) => s && hit(s))
-    .slice(0, RECENT_MAX)
-    .map(toRow);
-  return { groups, recent, total: all.length, query: query || "", empty: !all.length };
+  return { groups, total: all.length, query: query || "", empty: all.length ? "" : "none" };
 }
 
 /** 渲染 + 事件;host 可以是 sheet 内容容器,也可以是桌面弹出层 */
@@ -1709,7 +1678,7 @@ function normalizeSourceIds(list) {
 }
 
 /**
- * 换 id 的连带修改:收藏 / 进度 / 最近使用 / 当前源 全都拿源 id 当键。
+ * 换 id 的连带修改:收藏 / 进度 / 当前源 全都拿源 id 当键。
  * 不跟着改的话,用户点过的收藏与看到一半的进度会全部失联。
  */
 function rewriteIdKeys(remap) {
@@ -1752,10 +1721,7 @@ function rewriteIdKeys(remap) {
   }
   if (progHit) progWrite(nextProg);
 
-  // 最近使用 / 当前源 / 直播源:值是 id
-  const recent = recentIds();
-  const nextRecent = recent.map((id) => (remap.has(id) ? pick(id) : id));
-  if (nextRecent.some((id, i) => id !== recent[i])) saveRecent(nextRecent);
+  // 当前源 / 直播源:值是 id
   [LS.currentSource, LS.currentLiveSource].forEach((key) => {
     const v = prefGet(key, "");
     if (v && remap.has(v)) prefSet(key, pick(v));
@@ -1954,7 +1920,7 @@ function onSettingsView() {
 }
 
 /**
- * 设为当前:走统一的 switchSource(会写 recent 与 currentSource)。
+ * 设为当前:走统一的 switchSource(会写 currentSource)。
  * opts.stay = 留在源管理页(点行就是这条路,见 I5);3 秒内可撤销。
  */
 async function setCurrentSource(src, opts) {
@@ -2249,7 +2215,6 @@ async function removeSource(src) {
     toast("至少得留一个源");
     return;
   }
-  dropRecent(src.id); // 删掉的源不该再出现在「最近使用」里
   await applySources(list);
   const dropped = dropFavs ? favRemoveBySource(src.id) : 0;
   toast(dropped ? "已删除「" + src.name + "」,顺带清掉 " + dropped + " 条收藏" : "已删除「" + src.name + "」");
