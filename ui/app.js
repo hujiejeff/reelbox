@@ -62,7 +62,47 @@ function bindWheelScroll() {
   }, { passive: false });
 }
 
+/**
+ * 右键菜单:桌面壳里右键会弹出 WebView2 的默认菜单(返回 / 刷新 / 另存为…),
+ * 对这个应用纯属噪声,全局关掉。
+ *
+ * 例外:输入框(input / textarea / [contenteditable])里保留 —— 那里右键是
+ * 复制粘贴的唯一入口,关掉就没法用了。
+ * 只拦 contextmenu,不碰 pointerdown / touchstart,所以移动端的长按行为不变;
+ * 顺带记一下"最近一次是触摸",长按触发的那次 contextmenu 也一并放行。
+ */
+function bindNoContextMenu() {
+  if (document.__reelboxNoContextMenu) return;
+  document.__reelboxNoContextMenu = true;
+
+  let lastTouch = false;
+  document.addEventListener(
+    "pointerdown",
+    (e) => { lastTouch = e.pointerType !== "mouse"; },
+    true
+  );
+
+  // 捕获阶段:元素自己 stopPropagation 也拦不住这条
+  document.addEventListener(
+    "contextmenu",
+    (e) => {
+      if (lastTouch) return; // 长按不是鼠标右键,交给系统和系统输入法
+      const t = e.target;
+      const field = t && t.closest ? t.closest("input, textarea, [contenteditable]") : null;
+      // contenteditable="false" 不是可编辑区,别误放行
+      const ce = field && field.hasAttribute("contenteditable")
+        ? String(field.getAttribute("contenteditable")).toLowerCase()
+        : null;
+      const editable = !!field && ce !== "false";
+      if (editable) return;
+      e.preventDefault();
+    },
+    true
+  );
+}
+
 async function init() {
+  bindNoContextMenu();
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d")) {
       e.preventDefault();
