@@ -467,7 +467,8 @@
 
   /* 二级页里的一行设置:左文(标题 + 摘要)右控件;--stack 时上下叠 */
   .set-row { display: flex; align-items: center; gap: 16px; }
-  .set-row + .set-row { margin-top: 16px; }
+  /* 行距由 .set-page__body 的 gap 统一给:这里不再叠一层 margin(否则 24+16 变 40) */
+  .set-row + .set-row { margin-top: 0; }
   .set-row--stack { flex-direction: column; align-items: stretch; gap: 12px; }
   .set-row__text { flex: 1; min-width: 0; }
   /* 标题与摘要必须是两块,不然 b 和 span 会在同一行连成病句(评审 V4) */
@@ -602,8 +603,14 @@
     font: 500 12px/16px system-ui, "PingFang SC", sans-serif; letter-spacing: .02em;
     color: var(--m3e-sys-color-on-surface-variant); padding-inline-end: 8px;
   }
-  .set-page__scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 16px 24px; }
-  .set-page__body { display: flex; flex-direction: column; gap: 16px; }
+  /* 内容区:顶部 16 = 首块与 app bar 的距离(§7.2 间距节奏),底部给滚动留位 */
+  .set-page__scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 16px 24px; }
+  /* 块与块之间统一 24(卡片 / 分组 / 说明文字都吃这一条)——
+     行与行、卡片与卡片不再各带一份 margin,免得两套间距叠起来(关于页就吃过这个亏) */
+  .set-page__body { display: flex; flex-direction: column; gap: 24px; }
+  /* 关于页的卡片与页脚说明:间距由上面的 gap 给,这里把 .set-note 自带的
+     margin-top 归零,否则 24 + 24 变成 40,和卡片之间对不上 */
+  .set-page__body .set-note { margin-top: 0; }
   .set-page__sub {
     margin: 0; font: 400 14px/20px system-ui, "PingFang SC", sans-serif;
     color: var(--m3e-sys-color-on-surface-variant);
@@ -630,7 +637,7 @@
   @media (min-width: 600px) and (max-width: 839px) {
     .set-home__bar { padding: 0 24px; }
     .set-home__scroll { padding: 8px 24px 32px; }
-    .set-page__scroll { padding: 8px 24px 32px; }
+    .set-page__scroll { padding: 16px 24px 32px; }
     .set-page__body { max-width: 600px; margin-inline: auto; }
   }
 
@@ -645,7 +652,7 @@
     .set-detail { display: flex; }
     .set-page__back { display: none; }
     .set-page__bar { padding-inline: 24px 16px; }
-    .set-page__scroll { padding: 8px 24px 40px; }
+    .set-page__scroll { padding: 16px 24px 40px; }
     .set-page__body { max-width: 720px; }
     .set-page__footer { padding-inline: 24px; }
   }

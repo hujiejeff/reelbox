@@ -101,7 +101,7 @@ expanded 具体数值:
 |---|---|
 | Top app bar | 高 56dp;返回箭头 48×48dp 命中区(圆图标 40dp);标题 22/28 字重 600,与返回箭头间距 4dp;右侧最多 2 个 48dp 图标按钮,再多收进 `more_vert` |
 | App bar 底色 | 滚动前透明(`surface`);滚动 > 8dp 后 `surface` + 1dp `outline-variant` 下边线,过渡 150ms |
-| 内容区 | 左右 16dp(compact)/ 24dp(medium+);顶部距 app bar 8dp;底部为底栏留 88dp = 72 底栏 + 16 |
+| 内容区 | 左右 16dp(compact)/ 24dp(medium+);首块距 app bar 16dp;块与块(卡片 / 分组 / 说明文字)之间 24dp,由 `.set-page__body` 的 `gap` 统一给,元素自己不再叠 margin;底部为底栏留 88dp = 72 底栏 + 16 |
 | 底栏(有主操作时) | 高 72dp,吸底,底 `surface`,顶 1dp `outline-variant`,左右 16dp,`safe-area-inset-bottom` 追加;主按钮 flex:1(最大 240dp),次按钮 auto,间距 8dp |
 | push 转场 | 进入 300dp 位移(从右)+ 淡入,350ms `cubic-bezier(.38,1.21,.22,1)`;返回 250ms `cubic-bezier(.31,.94,.34,1)` |
 
