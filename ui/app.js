@@ -2413,10 +2413,11 @@ function setDebug(on) {
 
 /**
  * 调试浮标:右下角那颗随时弹日志面板的按钮。
- * 它跟着「记录日志」走 —— 日志没记录时没有现场可看,浮标也就不该常驻(评审 2)。
+ * 它跟着「记录日志」走 —— 日志没记录时没有现场可看,浮标也就不该常驻(评审 2);
+ * 另外只有 dev 构建才有它(发布版不给调试界面)。
  */
 function fabOn() {
-  return debugOn();
+  return isDevBuild() && debugOn();
 }
 
 function syncDebugButtons() {
@@ -2441,6 +2442,7 @@ function bindDebugToggle() {
 }
 
 function showDebugPanel(on) {
+  if (!isDevBuild()) return; // 发布版不暴露实时日志(日志照旧写文件)
   const box = document.getElementById("dbg");
   if (!box) return;
   box.hidden = !on;
@@ -2451,6 +2453,7 @@ function showDebugPanel(on) {
 }
 
 function toggleDebug() {
+  if (!isDevBuild()) return;
   const box = document.getElementById("dbg");
   if (!box) return;
   showDebugPanel(box.hidden);
@@ -2510,6 +2513,22 @@ const VARIANT_LABEL = {
 let APP_INFO = null;
 let setPage = "";
 
+/**
+ * 构建 profile:只有 debug 构建(不带 --release)才暴露调试能力。
+ * 判断集中在这一个函数里 —— app_info 的 build 形如 "debug · windows x86_64",
+ * 首段就是 profile。还没拿到 app_info 时按发布版处理(先藏),
+ * dev 构建在 loadAppInfo 之后由 applyBuildGates() 补回来。
+ */
+function isDevBuild() {
+  if (!APP_INFO || !APP_INFO.build) return false;
+  return /^\s*debug\b/i.test(String(APP_INFO.build));
+}
+
+/** 设置里能看到的入口:发布版没有「调试」 */
+function setPages() {
+  return SET_PAGES.filter((p) => p.key !== "debug" || isDevBuild());
+}
+
 function themeSeedLabel() {
   const hit = SEEDS.find((s) => s.id === themeState.seed);
   return hit ? hit.label : "自定义";
@@ -2558,12 +2577,13 @@ function setEntryHtml(p) {
 function renderSetHome() {
   const main = $("setGroupMain");
   const low = $("setGroupLow");
-  if (main) main.innerHTML = SET_PAGES.filter((p) => p.group === 0).map(setEntryHtml).join("");
-  if (low) low.innerHTML = SET_PAGES.filter((p) => p.group === 1).map(setEntryHtml).join("");
+  const pages = setPages();
+  if (main) main.innerHTML = pages.filter((p) => p.group === 0).map(setEntryHtml).join("");
+  if (low) low.innerHTML = pages.filter((p) => p.group === 1).map(setEntryHtml).join("");
 
   const master = $("setMaster");
   if (master) {
-    master.innerHTML = SET_PAGES.map(
+    master.innerHTML = pages.map(
       (p) =>
         '<button type="button" class="set-navrow" role="tab" data-page="' + p.key +
         '" aria-selected="' + (setPage === p.key ? "true" : "false") + '">' +
@@ -2589,7 +2609,8 @@ function wideSettings() {
 
 /** 打开二级页;key 为空 = 回到入口列表(<840 才有入口列表) */
 function openSetPage(key) {
-  const page = SET_PAGES.find((p) => p.key === key) ? key : "src";
+  // 发布版没有「调试」:手滑/旧状态指过来也落回「源」
+  const page = setPages().some((p) => p.key === key) ? key : "src";
   setPage = page;
   const shell = $("setShell");
   if (shell) shell.setAttribute("data-page", page);
@@ -2663,6 +2684,32 @@ async function loadAppInfo() {
     const el = $("logPath");
     if (el) el.textContent = "%APPDATA%\\reelbox\\reelbox.log";
   }
+  applyBuildGates();
+}
+
+/**
+ * 按构建 profile 摆正调试界面(在 app_info 到位后跑一次)。
+ * 发布版:调试二级页、浮标、日志面板、Ctrl+Shift+D 全部撤掉 ——
+ * 日志本身照旧落盘(log() 写文件与界面无关),只是没有开关和实时面板。
+ */
+function applyBuildGates() {
+  if (!isDevBuild()) {
+    ["dbgFab", "dbg"].forEach((id) => {
+      const el = $(id);
+      if (el) el.remove();
+    });
+    const page = document.querySelector('#setDetail .set-page[data-page="debug"]');
+    if (page) page.remove();
+    if (setPage === "debug") {
+      setPage = "";
+      const shell = $("setShell");
+      if (shell) shell.removeAttribute("data-page");
+      document.body.removeAttribute("data-setpage");
+    }
+  }
+  renderSetHome();
+  syncSetSummaries();
+  syncDebugButtons();
 }
 
 /** 二级页 app bar:滚动超过 8dp 才加下边线 */
