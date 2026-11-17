@@ -38,7 +38,7 @@ $checks = @(
   @{ f = "ui/app.js";                     p = "v.onended";         d = "auto next episode" },
   @{ f = "ui/app.js";                     p = "requestFullscreen"; d = "fullscreen key" },
   @{ f = "docs/PLAYBACK.md";              p = "PLAYBACK";          d = "docs" },
-  @{ f = "docs/playback.png";             p = $null;               d = "screenshot" }
+  @{ f = "src-tauri/src/commands.rs";      p = "selftest_report";    d = "selftest report writer" }
 )
 foreach ($c in $checks) {
   if (-not (Test-Path $c.f)) { Write-Host "  [MISSING] $($c.f) ($($c.d))" -ForegroundColor Red; $fail = 1; $results += @{ name = $c.d; ok = $false }; continue }
@@ -73,7 +73,7 @@ $pluginChecks = @(
   @{ f = "ui/app.js";                     p = "stream_kind";        d = "probe before play" },
   @{ f = "ui/app.js";                     p = "PLAY_NEED";          d = "selftest needs 2 plays" },
   @{ f = "verify-plugin-playback.ps1";    p = "selftest-runs.json"; d = "plugin playback loop" },
-  @{ f = "docs/selftest-report.json";     p = $null;                d = "selftest report" }
+  @{ f = "ui/app.js";                       p = "pStartLoading";      d = "起播 loading" }
 )
 foreach ($c in $pluginChecks) {
   if (-not (Test-Path $c.f)) { Write-Host "  [MISSING] $($c.f) ($($c.d))" -ForegroundColor Red; $fail = 1; $results += @{ name = $c.d; ok = $false }; continue }

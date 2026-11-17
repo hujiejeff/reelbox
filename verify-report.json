@@ -1,0 +1,165 @@
+﻿{
+    "goal":  "commit + playback implementation",
+    "commit":  "944a73d",
+    "dirty":  true,
+    "tests":  {
+                  "passed":  40,
+                  "failed":  0
+              },
+    "checks":  [
+                   {
+                       "ok":  true,
+                       "name":  "m3u8 URL rewrite"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "CORS header"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "player_url command"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "share page -\u003e m3u8"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "stream resolution"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "player overlay"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "hls.js loaded"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "openPlayer"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "progress memory"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "auto next episode"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "fullscreen key"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "docs"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "selftest report writer"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "iframe sandbox=allow-scripts"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "postMessage bridge"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "http.get -\u003e Rust plugin_fetch"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "native DOM selectors"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "wasm in compute.run"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "plugin JS source runner"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "DOMParser html.load"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "app.js -\u003e sandbox hooks"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "stream allowlist registration"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "plugin_read command"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "plugin_fetch command"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "allowlist command"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "boa fallback switch"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "SSRF guard"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "runtime docs"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "shared log file"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "stream kind sniff"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "media stream-through"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "range passthrough"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "probe before play"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "selftest needs 2 plays"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "plugin playback loop"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "璧锋挱 loading"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "sandbox is opaque origin"
+                   },
+                   {
+                       "ok":  true,
+                       "name":  "SSRF blocks link-local"
+                   }
+               ],
+    "result":  "PASS",
+    "at":  "2026-11-17T21:30:59"
+}
