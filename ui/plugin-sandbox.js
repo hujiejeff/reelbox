@@ -430,6 +430,8 @@ export function sandboxMain() {
     const quiet = { log: function () {}, warn: function () {}, error: function () {}, info: function () {}, debug: function () {} };
     // 整份插件源码塞进一个函数体里跑一次:顶层的 const/function 留在闭包里,
     // 钩子函数挂住这个闭包,所以常量、辅助函数都还能用。
+    // 第二个形参名不能改:老插件源码里写的就是那个前缀的 define(...),
+    // 它在用户机器上运行,跟界面上叫什么是两回事。
     const factory = new Function(
       "__host",
       "WeBox",
@@ -439,7 +441,7 @@ export function sandboxMain() {
     );
     const def = factory(host, host, host, quiet);
     if (!def || typeof def !== "object") {
-      throw new Error("插件没有调用 WeBox.define / reelbox.define");
+      throw new Error("插件没有调用 reelbox.define({...})");
     }
     return def;
   }

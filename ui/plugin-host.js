@@ -1,7 +1,7 @@
 // 插件宿主(父页一侧):一个 sandbox iframe + postMessage 桥。
 //
 // 为什么要 iframe:
-//   * 插件是不可信代码(第三方 .webox.js),不能让它直接拿到 Tauri 的 invoke
+//   * 插件是不可信代码(第三方 js 文件),不能让它直接拿到 Tauri 的 invoke
 //   * `sandbox="allow-scripts"` 且 **不加** `allow-same-origin` → iframe 变成
 //     unique origin,读不到父页的 localStorage / cookie,也拿不到 __TAURI_INTERNALS__
 //   * 插件要联网时只能 postMessage 求父页,由父页调 `plugin_fetch`(Rust 侧还会挡内网)
@@ -28,12 +28,36 @@ let logFn = function () {};
 const calls = new Map(); // 父页发起的钩子调用
 const rpcs = new Map(); // 沙箱发起的宿主调用(http.get)
 
-/** 这个源是不是插件源(kind 或扩展名任一命中) */
+// 插件身份只在这个文件里认:界面上统一叫「插件」,不出现老品牌名。
+// 但用户机器上的老配置和老插件文件还带着那个名字(kind 值、文件后缀、
+// 源码里的入口前缀),所以这里照着认 —— 技术兼容留着,只是不拿给用户看。
+
+/** 配置里插件源的老 kind 值(新写进去的也用这个,后端 Source.kind 认它) */
+export const PLUGIN_KIND = "webox";
+
+/** 插件源码的入口:原生是 reelbox.define;老插件写的是另一个前缀,一并认 */
+const DEFINE_RE = /(?:WeBox|reelbox)\.define\s*\(/;
+
+/** 这段文本是不是插件源码 */
+export function looksLikePluginSource(text) {
+  return DEFINE_RE.test(String(text == null ? "" : text));
+}
+
+/** 类型值是不是插件(历史值 / 新写法 plugin / js) */
+export function isPluginKind(kind) {
+  const k = String(kind == null ? "" : kind).toLowerCase();
+  return k === PLUGIN_KIND || k === "plugin" || k === "js";
+}
+
+/** 地址/路径是不是插件文件:插件就是 js 文件 */
+function isPluginPath(url) {
+  return /\.js$/i.test(String(url == null ? "" : url).split(/[?#]/)[0]);
+}
+
+/** 这个源是不是插件源(kind 或路径任一命中) */
 export function isPluginSource(src) {
   if (!src) return false;
-  const kind = String(src.kind || src.type || "");
-  const url = String(src.url || "").toLowerCase();
-  return kind === "webox" || url.endsWith(".webox.js") || url.endsWith(".reelbox.js");
+  return isPluginKind(src.kind || src.type) || isPluginPath(src.url);
 }
 
 /** 建宿主 iframe。app.js 在 init() 里调一次即可。 */

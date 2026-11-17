@@ -61,7 +61,7 @@ impl Host {
             .map(|v| v.is_undefined())
             .unwrap_or(true)
         {
-            return Err("插件没有调用 WeBox.define".into());
+            return Err("插件没有调用 define({...})".into());
         }
         Ok(Self { ctx, meta })
     }

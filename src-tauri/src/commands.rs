@@ -675,7 +675,8 @@ pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value,
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect();
-    let path = dir.join(format!("{safe}.webox.js"));
+    // 新导入的插件写原生后缀;老的 `.webox.js` 文件照样认(is_plugin / plugin_read)
+    let path = dir.join(format!("{safe}.reelbox.js"));
     std::fs::write(&path, &text).map_err(|e| format!("写插件失败: {e}"))?;
     Ok(serde_json::json!({
         "path": path.to_string_lossy(),

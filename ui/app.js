@@ -1,5 +1,12 @@
 import { initTheme, state as themeState, SEEDS, isDark } from "./theme.js";
-import { initPluginHost, callPlugin, isPluginSource } from "./plugin-host.js";
+import {
+  initPluginHost,
+  callPlugin,
+  isPluginSource,
+  isPluginKind,
+  looksLikePluginSource,
+  PLUGIN_KIND,
+} from "./plugin-host.js";
 import { buildSrcPanel } from "./src-panel.js";
 import { openSheet } from "./sheet.js";
 import { closeMenu, menuOpen, openMenu } from "./menu.js";
@@ -741,8 +748,7 @@ function errText(e) {
 function isCrawlSource(src) {
   if (!src) return false;
   if (isPluginSource(src)) return false;
-  const kind = srcKind(src);
-  if (kind === "xml" || kind === "webox") return false;
+  if (srcKind(src) === "xml") return false;
   const url = String(src.url || "").toLowerCase();
   if (!/^https?:/.test(url)) return false;
   const host = url.split("://")[1].split(/[/?#]/)[0];
@@ -1501,7 +1507,7 @@ const KIND_OPTIONS = [
   { value: "vod", label: "点播(JSON)", title: "苹果 CMS 的 /api.php/provide/vod" },
   { value: "xml", label: "点播(XML)", title: "…/at/xml 或 .xml" },
   { value: "live", label: "直播(m3u/m3u8)", title: "频道列表,v0.3 才播放" },
-  { value: "webox", label: "插件(.webox.js)", title: "本地插件文件" },
+  { value: PLUGIN_KIND, label: "插件(JS)", title: "本地插件文件" },
 ];
 
 function kindTitle(kind) {
@@ -1512,7 +1518,7 @@ function kindTitle(kind) {
 /**
  * 地址 → 类型。认不出来的返回 ""(只有这时才让用户手选)。
  *   .m3u8 / .m3u                          → live
- *   .webox.js / 地址里带 webox             → webox
+ *   .js(插件就是 js 文件)                → 插件
  *   provide/vod、api.php、ac=list/detail   → vod
  *   /at/xml、ac=xml、.xml                  → xml
  */
@@ -1521,9 +1527,7 @@ function guessSourceKind(url) {
   if (!raw) return "";
   const path = raw.split(/[?#]/)[0];
   if (/\.m3u8?$/.test(path)) return "live";
-  if (path.endsWith(".webox.js") || path.endsWith(".reelbox.js") || raw.indexOf("webox") >= 0) {
-    return "webox";
-  }
+  if (path.endsWith(".js")) return PLUGIN_KIND;
   if (/\/at\/xml$/.test(path) || /[?&]ac=xml\b/.test(raw) || path.endsWith(".xml")) return "xml";
   if (/provide\/vod/.test(path) || /\/api\.php/.test(path) || /[?&]ac=(list|detail)\b/.test(raw)) {
     return "vod";
@@ -1531,13 +1535,13 @@ function guessSourceKind(url) {
   return "";
 }
 
-/** 把各种历史写法归一到 vod / xml / live / webox */
+/** 把各种历史写法归一到 vod / xml / live / 插件 */
 function normKind(kindRaw, url) {
   const k = String(kindRaw == null ? "" : kindRaw).toLowerCase();
   if (k === "1" || k === "xml") return "xml";
   if (k === "json" || k === "vod") return "vod";
   if (k === "live" || k === "m3u" || k === "m3u8") return "live";
-  if (k === "webox" || k === "plugin" || k === "js") return "webox";
+  if (isPluginKind(k)) return PLUGIN_KIND;
   return guessSourceKind(url) || "vod";
 }
 
@@ -1765,9 +1769,21 @@ function sourceKindLabel(s) {
 function sourceTechLabel(s) {
   const t = sourceType(s);
   const path = String((s && s.url) || "").split(/[?#]/)[0].toLowerCase();
-  if (t === "plugin") return path.endsWith(".reelbox.js") ? ".reelbox.js" : ".webox.js";
+  if (t === "plugin") return path.endsWith(".reelbox.js") ? ".reelbox.js" : "JS 文件";
   if (t === "live") return path.endsWith(".m3u") ? "m3u" : "m3u8";
   return srcKind(s) === "xml" ? "XML" : "JSON";
+}
+
+/**
+ * 行副标题:插件的地址是磁盘路径,老文件的后缀里还带着旧名字 ——
+ * 界面上只说「本地插件 · 文件名」,不把那个名字露给用户。
+ */
+function srcSubtitle(s) {
+  if (!s) return "";
+  if (sourceType(s) !== "plugin") return String(s.url || "");
+  const base = String(s.url || "").split(/[\\/]/).pop() || "";
+  const stem = base.replace(/(\.[^.]+)+$/, "") || base;
+  return stem ? "本地插件 · " + stem : "本地插件";
 }
 
 /** 状态点:形状 + 颜色双通道(样式见 index.html 的 .status-dot 四态) */
@@ -1839,7 +1855,7 @@ function renderSourceManager() {
                 : "") +
               statusDotHtml(s) +
             "</span>" +
-            '<span class="m3e-list-item__supporting">' + esc(s.url) + "</span>" +
+            '<span class="m3e-list-item__supporting">' + esc(srcSubtitle(s)) + "</span>" +
           "</span>" +
           '<span class="m3e-list-item__trailing">' +
             // 行尾只留一个「更多」:状态点是状态、容器+名称 600 是当前源,
@@ -2274,7 +2290,7 @@ function singleSourceOf(data) {
 
 /**
  * 判型表(内容优先,后缀兜底):
- *   含 reelbox.define( / WeBox.define(   → 插件
+ *   源码里调了 define(                 → 插件(前缀的兼容见 plugin-host.js)
  *   以 <?xml 或 <rss 开头               → 源(XML)
  *   JSON 顶层有 sources 数组             → 集合源(批量导入)
  *   JSON 里有 api/url/provide.vod 等字段 → 源(JSON)
@@ -2284,8 +2300,8 @@ function singleSourceOf(data) {
 function analyzeImport(text, hint) {
   const body = String(text == null ? "" : text).replace(/^\uFEFF/, "").trim();
   const path = String(hint == null ? "" : hint).trim().toLowerCase().split(/[?#]/)[0];
-  // 1) 插件:源码里调了 define();两个前缀都认,老插件用的是前一个
-  if (/reelbox\.define\s*\(/.test(body) || /WeBox\.define\s*\(/.test(body)) return { type: "plugin" };
+  // 1) 插件:源码里调了 define()
+  if (looksLikePluginSource(body)) return { type: "plugin" };
   // 2) XML 源
   if (/^<\?xml/i.test(body) || /^<rss/i.test(body)) return { type: "xml" };
   // 3) JSON:先看是不是集合源,再看单源
@@ -2435,7 +2451,7 @@ async function applyImport(type, hit, ctx) {
       const known = (S.sources || []).find((x) => x.url === path || x.id === (res && res.id));
       if (!known) {
         await applySources(
-          S.sources.concat([{ id: res.id, name: given || res.name, type: "webox", url: path }])
+          S.sources.concat([{ id: res.id, name: given || res.name, type: PLUGIN_KIND, url: path }])
         );
       }
       const src = (S.sources || []).find((x) => x.url === path) || known;

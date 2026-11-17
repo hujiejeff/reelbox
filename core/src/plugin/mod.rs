@@ -26,9 +26,10 @@ pub fn parse_meta(js: &str) -> Result<PluginMeta, String> {
     const LEGACY: &str = "WeBox.define(";
     let start = match js.find(NATIVE) {
         Some(i) => i,
+        // 报错文案只提原生契约:老前缀照认(见 LEGACY),但那是兼容细节,不摆给用户
         None => js
             .find(LEGACY)
-            .ok_or_else(|| "找不到 reelbox.define( 或 WeBox.define(".to_string())?,
+            .ok_or_else(|| "找不到插件入口 define({...})".to_string())?,
     };
     let prefix_len = if js[start..].starts_with(NATIVE) {
         NATIVE.len()
