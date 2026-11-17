@@ -486,6 +486,17 @@
     font: 400 14px/20px system-ui, "PingFang SC", sans-serif;
     color: var(--m3e-sys-color-on-surface-variant);
   }
+  /* 确实需要提示的选项才留一行 supporting-text(12/16,on-surface-variant),不写散文;
+     选择器带上父级才压得住上面那条 .set-row__text span */
+  .set-row__text span.set-row__support {
+    margin-top: 4px;
+    font-family: var(--m3e-sys-typescale-body-small-font);
+    font-size: var(--m3e-sys-typescale-body-small-size);
+    line-height: var(--m3e-sys-typescale-body-small-line-height);
+    font-weight: var(--m3e-sys-typescale-body-small-weight);
+    letter-spacing: var(--m3e-sys-typescale-body-small-tracking);
+    color: var(--m3e-sys-color-on-surface-variant);
+  }
   .set-block { display: flex; flex-direction: column; }
   .set-block__head { display: flex; align-items: center; min-height: 24px; }
   .set-block__title {
@@ -1339,7 +1350,7 @@
                   <p class="set-page__sub">动态取色:一颗种子色,实时生成整套 Material You 配色。</p>
 
                   <div class="set-row set-row--stack">
-                    <div class="set-row__text"><b>主题模式</b><span>跟随系统,或固定浅色 / 深色</span></div>
+                    <div class="set-row__text"><b>主题模式</b></div>
                     <div class="seg" id="segMode">
                       <button data-mode="auto">自动</button>
                       <button data-mode="light">浅色</button>
@@ -1348,7 +1359,10 @@
                   </div>
 
                   <div class="set-row set-row--stack" id="blackRow">
-                    <div class="set-row__text"><b>纯黑模式</b><span>深色下用纯黑底,OLED 更省电</span></div>
+                    <div class="set-row__text">
+                      <b>纯黑模式</b>
+                      <span class="set-row__support">深色下才生效:纯黑底,OLED 更省电</span>
+                    </div>
                     <div class="seg" id="segBlack">
                       <button data-black="0">标准</button>
                       <button data-black="1">纯黑</button>
@@ -1356,12 +1370,12 @@
                   </div>
 
                   <div class="set-row set-row--stack">
-                    <div class="set-row__text"><b>主题色彩</b><span>种子色,和 Android 的 Material You 同一套</span></div>
+                    <div class="set-row__text"><b>主题色彩</b></div>
                     <div class="swatches" id="swatches"></div>
                   </div>
 
                   <div class="set-row set-row--stack">
-                    <div class="set-row__text"><b>配色风格</b><span>同一颗种子色,不同的味道</span></div>
+                    <div class="set-row__text"><b>配色风格</b></div>
                     <div class="seg" id="segVariant">
                       <button data-v="tonal">标准</button>
                       <button data-v="vibrant">鲜明</button>
