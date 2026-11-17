@@ -783,49 +783,45 @@
   .p-icon:disabled, .p-icon[aria-disabled="true"] { opacity: .32; pointer-events: none; }
 
   .p-volwrap { position: relative; display: flex; }
-  /* 音量浮层:垂直滑块,浮在音量按钮上方;和按钮水平居中,底部距按钮 8px。
+  /* 音量浮层(自绘垂直滑块),浮在音量按钮上方;和按钮水平居中,底部距按钮 8px。
      底和 .p-top/.p-bottom 同一套深色半透明(不能再用 surface-container:
      浅色主题下那会变成一块白药丸,和播放器其它控件不是一家人)。
-     内边距 12×8 + 滑块 96 → 整体 120 高;圆角 12,阴影走 elevation-level2 */
+     尺寸自己定死:40 宽(8 + 24 热区 + 8)、12 + 96 + 12 = 120 高;
+     圆角 12,阴影走 elevation-level2。touch-action:none 让触摸拖动不滚页面。 */
   .p-vol {
     position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%);
-    display: flex; justify-content: center; align-items: center;
-    padding: 12px 8px; border-radius: 12px; opacity: 0; pointer-events: none;
+    box-sizing: border-box; width: 40px; height: 120px; padding: 12px 8px;
+    border-radius: 12px; opacity: 0; pointer-events: none; outline: none;
     background: rgba(18,18,22,.82);
     -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
     box-shadow: var(--m3e-sys-elevation-level2-shadow);
-    transition: opacity .16s;
+    transition: opacity .16s; cursor: pointer; touch-action: none;
   }
   /* 浮层和按钮之间那 8px 空隙也要能接住鼠标,否则一移动就消失 */
   .p-vol::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
   .p-volwrap:hover .p-vol, .p-volwrap.open .p-vol, .p-vol:focus-within { opacity: 1; pointer-events: auto; }
-  /* 垂直滑块:writing-mode + direction(WebView2/Chromium 这条路比
-     -webkit-appearance:slider-vertical 稳),下小上大。
-     轨道 4px 圆角 2 用两层渐变画:下层是整根轨道(rgba 白 28%),
-     上层是已播放部分(primary,--vol 由 setVolume 同步成 0~100%)。
-     输入框本身留 24 宽做鼠标热区;拇指 12×12 实心圆、无边框无阴影 */
-  .p-vol input[type="range"] {
-    -webkit-appearance: none; appearance: none;
-    writing-mode: vertical-lr; direction: rtl;
-    box-sizing: border-box; width: 24px; height: 96px;
-    margin: 0; padding: 0; border: none; border-radius: 2px; outline: none;
-    background-color: transparent; cursor: pointer;
-    background-image:
-      linear-gradient(var(--m3e-sys-color-primary), var(--m3e-sys-color-primary)),
-      linear-gradient(rgba(255,255,255,.28), rgba(255,255,255,.28));
-    background-size: 4px var(--vol, 100%), 4px 100%;
-    background-position: center bottom, center bottom;
-    background-repeat: no-repeat;
+  .p-vol:focus-visible { outline: 2px solid var(--m3e-sys-color-primary); outline-offset: 2px; }
+  /* 轨道:4px 宽、96 高、垂直居中。中心线由这一层定死(left:50% + translateX(-50%)),
+     下面的已播放段和拇指都挂在这条线上 —— 之前用原生 range 时拇指的横向位置由浏览器
+     按 input 盒宽算,和背景画的轨道对不齐(偏左半个拇指宽),自绘就不会了。 */
+  .p-vol__track {
+    position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+    width: 4px; height: 96px; border-radius: 2px;
+    background: rgba(255,255,255,.28);
   }
-  .p-vol input[type="range"]::-webkit-slider-runnable-track {
-    -webkit-appearance: none; appearance: none;
-    box-sizing: border-box; width: 4px; height: 100%; border: none;
-    border-radius: 2px; background: transparent;
+  /* 已播放段:从底部往上,高度 = 音量百分比(--vol 由 setVolume 同步成 0~100%) */
+  .p-vol__fill {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: var(--vol, 100%); border-radius: 2px;
+    background: var(--m3e-sys-color-primary);
   }
-  .p-vol input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none; appearance: none; box-sizing: border-box;
-    width: 12px; height: 12px; border-radius: 50%; border: none; margin: 0;
-    background: var(--m3e-sys-color-primary); cursor: pointer;
+  /* 拇指:12×12 圆。bottom = 音量百分比,translate(-50%, 50%) 把圆心压回那条中心线,
+     所以 thumb 的水平中心 = 轨道的水平中心(left + width/2),差值 0 */
+  .p-vol__thumb {
+    position: absolute; left: 50%; bottom: var(--vol, 100%);
+    width: 12px; height: 12px; border-radius: 50%;
+    transform: translate(-50%, 50%);
+    background: var(--m3e-sys-color-primary);
   }
   #pQuality { width: auto; padding: 0 14px; border-radius: 19px; font: 600 12px/1 system-ui, sans-serif; }
 
@@ -1602,8 +1598,13 @@
           <button class="p-icon" id="pMute" aria-label="静音">
             <span class="m3e-icon" id="pMuteIcon">volume_up</span>
           </button>
-          <div class="p-vol">
-            <input id="vol" type="range" min="0" max="100" value="100" aria-label="音量" aria-orientation="vertical">
+          <div class="p-vol" id="vol" tabindex="0" role="slider"
+            aria-label="音量" aria-orientation="vertical"
+            aria-valuemin="0" aria-valuemax="100" aria-valuenow="80">
+            <div class="p-vol__track">
+              <div class="p-vol__fill"></div>
+              <div class="p-vol__thumb"></div>
+            </div>
           </div>
         </div>
         <button class="p-icon" id="pFull" aria-label="全屏">

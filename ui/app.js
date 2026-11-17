@@ -3251,8 +3251,8 @@ function pSync() {
   $("player").classList.toggle("playing", playing);
   if (!playing) $("player").classList.remove("idle");
   const vol = v.muted ? 0 : v.volume;
-  const volEl2 = $("vol");
-  if (volEl2 && document.activeElement !== volEl2) paintVol(vol * 100);
+  // 自绘滑块没有"输入中"的中间态:画一次就是最终位置,不用再避让 activeElement
+  paintVol(vol * 100);
   $("pMuteIcon").textContent = vol === 0 ? "volume_off" : vol < 0.5 ? "volume_down" : "volume_up";
   const pv = $("pPrev"), nx = $("pNext");
   const list = (playCtx && playCtx.list) || [];
@@ -3385,19 +3385,13 @@ function bindPlayer() {
   }
   const volBox = document.querySelector(".p-vol");
   if (volBox) {
-    volBox.addEventListener("pointerdown", (e) => e.stopPropagation());
+    // 浮层接住点击:否则点到滑块等于点到播放器(切播放/暂停)
     volBox.addEventListener("click", (e) => e.stopPropagation());
   }
 
-  const volEl = $("vol");
   paintVol(loadVolume() * 100);
   v.volume = loadVolume();
-  // 拖滑块时浮层不收起:3s 空闲才收(移开鼠标那条 250ms 宽限在 mouseleave 里)
-  volEl.addEventListener("pointerdown", keepVolumeOpen);
-  volEl.oninput = () => {
-    keepVolumeOpen();
-    setVolume(Number(volEl.value) / 100);
-  };
+  bindVolumeSlider();
 
   $("pRetry").onclick = () => {
     const c = playCtx;
@@ -3469,15 +3463,88 @@ function saveVolume() {
 }
 
 /**
- * 音量滑块的两件事一起做:value(拇指位置)和 --vol(轨道已播放部分),
- * 少了后者轨道就永远是一根灰条,看不出音量到哪了。
+ * 音量滑块只有两个量:--vol(已播放段高度 + 拇指 bottom,同一个百分比)和
+ * aria-valuenow。少写后者轨道就是一根灰条,看不出音量到哪了。
+ * --vol 挂在浮层上往下继承,轨道里的 fill / thumb 一起动,不会各走各的。
  */
 function paintVol(pct) {
   const el = $("vol");
   if (!el) return;
   const p = Math.min(100, Math.max(0, Number(pct) || 0));
-  el.value = String(Math.round(p));
   el.style.setProperty("--vol", p + "%");
+  el.setAttribute("aria-valuenow", String(Math.round(p)));
+  el.setAttribute("aria-valuetext", Math.round(p) + "%");
+}
+
+/**
+ * 音量滑块(自绘,不用原生 range)。
+ *
+ * 原生 range 走 writing-mode: vertical-lr 时,拇指的横向位置由浏览器按 input
+ * 盒宽算,和背景画的轨道对不齐 —— 表现就是"轨道在中间、拇指偏左半个拇指宽"。
+ * 自绘后中心线只有一处定义:轨道的 left:50% + translateX(-50%),
+ * 拇指用 left:50% + translate(-50%, 50%) 落在同一条线上,
+ * 所以 thumb 与轨道的水平中心恒等。
+ *
+ * 交互:按下即定位(按 Y 算比例)→ setPointerCapture 拖动实时改 → 抬起结束;
+ * 键盘上下 ±5、Home/End 到 0/100;统一的入口是 setVolume()。
+ */
+function bindVolumeSlider() {
+  const box = $("vol");
+  if (!box || box.dataset.bound) return;
+  box.dataset.bound = "1";
+  const track = box.querySelector(".p-vol__track");
+  if (!track) return;
+
+  // 客户端 Y → 0~100:轨道下沿是 0,上沿是 100
+  const pctAt = (clientY) => {
+    const r = track.getBoundingClientRect();
+    if (!r.height) return 0;
+    return Math.min(100, Math.max(0, ((r.bottom - clientY) / r.height) * 100));
+  };
+  const move = (clientY) => {
+    keepVolumeOpen(); // 拖着的时候浮层不收起:3s 空闲才收
+    setVolume(pctAt(clientY) / 100);
+  };
+
+  let dragging = false;
+  box.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return; // 只认左键
+    e.preventDefault();
+    e.stopPropagation(); // 别让播放器把这下当"切播放/暂停"
+    dragging = true;
+    try { box.setPointerCapture(e.pointerId); } catch (_) {}
+    try { box.focus({ preventScroll: true }); } catch (_) {}
+    move(e.clientY); // 按下即定位,不用先对准拇指
+  });
+  box.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    e.stopPropagation();
+    move(e.clientY);
+  });
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { box.releasePointerCapture(e.pointerId); } catch (_) {}
+    keepVolumeOpen();
+  };
+  box.addEventListener("pointerup", endDrag);
+  box.addEventListener("pointercancel", endDrag);
+
+  // 键盘:浮层可聚焦(tabindex="0"),上下 ±5,Home/End 到 0/100
+  box.addEventListener("keydown", (e) => {
+    const v = $("video");
+    const cur = (v.muted ? 0 : v.volume) * 100;
+    let next = null;
+    if (e.key === "ArrowUp" || e.key === "ArrowRight") next = cur + 5;
+    else if (e.key === "ArrowDown" || e.key === "ArrowLeft") next = cur - 5;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = 100;
+    if (next === null) return;
+    e.preventDefault(); // 别让页面跟着滚
+    e.stopPropagation(); // 也别让播放器的全局上下键再动一次(那会一次跳两格)
+    keepVolumeOpen();
+    setVolume(next / 100);
+  });
 }
 
 /**
