@@ -1,11 +1,88 @@
-name: mobile
+name: build
 
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # ---------- 桌面:Windows / macOS / Linux ----------
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install --no-audit --no-fund
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Test core
+        run: cargo test -p reelbox-core
+
+      - name: Portable zip (exe only)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $v = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path dist-portable | Out-Null
+          Copy-Item target/release/reelbox.exe dist-portable/
+          Copy-Item README.md dist-portable/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist-portable/* -DestinationPath "Reelbox_${v}_portable_x64.zip"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: "Reelbox v__VERSION__"
+          releaseBody: "见提交记录。"
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Attach portable zip
+        if: matrix.platform == 'windows-latest'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: Reelbox_*_portable_x64.zip
+
+  # ---------- Android ----------
   android:
     runs-on: ubuntu-22.04
     steps:
@@ -27,17 +104,17 @@ jobs:
             "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973"
           echo "NDK_HOME=$SDK/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
-
-      - uses: swatinem/rust-cache@v2
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - run: npm install --no-audit --no-fund
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: swatinem/rust-cache@v2
 
       - name: Signing setup
         id: sign
@@ -96,6 +173,14 @@ jobs:
         if: steps.sign.outputs.has != 'true'
         run: npx tauri android build --apk --debug --ci
 
+      - name: Attach apk
+        uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -103,29 +188,23 @@ jobs:
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: warn
 
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gen-android
-          path: src-tauri/gen/android
-          if-no-files-found: warn
-
+  # ---------- iOS ----------
   ios:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
-
-      - uses: swatinem/rust-cache@v2
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - run: npm install --no-audit --no-fund
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
+
+      - uses: swatinem/rust-cache@v2
 
       - name: Init ios project
         run: |
@@ -136,16 +215,17 @@ jobs:
       - name: Build unsigned ipa
         run: npx tauri ios build --no-sign --ci
 
+      - name: Attach ipa
+        uses: softprops/action-gh-release@v2
+        if: github.ref_type == 'tag'
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: src-tauri/gen/apple/build/**/*.ipa
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ios-ipa
           path: src-tauri/gen/apple/build/**/*.ipa
-          if-no-files-found: warn
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gen-apple
-          path: src-tauri/gen/apple
           if-no-files-found: warn
