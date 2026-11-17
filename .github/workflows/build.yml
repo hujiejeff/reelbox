@@ -167,11 +167,11 @@ jobs:
         env:
           KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: npx tauri android build --apk --split-per-abi --ci
+        run: npx tauri android build --apk --ci
 
       - name: Build apk (debug, unsigned)
         if: steps.sign.outputs.has != 'true'
-        run: npx tauri android build --apk --debug --split-per-abi --ci
+        run: npx tauri android build --apk --debug --ci
 
       - name: Attach apk
         uses: softprops/action-gh-release@v2
