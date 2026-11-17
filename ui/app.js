@@ -91,6 +91,13 @@ async function init() {
     if (e.key === " " || e.code === "Space") { e.preventDefault(); return pTogglePlay(); }
     if (e.key === "ArrowRight") { v.currentTime = Math.min(v.duration || 1e9, v.currentTime + 10); return; }
     if (e.key === "ArrowLeft") { v.currentTime = Math.max(0, v.currentTime - 10); return; }
+    // 音量:上下键 ±5。滑块自己聚焦时交给原生处理,别一次跳两格
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && document.activeElement !== $("vol")) {
+      e.preventDefault();
+      setVolume(v.volume + (e.key === "ArrowUp" ? 0.05 : -0.05));
+      keepVolumeOpen();
+      return;
+    }
     if (e.key === "f" || e.key === "F") {
       if (document.fullscreenElement) document.exitFullscreen();
       else if (box.requestFullscreen) box.requestFullscreen();
@@ -2923,6 +2930,27 @@ function pStatus(msg, spinner) {
   el.innerHTML = (spin ? '<span class="spin"></span>' : "") + "<span>" + esc(msg) + "</span>";
 }
 
+/**
+ * 起播的统一入口:先摆加载态,再去取流。
+ * 正式播放、续播与预览(「继续观看」/ resume / 选集)、换线路重试、上一集下一集、
+ * 自动连播,以及「先探一小段再起播」的 peek 阶段(play 钩子 → player_url →
+ * stream_kind)全都走这里:点下去立刻有转圈 + 状态文案,复用播放器自己那套
+ * loading(.p-state 里的转圈),没有第二套加载样式。
+ * 顺手把上一集的画面停住 —— peek 期间不该还在放旧的那一集。
+ */
+function pStartLoading(msg) {
+  const box = $("player");
+  if (!box) return;
+  const v = $("video");
+  if (v && !v.paused) {
+    try { v.pause(); } catch (_) {}
+  }
+  box.hidden = false;
+  box.classList.remove("idle");
+  hidePlayerFail();
+  pStatus(msg || "取流中…");
+}
+
 /** 另一条线路的第一集;没有别的线路就返回 null(那就只能换源) */
 function otherLine() {
   const groups = S.detailGroups || [];
@@ -3104,14 +3132,10 @@ function bindPlayer() {
 
   $("pMute").onclick = () => {
     const wasSilent = v.muted || v.volume < 0.05;
-    v.muted = !wasSilent;
-    if (!v.muted && v.volume < 0.05) v.volume = 0.8;
-    if (v.muted) v.volume = 0;
-    $("vol").value = String(Math.round((v.muted ? 0 : v.volume) * 100));
-    saveVolume();
-    pSync();
+    // 取消静音:0 的时候回到 0.8,剩下多少就回多少
+    setVolume(wasSilent ? (v.volume < 0.05 ? 0.8 : v.volume) : 0);
   };
-  
+
 
   // 音量浮层:移开 250ms 再收起,避免从按钮移到滑块的瞬间消失
   const volWrap = document.querySelector(".p-volwrap");
@@ -3135,20 +3159,11 @@ function bindPlayer() {
   const volEl = $("vol");
   volEl.value = String(Math.round(loadVolume() * 100));
   v.volume = loadVolume();
-  let volIdle = 0;
-  const keepOpen = () => {
-    if (volWrap) volWrap.classList.add("open");
-    clearTimeout(volIdle);
-    volIdle = setTimeout(() => volWrap && volWrap.classList.remove("open"), 3000);
-  };
-  volEl.addEventListener("pointerdown", keepOpen);
+  // 拖滑块时浮层不收起:3s 空闲才收(移开鼠标那条 250ms 宽限在 mouseleave 里)
+  volEl.addEventListener("pointerdown", keepVolumeOpen);
   volEl.oninput = () => {
-    keepOpen();
-    const val = Number(volEl.value) / 100;
-    v.volume = val;
-    v.muted = val === 0;
-    saveVolume();
-    pSync();
+    keepVolumeOpen();
+    setVolume(Number(volEl.value) / 100);
   };
 
   $("pRetry").onclick = () => {
@@ -3196,12 +3211,7 @@ function bindPlayer() {
 /* 浏览器自动播放策略会把视频静音,拿到播放权限后立刻恢复 */
 function tryUnmute(v) {
   if (!v.muted) return;
-  v.muted = false;
-  if (!v.volume) v.volume = 0.8;
-  const vol = $("vol");
-  if (vol) vol.value = String(Math.round(v.volume * 100));
-  saveVolume();
-  pSync();
+  setVolume(v.volume || 0.8);
 }
 
 function jumpEpisode(delta) {
@@ -3223,6 +3233,32 @@ function loadVolume() {
 }
 function saveVolume() {
   try { localStorage.setItem("reelbox.volume", String($("video").volume)); } catch (_) {}
+}
+
+/**
+ * 音量落到 <video> 上并同步滑块:垂直滑块、静音键、上下方向键都走这里,
+ * 免得三处各写一份「0 算静音」的规则。
+ */
+function setVolume(val) {
+  const v = $("video");
+  const vol = Math.min(1, Math.max(0, Number(val) || 0));
+  v.volume = vol;
+  v.muted = vol === 0;
+  const el = $("vol");
+  if (el) el.value = String(Math.round(vol * 100));
+  saveVolume();
+  pSync();
+}
+
+let volIdleTimer = 0;
+
+/** 音量浮层亮出来,3s 没动作再收(悬停那条 250ms 宽限在 bindPlayer 里) */
+function keepVolumeOpen() {
+  const wrap = document.querySelector(".p-volwrap");
+  if (!wrap) return;
+  wrap.classList.add("open");
+  clearTimeout(volIdleTimer);
+  volIdleTimer = setTimeout(() => wrap.classList.remove("open"), 3000);
 }
 
 function closePlayer() {
@@ -3277,16 +3313,12 @@ function saveProgress(force) {
 }
 
 function openPlayer(url, name, mime, kind) {
-  const box = $("player");
   const v = $("video");
-  box.hidden = false;
-  box.classList.remove("idle");
-  hidePlayerFail();
   const full = S.detailTitle && name && name !== S.detailTitle
     ? S.detailTitle + " · " + name
     : name || S.detailTitle || "";
   $("pTitle").textContent = full;
-  pStatus(url ? "加载中…" : "取流中…");
+  pStartLoading(url ? "加载中…" : "取流中…");
   if (hls) { hls.destroy(); hls = null; }
   if (!url) return;
 
@@ -3429,6 +3461,9 @@ async function pluginStream(groupId, episodeId) {
 
 async function playEpisode(id, name, groupId) {
   log("playEpisode", name);
+  // 续播/预览和正式播放是同一条起播路:点下去先摆加载态,后面
+  // play 钩子 → player_url → stream_kind 这段 peek 也就一直有转圈陪着
+  pStartLoading();
   const key = detailKey();
   const rec = progGet(key);
   const list = S.detailEps || [];

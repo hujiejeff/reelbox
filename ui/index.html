@@ -780,22 +780,42 @@
   .p-icon:disabled, .p-icon[aria-disabled="true"] { opacity: .32; pointer-events: none; }
 
   .p-volwrap { position: relative; display: flex; }
+  /* 音量浮层:垂直滑块,浮在音量按钮上方;和按钮水平居中,底部距按钮 8px。
+     底 = surface-container,圆角 12,阴影走 m3e 的 elevation-level2 */
   .p-vol {
-    position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%);
-    padding: 10px 12px; border-radius: 18px; opacity: 0; pointer-events: none;
-    background: rgba(20,19,24,.86); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%);
+    display: flex; justify-content: center; align-items: center;
+    padding: 12px 0; border-radius: 12px; opacity: 0; pointer-events: none;
+    background: var(--m3e-sys-color-surface-container);
+    box-shadow: var(--m3e-sys-elevation-level2-shadow);
     transition: opacity .16s;
   }
-  /* 浮层和按钮之间的空隙也要能接住鼠标,否则一移动就消失 */
-  .p-vol::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 12px; }
+  /* 浮层和按钮之间那 8px 空隙也要能接住鼠标,否则一移动就消失 */
+  .p-vol::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
   .p-volwrap:hover .p-vol, .p-volwrap.open .p-vol, .p-vol:focus-within { opacity: 1; pointer-events: auto; }
+  /* 垂直滑块:writing-mode + direction(WebView2/Chromium 这条路比
+     -webkit-appearance:slider-vertical 稳),下小上大。
+     轨道宽 4 用居中渐变画,输入框本身留 24 宽做鼠标热区;拇指 12×12 圆 */
   .p-vol input[type="range"] {
-    -webkit-appearance: none; appearance: none; width: 96px; height: 4px; border-radius: 2px;
-    background: rgba(255,255,255,.28); outline: none; cursor: pointer;
+    -webkit-appearance: none; appearance: none;
+    writing-mode: vertical-lr; direction: rtl;
+    box-sizing: border-box; width: 24px; height: 112px;
+    margin: 0; padding: 0; border: none; border-radius: 2px; outline: none;
+    background-color: transparent; cursor: pointer;
+    background-image: linear-gradient(
+      var(--m3e-sys-color-on-surface-variant),
+      var(--m3e-sys-color-on-surface-variant)
+    );
+    background-size: 4px 100%; background-position: center; background-repeat: no-repeat;
+  }
+  .p-vol input[type="range"]::-webkit-slider-runnable-track {
+    -webkit-appearance: none; appearance: none;
+    box-sizing: border-box; width: 4px; height: 100%; border: none; background: transparent;
   }
   .p-vol input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%;
-    background: var(--m3e-sys-color-primary); border: none; cursor: pointer;
+    -webkit-appearance: none; appearance: none; box-sizing: border-box;
+    width: 12px; height: 12px; border-radius: 50%; border: none; margin: 0;
+    background: var(--m3e-sys-color-primary); cursor: pointer;
   }
   #pQuality { width: auto; padding: 0 14px; border-radius: 19px; font: 600 12px/1 system-ui, sans-serif; }
 
@@ -1568,7 +1588,9 @@
           <button class="p-icon" id="pMute" aria-label="静音">
             <span class="m3e-icon" id="pMuteIcon">volume_up</span>
           </button>
-          <div class="p-vol"><input id="vol" type="range" min="0" max="100" value="100" aria-label="音量"></div>
+          <div class="p-vol">
+            <input id="vol" type="range" min="0" max="100" value="100" aria-label="音量" aria-orientation="vertical">
+          </div>
         </div>
         <button class="p-icon" id="pFull" aria-label="全屏">
           <span class="m3e-icon">fullscreen</span>
