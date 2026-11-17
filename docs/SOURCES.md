@@ -2,8 +2,9 @@
 
 ## 源管理
 
-源存放在 `%APPDATA%/reelbox/sources.json`,由 `load_sources` / `save_sources` 读写;
-文件缺失或损坏时回落到内置三个(电影天堂 / 量子资源 / 非凡资源)。
+源存放在 `%APPDATA%/reelbox/sources.json`,由 `load_sources` / `save_sources` 读写。
+**默认没有源**:文件缺失、读不出来、解析失败、里面是空数组,`load_sources` 都返回空列表,
+界面三处(首页 / 顶栏源下拉 / 源管理页)给空态,由用户「导入源」或「批量导入」自己加。
 
 设置页可:添加、编辑、删除、导入 JSON(数组 / {sites} / {sources} / TVBox {key,name,type,api})、导入 `.webox.js`。
 

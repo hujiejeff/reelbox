@@ -128,32 +128,9 @@ pub fn is_crawl_config(kind: &str, url: &str) -> bool {
         .ends_with(".json")
 }
 
-/// 首次启动时的源;之后以配置文件为准。
-pub fn defaults() -> Vec<Source> {
-    vec![
-        Source {
-            id: "dytt".into(),
-            name: "电影天堂".into(),
-            kind: "vod".into(),
-            url: "https://caiji.dyttzyapi.com/api.php/provide/vod".into(),
-            health: None,
-        },
-        Source {
-            id: "lzzy".into(),
-            name: "量子资源".into(),
-            kind: "xml".into(),
-            url: "https://cj.lziapi.com/api.php/provide/vod/at/xml".into(),
-            health: None,
-        },
-        Source {
-            id: "ffzy".into(),
-            name: "非凡资源".into(),
-            kind: "vod".into(),
-            url: "https://cj.ffzyapi.com/api.php/provide/vod/from/ffm3u8".into(),
-            health: None,
-        },
-    ]
-}
+// 这里刻意没有 `defaults()`:**默认不带任何内置源**。`sources.json` 不存在时
+// `load_sources`(src-tauri)返回空列表,首次启动由用户自己「导入源 / 批量导入」。
+// 不留一个返回空 vec 的同名函数 —— 那种"看起来还有默认值"的死代码比没有更糟。
 
 #[cfg(test)]
 mod tests {

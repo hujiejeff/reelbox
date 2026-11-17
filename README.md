@@ -41,9 +41,9 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 
 ## 关于源
 
-首次启动、`%APPDATA%\reelbox\sources.json` 不存在时会写入三个内置源(见 `core/src/source/mod.rs` 的 `defaults()`)。之后所有源的增删改都在这个文件里,跟安装目录无关 —— 卸载重装不会带走,换机器也不会自动同步。
+**默认不带任何源。** `%APPDATA%\reelbox\sources.json` 不存在时读到的是空列表(见 `src-tauri/src/commands.rs` 的 `load_sources`),首页、顶栏源下拉、源管理页都会给空态,用「导入源」(单条)或「批量导入」(集合)把自己的源加进来。之后所有源的增删改都在这个文件里,跟安装目录无关 —— 卸载重装不会带走,换机器也不会自动同步。
 
-源与插件、内置源与自定义源的关系见 [docs/SOURCES.md](docs/SOURCES.md)。
+源与插件的关系见 [docs/SOURCES.md](docs/SOURCES.md)。
 
 ## 文档
 

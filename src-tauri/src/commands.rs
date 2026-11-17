@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use reelbox_core::model::{Detail, Filter, Page, Stream};
 use reelbox_core::plugin;
-use reelbox_core::source::{self, cms::Client, Source};
+use reelbox_core::source::{cms::Client, Source};
 use tauri::ipc::Response;
 
 async fn blocking<T, F>(f: F) -> Result<T, String>
@@ -25,17 +25,15 @@ fn sources_path() -> std::path::PathBuf {
     crate::paths::sources_path()
 }
 
-/// 读源列表:文件不存在或解析失败时回落到内置三个
+/// 读源列表:**默认没有源**。文件不存在、读不出来、解析失败、里面是空数组,
+/// 一律返回空列表 —— 首次启动不写任何内置源,由用户在界面上「导入源 / 批量导入」
+/// (空态见 ui/app.js 的 showNoSources / renderSourceManager)。
 pub fn load_sources() -> Vec<Source> {
     let path = sources_path();
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(list) = serde_json::from_str::<Vec<Source>>(&text) {
-            if !list.is_empty() {
-                return list;
-            }
-        }
-    }
-    source::defaults()
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<Source>>(&text).ok())
+        .unwrap_or_default()
 }
 
 #[tauri::command]

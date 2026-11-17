@@ -158,15 +158,11 @@ async function init() {
   // 老配置里有名字塌成 "-" 的 id(见 docs/REVIEW-2026-11-14.md A1):
   // 先修 id 再往下走,收藏与进度里「源id|片名」的键会同步搬过去。
   if (migrateSourceIds()) renderFavs();
+  // 默认没有源(见 src-tauri 的 load_sources):先给首页空态,不自动切任何源
   if (!S.sources.length) {
-    showListEmpty(
-      "还没有配置源",
-      "加一个点播接口地址(苹果 CMS 的 /api.php/provide/vod 那种),或者从网络索引批量导入。",
-      "去添加源",
-      openSourceManager
-    );
     bindNav();
     bindSourceMenu();
+    showNoSources();
     return;
   }
   S.source = startSource(S.sources);
@@ -1847,10 +1843,18 @@ function showSrcEmpty(box) {
     icon: S.srcFilter === "live" ? "live_tv" : "dns",
     title: label,
     msg: tip,
-    actions: S.srcFilter === "all" ? [{ id: "import", label: "导入源" }] : [],
+    actions:
+      S.srcFilter === "all"
+        ? [
+            { id: "import", label: "导入源" },
+            { id: "batch", label: "批量导入", soft: true },
+          ]
+        : [],
   });
   const imp = box.querySelector('[data-act="import"]');
   if (imp) imp.onclick = () => runSingleImport();
+  const bt = box.querySelector('[data-act="batch"]');
+  if (bt) bt.onclick = () => runBatchImport();
 }
 
 /**
@@ -2047,6 +2051,7 @@ async function applySources(list) {
   renderSourceManager();
   renderSources();
   syncSetSummaries();
+  syncSearchBox(); // 有源/没源决定搜索框能不能用
 }
 
 /* ---------- 全部测速(I6) ---------- */
@@ -2242,14 +2247,15 @@ async function removeSource(src) {
     if (!ok) return;
   }
   const list = S.sources.filter((x) => x !== src);
-  if (!list.length) {
-    toast("至少得留一个源");
-    return;
-  }
   await applySources(list);
   const dropped = dropFavs ? favRemoveBySource(src.id) : 0;
   toast(dropped ? "已删除「" + src.name + "」,顺带清掉 " + dropped + " 条收藏" : "已删除「" + src.name + "」");
-  if (S.source === src) await switchSource(list[0]);
+  if (!list.length) {
+    // 默认就是没有源的状态,删空之后直接进空态,不要拦
+    showNoSources();
+  } else if (S.source === src) {
+    await switchSource(list[0]);
+  }
 }
 
 /* ---------- 导入:两个入口,共用一套表单与判型 ---------- */
@@ -4058,20 +4064,71 @@ function showListLoading() {
   armListTimeout();
 }
 
-/** 列表:空(没有内容) */
-function showListEmpty(title, msg, actionLabel, onAction) {
+/** 列表:空(没有内容;icon 可换,「还没有源」用的是 playlist_add) */
+function showListEmpty(title, msg, actionLabel, onAction, icon) {
   clearSkeleton();
   $("grid").innerHTML = "";
   const el = $("empty");
   el.style.display = "";
   el.innerHTML = stateCard({
-    icon: "movie",
+    icon: icon || "movie",
     title: title || "这个分类没有内容",
     msg: msg || "换一个分类,或者用别的片名搜一下。",
     actions: actionLabel ? [{ id: "more", label: actionLabel }] : [],
   });
   const b = el.querySelector('[data-act="more"]');
   if (b && onAction) b.onclick = onAction;
+}
+
+/**
+ * 一个源都没有时首页的样子(init 与「删掉最后一个源」都走这里):
+ * 卡片式空态 + 「导入源」,搜索框禁用并提示先加源,顶栏源按钮写「还没有源」。
+ * 还有源时不要调它 —— 那是 loadItems 的地盘。
+ */
+function showNoSources() {
+  S.source = null;
+  S.items = [];
+  S.next = "";
+  S.parents = [];
+  S.children = {};
+  S.parent = "";
+  S.child = "";
+  S.reqSeq++; // 在途的列表/详情请求全部作废
+  renderParents();
+  renderChildren();
+  showListEmpty(
+    "还没有源",
+    "点「导入源」加一个接口地址;也可以批量导入集合。",
+    "导入源",
+    () => runSingleImport(),
+    "playlist_add"
+  );
+  if ($("srcName")) $("srcName").textContent = "还没有源";
+  syncSearchBox();
+  renderSources(); // 顶栏面板:没有源时给空态,不是空白列表
+  renderSourceManager(); // 源管理页:空态 + 两个入口
+  syncSetSummaries();
+}
+
+/**
+ * 搜索属于「某个源」:一个源都没有时把输入框与服务按钮一起禁用,占位改成一句提示。
+ * 有源之后恢复。源列表每次变化(applySources / 启动)都会走到这里。
+ */
+function syncSearchBox() {
+  const q = $("q");
+  const go = $("btnSearch");
+  const on = !!(S.sources || []).length;
+  if (q) {
+    q.disabled = !on;
+    q.placeholder = on ? "搜索影片" : "先加一个源再搜索";
+    if (!on) q.value = "";
+  }
+  if (go) go.disabled = !on;
+  const box = q ? q.closest(".searchbox") : null;
+  if (box) {
+    if (on) box.removeAttribute("data-off");
+    else box.setAttribute("data-off", "");
+  }
 }
 
 /** 列表:错误(原因 + 重试;源不支持时引导换源) */
