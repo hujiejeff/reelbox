@@ -795,6 +795,29 @@ function isCrawlSource(src) {
 }
 
 /**
+ * 这个源「可用于当前功能」吗?—— 顶栏切源面板只列可用的源(判定只在这里一处,
+ * 别处不要再各写一套)。
+ *
+ * 两条判据:
+ *   1) 类型必须是已支持的三类:点播(JSON)/ 点播(XML)/ 插件(JS)。
+ *      直播源现在只能登记、没有列表接口(v0.3 才有),算不可用。
+ *   2) 配置本身就不成立的排除:HTML 爬取配置(iplayr 那类 .json,里面是爬虫规则
+ *      而不是接口地址)拿它取列表只会把配置本身当响应体 → 空屏,见 isCrawlSource。
+ *
+ * 健康检查失败(health.ok === false)**不**隐藏:那是「现在坏了」而不是「不可用」,
+ * 用户需要知道它坏了 —— 行尾照常给失败状态点(见 healthOf / src-panel 的 trail)。
+ * 从没测过(health 为空)同理,留着。
+ *
+ * 只管顶栏面板:源管理页要管理全部源,不经过这里。
+ */
+function isUsableSource(src) {
+  if (!src) return false;
+  const t = sourceType(src);
+  if (t !== "vod" && t !== "plugin") return false;
+  return !isCrawlSource(src);
+}
+
+/**
  * 一次失败 → 给用户看的三句话:哪一步失败、是网络还是源不支持、原始错误。
  * 网络类错误给重试,源不支持类错误提示换源。
  */
@@ -903,14 +926,17 @@ function srcTypeIcon(s) {
   return "ondemand_video";
 }
 
-/** 组好切源面板需要的数据(分组、当前源置顶、搜索过滤) */
+/** 组好切源面板需要的数据(只列可用的源、按类型分组、当前源置顶、搜索过滤) */
 function srcPanelModel(query) {
   const q = String(query || "").trim().toLowerCase();
   const all = S.sources || [];
+  // 只画「可用于当前功能」的源:坏掉的配置不进列表,健康检查失败的源照常进
+  const usable = all.filter(isUsableSource);
   const hit = (s) => !q || (String(s.name) + " " + String(s.url)).toLowerCase().indexOf(q) >= 0;
   const toRow = (s) => {
     const h = healthOf(s);
     return {
+      // 下标仍按整份 S.sources 算:行按它派发,面板里筛掉的源不影响别人
       idx: all.indexOf(s),
       id: s.id,
       name: s.name,
@@ -923,14 +949,19 @@ function srcPanelModel(query) {
   const groups = [
     ["vod", "点播"],
     ["plugin", "插件"],
-    ["live", "直播"],
+    ["live", "直播"], // 直播源现在不可用(isUsableSource 不放行),这一组自然空着
   ].map(([key, label]) => {
-    const rows = all.filter((s) => sourceType(s) === key && hit(s)).map(toRow);
+    const rows = usable.filter((s) => sourceType(s) === key && hit(s)).map(toRow);
     // 当前源置顶到所属分组第一行
     rows.sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0));
     return { key, label, rows };
   });
-  return { groups, total: all.length, query: query || "", empty: all.length ? "" : "none" };
+  return {
+    groups,
+    total: usable.length, // 搜索框的出现看可用源的数量
+    query: query || "",
+    empty: all.length ? (usable.length ? "" : "unusable") : "none",
+  };
 }
 
 /** 渲染 + 事件;host 可以是 sheet 内容容器,也可以是桌面弹出层 */
