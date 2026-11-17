@@ -39,13 +39,61 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
+      - name: Signing setup
+        id: sign
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "has=false" >> "$GITHUB_OUTPUT"
+            echo "未配置签名 secret,本次出 debug 包"
+            exit 0
+          fi
+          echo "has=true" >> "$GITHUB_OUTPUT"
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/reelbox.p12"
+          echo "KS_PATH=$RUNNER_TEMP/reelbox.p12" >> "$GITHUB_ENV"
+
       - name: Init android project
         run: |
           if [ ! -d src-tauri/gen/android ]; then
             npx tauri android init --ci
           fi
 
-      - name: Build apk
+      - name: Patch gradle signing
+        if: steps.sign.outputs.has == 'true'
+        run: |
+          G=src-tauri/gen/android/app/build.gradle.kts
+          cat >> "$G" <<'KTS'
+
+          // ---- CI 注入:release 签名 + 允许明文(本地反代 127.0.0.1) ----
+          android {
+              signingConfigs {
+                  create("ciRelease") {
+                      storeFile = file(System.getenv("KS_PATH")!!)
+                      storeType = "PKCS12"
+                      storePassword = System.getenv("KS_PASSWORD")
+                      keyAlias = System.getenv("KS_ALIAS")
+                      keyPassword = System.getenv("KS_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  getByName("release") {
+                      signingConfig = signingConfigs.getByName("ciRelease")
+                      manifestPlaceholders["usesCleartextTraffic"] = "true"
+                  }
+              }
+          }
+          KTS
+
+      - name: Build apk (release, signed)
+        if: steps.sign.outputs.has == 'true'
+        env:
+          KS_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: npx tauri android build --apk --ci
+
+      - name: Build apk (debug, unsigned)
+        if: steps.sign.outputs.has != 'true'
         run: npx tauri android build --apk --debug --ci
 
       - uses: actions/upload-artifact@v4
