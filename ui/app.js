@@ -2907,10 +2907,20 @@ function fmtTime(sec) {
 function detailKey() { return S.source && S.detailTitle ? S.source.id + "|" + S.detailTitle : ""; }
 
 /* ---------- 播放器界面 ---------- */
-function pStatus(msg) {
+
+/**
+ * 播放器状态文字。默认是「加载态」:转圈 + 一句话,同时打上 .player.loading
+ * —— 取流/缓冲期间画面中央只该有这一颗转圈,中央播放/暂停按钮的底圆由 CSS 收起,
+ * 否则转圈外面会套一圈「暂停」的描边,像两个控件叠在一起。
+ * spinner=false 用于「放完了 / 最后一集」这类纯提示:不是加载,中央该留播放按钮。
+ */
+function pStatus(msg, spinner) {
   const el = $("pState");
+  const box = $("player");
+  const spin = !!msg && spinner !== false;
+  if (box) box.classList.toggle("loading", spin);
   if (!msg) { el.innerHTML = ""; return; }
-  el.innerHTML = '<span class="spin"></span><span>' + esc(msg) + "</span>";
+  el.innerHTML = (spin ? '<span class="spin"></span>' : "") + "<span>" + esc(msg) + "</span>";
 }
 
 /** 另一条线路的第一集;没有别的线路就返回 null(那就只能换源) */
@@ -3297,12 +3307,12 @@ function openPlayer(url, name, mime, kind) {
     pSync();
     if (!ctx || !ctx.list || !ctx.list.length) return;
     if (!autoplayOn()) {
-      pStatus("这一集放完了(自动连播已关闭)");
+      pStatus("这一集放完了(自动连播已关闭)", false);
       return;
     }
     const next = ctx.list[ctx.index + 1];
     if (next) playEpisode(next.id, next.name, next.group || "");
-    else pStatus("已经是最后一集");
+    else pStatus("已经是最后一集", false);
   };
 
   // 出错先记现场:<video> 自己的错误码往往比 hls.js 的 details 更直接
