@@ -1,92 +1,35 @@
 //! 代理解析链。
 //!
 //! 这台机器访问采集站必须走本机的 Clash(127.0.0.1:7890),否则直接 `os error 10060`。
-//! 但"代理在哪"有三个来源,而且随时会变(换端口、开/关系统代理、改环境变量),
+//! 但"代理在哪"随时会变(换端口、开/关系统代理、改环境变量),
 //! 所以**每次请求前都重新解析**,只缓存 5 秒 —— 换端口不用重启应用。
 //!
-//! 解析顺序(`mode = system` 时):
+//! 应用里没有「单独设置代理」的开关:普通用户不该被问这件事,出口一律跟着系统走。
+//! 解析顺序:
 //!
-//! 1. 环境变量 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`(大写小写都认)
+//! 1. 环境变量 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`(大写小写都认),配了 `NO_PROXY` 就按它绕
 //! 2. Windows 注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
 //!    的 `ProxyEnable` + `ProxyServer` + `ProxyOverride`
-//! 3. 只有 `AutoConfigURL`(PAC 脚本)而没有 `ProxyServer` 时:**不猜**,记一条日志并直连。
-//!    自己实现 PAC 解释器只会猜错(js 脚本、DNS、多级回退),不如把这件事交给用户。
-//!
-//! 设置页可以把模式钉成"手动填 host:port"或"不使用代理",存
-//! `<数据目录>/settings.json`(桌面是 `%APPDATA%\reelbox\settings.json`)。
+//! 3. 都没有就直连。只有 `AutoConfigURL`(PAC 脚本)而没有 `ProxyServer` 时:**不猜**,
+//!    记一条日志后直连 —— 自己实现 PAC 解释器只会猜错(js 脚本、DNS、多级回退)。
 
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
-
 /// 解析结果缓存多久。够挡住一页列表几十个请求,又能在换端口后 5 秒内跟上。
 pub const CACHE_TTL: Duration = Duration::from_secs(5);
-
-/// 用户选的代理模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Mode {
-    /// 跟随系统(环境变量 → 注册表)
-    System,
-    /// 手动:用 `Settings::url`
-    Manual,
-    /// 不使用代理
-    Off,
-}
-
-impl Default for Mode {
-    fn default() -> Self {
-        Self::System
-    }
-}
-
-impl Mode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::Manual => "manual",
-            Self::Off => "off",
-        }
-    }
-
-    pub fn parse(raw: &str) -> Result<Self, String> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "system" | "auto" | "" => Ok(Self::System),
-            "manual" | "custom" => Ok(Self::Manual),
-            "off" | "none" | "direct" => Ok(Self::Off),
-            _ => Err("代理模式无效(只认 system / manual / off)".into()),
-        }
-    }
-}
-
-/// 设置页里的「网络」。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Settings {
-    #[serde(default)]
-    pub mode: Mode,
-    /// 手动模式下的 `host:port`(规范化后带 scheme)
-    #[serde(default)]
-    pub url: String,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self { mode: Mode::System, url: String::new() }
-    }
-}
 
 /// 一次解析的结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Route {
     /// 要走的代理,None = 直连
     pub proxy: Option<String>,
-    /// 绕过列表(注册表的 ProxyOverride),`<local>` 这类也原样交给 reqwest 判
+    /// 绕过列表(注册表的 ProxyOverride / 环境变量的 NO_PROXY),
+    /// `<local>` 这类也原样交给 reqwest 判
     pub bypass: Option<String>,
-    /// 从哪来的:env / registry / manual / off / pac / default
+    /// 从哪来的:env / registry / pac / default
     pub from: &'static str,
-    /// 写进日志与设置页的一句话
+    /// 写进日志的一句话
     pub note: String,
 }
 
@@ -103,115 +46,6 @@ impl Route {
             (Some(u), Some(b)) => format!("proxy:{u}|bypass:{b}"),
         }
     }
-
-    /// 设置页/日志里的一行摘要
-    pub fn describe(&self) -> String {
-        match &self.proxy {
-            Some(u) => format!("{u} · 来自 {}", self.from),
-            None => format!("直连 · {}", self.note),
-        }
-    }
-}
-
-/* ---------- 设置文件 ---------- */
-
-/// 设置文件路径。桌面是 `%APPDATA%/reelbox/settings.json`;
-/// 移动端由宿主在启动时用 Tauri 解析出的目录覆盖(`bind_dir`)。
-static SETTINGS_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-/// 宿主启动时把数据目录告诉 core(移动端 `%APPDATA%` 不存在,只有 Tauri 知道真目录)
-pub fn bind_dir(dir: impl Into<PathBuf>) {
-    if let Ok(mut slot) = SETTINGS_DIR.lock() {
-        *slot = Some(dir.into());
-    }
-    invalidate();
-}
-
-fn settings_dir() -> PathBuf {
-    if let Some(dir) = SETTINGS_DIR.lock().ok().and_then(|d| d.clone()) {
-        return dir;
-    }
-    // 没绑过(单测、CLI)就按桌面惯例自己找
-    std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("reelbox")
-}
-
-pub fn settings_path() -> PathBuf {
-    settings_dir().join("settings.json")
-}
-
-/// 读设置。文件缺失、读不动、JSON 坏了都退回默认值(跟随系统),绝不报错。
-pub fn settings() -> Settings {
-    let text = match std::fs::read_to_string(settings_path()) {
-        Ok(t) => t,
-        Err(_) => return Settings::default(),
-    };
-    let value: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(_) => return Settings::default(),
-    };
-    Settings::decode(&value)
-}
-
-/// 写设置(只动 `network.proxy` 这一段,别的设置原样保留)
-pub fn save_settings(next: &Settings) -> Result<Settings, String> {
-    let normalized = normalize_settings(next)?;
-    let path = settings_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败: {e}"))?;
-    }
-    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if !doc.is_object() {
-        doc = serde_json::json!({});
-    }
-    doc["network"] = serde_json::json!({
-        "proxy": { "mode": normalized.mode.as_str(), "url": normalized.url }
-    });
-    let text = serde_json::to_string_pretty(&doc).map_err(|e| format!("序列化失败: {e}"))?;
-    let temp = path.with_extension("json.tmp");
-    std::fs::write(&temp, text).map_err(|e| format!("写设置失败: {e}"))?;
-    std::fs::rename(&temp, &path).map_err(|e| format!("写设置失败: {e}"))?;
-    invalidate();
-    crate::net::log(&format!(
-        "SETTINGS proxy mode={} url={}",
-        normalized.mode.as_str(),
-        if normalized.url.is_empty() { "—" } else { &normalized.url }
-    ));
-    Ok(normalized)
-}
-
-impl Settings {
-    fn decode(doc: &serde_json::Value) -> Self {
-        let proxy = doc.get("network").and_then(|n| n.get("proxy"));
-        let Some(proxy) = proxy else {
-            return Self::default();
-        };
-        let mode = proxy
-            .get("mode")
-            .and_then(|m| m.as_str())
-            .and_then(|m| Mode::parse(m).ok())
-            .unwrap_or_default();
-        let url = proxy.get("url").and_then(|u| u.as_str()).unwrap_or("").trim().to_string();
-        Self { mode, url }
-    }
-}
-
-fn normalize_settings(s: &Settings) -> Result<Settings, String> {
-    match s.mode {
-        Mode::Manual => {
-            let url = normalize_proxy(&s.url)?;
-            Ok(Settings { mode: Mode::Manual, url })
-        }
-        // 切到别的模式时保留已填的手动地址,免得来回切要重填
-        other => Ok(Settings { mode: other, url: s.url.trim().to_string() }),
-    }
 }
 
 /* ---------- 解析 ---------- */
@@ -224,13 +58,6 @@ struct Cached {
 
 static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
 
-/// 丢掉缓存(设置改了、或者宿主想立刻生效)
-pub fn invalidate() {
-    if let Ok(mut slot) = CACHE.lock() {
-        *slot = None;
-    }
-}
-
 /// 当前该走哪条路。5 秒内复用上次结果,路由变化时记一条日志。
 pub fn route() -> Route {
     let mut slot = match CACHE.lock() {
@@ -242,7 +69,7 @@ pub fn route() -> Route {
             return c.route.clone();
         }
     }
-    let route = resolve(&settings());
+    let route = resolve();
     let key = route.key();
     let changed = slot.as_ref().map(|c| c.logged != key).unwrap_or(true);
     if changed {
@@ -256,46 +83,30 @@ pub fn route() -> Route {
     route
 }
 
-/// 按设置解析一次(不走缓存,设置页/测试用)
-pub fn resolve(settings: &Settings) -> Route {
-    resolve_with(settings, &env_proxy(), &read_registry(), &env_bypass())
+/// 按系统的当前状态解析一次(不走缓存)
+fn resolve() -> Route {
+    resolve_with(&env_proxy(), &read_registry(), &env_bypass())
 }
 
-/// 解析链的本体。环境变量与注册表从参数进来,单测才好按用例喂。
+/// 解析链的本体:环境变量 → 注册表 → 直连。
+/// 两处输入从参数进来,单测才好按用例喂。
 fn resolve_with(
-    settings: &Settings,
     env: &Option<(&'static str, String)>,
     registry: &Option<RegistryProxy>,
     env_bypass: &Option<String>,
 ) -> Route {
-    match settings.mode {
-        Mode::Off => Route::direct("off", "设置:不使用代理"),
-        Mode::Manual => match normalize_proxy(&settings.url) {
+    if let Some((key, value)) = env {
+        return match normalize_proxy(value) {
             Ok(url) => Route {
-                proxy: Some(url.clone()),
-                bypass: None,
-                from: "manual",
-                note: format!("设置:手动 {url}"),
+                proxy: Some(url),
+                bypass: env_bypass.clone(),
+                from: "env",
+                note: format!("环境变量 {key}"),
             },
-            Err(e) => Route::direct("manual", format!("设置:手动地址无效({e}),已直连")),
-        },
-        Mode::System => {
-            if let Some((key, value)) = env {
-                return match normalize_proxy(value) {
-                    Ok(url) => Route {
-                        proxy: Some(url),
-                        bypass: env_bypass.clone(),
-                        from: "env",
-                        note: format!("环境变量 {key}"),
-                    },
-                    Err(e) => {
-                        Route::direct("env", format!("环境变量 {key} 无效({e}),已直连"))
-                    }
-                };
-            }
-            registry_route(registry)
-        }
+            Err(e) => Route::direct("env", format!("环境变量 {key} 无效({e}),已直连")),
+        };
     }
+    registry_route(registry)
 }
 
 fn env_proxy() -> Option<(&'static str, String)> {
@@ -491,13 +302,13 @@ pub fn parse_reg_output(text: &str) -> RegistryProxy {
 
 /* ---------- 地址规范化 ---------- */
 
-/// 把用户/系统给的代理地址整理成 `scheme://host:port`。
+/// 把系统给的代理地址整理成 `scheme://host:port`。
 ///
 /// 只认 http/https/socks*(采集站走 HTTP 代理的 CONNECT 就够,但环境变量里给 socks 也照收)。
 pub fn normalize_proxy(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     if raw.is_empty() {
-        return Err("请填代理地址(例:127.0.0.1:7890)".into());
+        return Err("代理地址为空".into());
     }
     if raw.chars().any(char::is_control) {
         return Err("代理地址含控制字符".into());
@@ -568,14 +379,9 @@ pub fn normalize_proxy(raw: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    fn system(env: Option<(&'static str, &str)>, reg: Option<RegistryProxy>) -> Route {
+    fn chain(env: Option<(&'static str, &str)>, reg: Option<RegistryProxy>) -> Route {
         // 走真正的解析链,只把"环境变量/注册表"这两处输入换掉
-        resolve_with(
-            &Settings::default(),
-            &env.map(|(k, v)| (k, v.to_string())),
-            &reg,
-            &None,
-        )
+        resolve_with(&env.map(|(k, v)| (k, v.to_string())), &reg, &None)
     }
 
     #[test]
@@ -674,74 +480,39 @@ mod tests {
         assert_eq!(r.proxy.as_deref(), Some("http://127.0.0.1:7890"));
         assert_eq!(r.bypass.as_deref(), Some("<local>"));
         assert_eq!(r.from, "registry");
+        assert_eq!(r.note, "系统代理(注册表)");
 
         // 注册表读不到(非 Windows / 没有这个键)
         assert!(registry_route(&None).proxy.is_none());
     }
 
     #[test]
-    fn env_wins_over_registry_and_off_wins_over_both() {
+    fn env_wins_over_registry_then_direct() {
         let reg = Some(RegistryProxy {
             enable: Some(1),
             server: Some("10.0.0.9:8888".into()),
             ..Default::default()
         });
-        let r = system(Some(("HTTPS_PROXY", "127.0.0.1:7890")), reg.clone());
+        // 环境变量盖过注册表
+        let r = chain(Some(("HTTPS_PROXY", "127.0.0.1:7890")), reg.clone());
         assert_eq!(r.proxy.as_deref(), Some("http://127.0.0.1:7890"));
         assert_eq!(r.from, "env");
 
-        let off = resolve(&Settings { mode: Mode::Off, url: "127.0.0.1:7890".into() });
-        assert!(off.proxy.is_none());
-        assert_eq!(off.from, "off");
-
-        let manual = resolve(&Settings { mode: Mode::Manual, url: "127.0.0.1:7891".into() });
-        assert_eq!(manual.proxy.as_deref(), Some("http://127.0.0.1:7891"));
-        assert_eq!(manual.from, "manual");
-
-        // 手动填了坏地址:不猜,直连 + 说明
-        let bad = resolve(&Settings { mode: Mode::Manual, url: "not a proxy".into() });
+        // 环境变量写坏了:不猜,直连 + 说明
+        let bad = chain(Some(("HTTPS_PROXY", "not a proxy")), None);
         assert!(bad.proxy.is_none());
-        assert!(bad.note.contains("无效"));
+        assert_eq!(bad.from, "env");
+        assert!(bad.note.contains("无效"), "{}", bad.note);
+
+        // 两处都没有:直连
+        let none = chain(None, None);
+        assert!(none.proxy.is_none());
+        assert_eq!(none.from, "default");
     }
 
     #[test]
-    fn settings_round_trip_keeps_other_keys() {
-        let dir = std::env::temp_dir().join(format!("reelbox-proxy-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("settings.json"),
-            r#"{"playback":{"quality":"high"},"network":{"proxy":{"mode":"off","url":""}}}"#,
-        )
-        .unwrap();
-        bind_dir(&dir);
-
-        assert_eq!(settings().mode, Mode::Off);
-        let saved = save_settings(&Settings { mode: Mode::Manual, url: "127.0.0.1:7890".into() })
-            .expect("保存失败");
-        assert_eq!(saved.mode, Mode::Manual);
-        assert_eq!(saved.url, "http://127.0.0.1:7890");
-
-        let text = std::fs::read_to_string(dir.join("settings.json")).unwrap();
-        assert!(text.contains("playback"), "别的设置不能丢: {text}");
-        assert!(text.contains("\"mode\": \"manual\""), "{text}");
-        assert_eq!(settings().url, "http://127.0.0.1:7890");
-
-        // 坏文件:退回默认(跟随系统),不 panic
-        std::fs::write(dir.join("settings.json"), "not json").unwrap();
-        assert_eq!(settings().mode, Mode::System);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn mode_parsing_and_route_key() {
-        assert_eq!(Mode::parse("SYSTEM").unwrap(), Mode::System);
-        assert_eq!(Mode::parse("").unwrap(), Mode::System);
-        assert_eq!(Mode::parse("manual").unwrap(), Mode::Manual);
-        assert_eq!(Mode::parse("direct").unwrap(), Mode::Off);
-        assert!(Mode::parse("sneaky").is_err());
-
-        let r = Route::direct("off", "无");
+    fn route_key_splits_clients() {
+        let r = Route::direct("default", "无");
         assert_eq!(r.key(), "direct");
         let r = Route {
             proxy: Some("http://127.0.0.1:7890".into()),
@@ -750,6 +521,12 @@ mod tests {
             note: "x".into(),
         };
         assert_eq!(r.key(), "proxy:http://127.0.0.1:7890");
-        assert!(r.describe().contains("127.0.0.1:7890"));
+        let r = Route {
+            proxy: Some("http://127.0.0.1:7890".into()),
+            bypass: Some("<local>".into()),
+            from: "registry",
+            note: "x".into(),
+        };
+        assert_eq!(r.key(), "proxy:http://127.0.0.1:7890|bypass:<local>");
     }
 }

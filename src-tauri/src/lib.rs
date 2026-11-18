@@ -42,8 +42,6 @@ pub fn run() {
             commands::selftest_mode,
             commands::selftest_title,
             commands::selftest_report,
-            commands::network_settings,
-            commands::save_network_settings,
         ])
         .run(tauri::generate_context!())
         .expect("reelbox: 启动失败");
@@ -51,10 +49,11 @@ pub fn run() {
 
 /// 把 core 的网络层接到宿主上:
 /// - 日志出口:代理换了、请求重试了,都写进同一个日志文件
-/// - 设置目录:core 不认识 Tauri,`settings.json` 的真实位置由这里告诉它(移动端必须)
+///
+/// 代理不在这里配置:出口一律跟着系统走(环境变量 → Windows 注册表 → 直连,
+/// 见 core::net::proxy)。这里只把解析结果记一条日志。
 fn wire_network() {
     reelbox_core::net::set_logger(logging::event);
-    reelbox_core::net::proxy::bind_dir(paths::base_dir());
     // 启动就把解析结果记一条:出问题时第一时间能看出"走没走代理"
     let route = reelbox_core::net::proxy::route();
     logging::event(&format!(

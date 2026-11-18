@@ -850,7 +850,7 @@ function errorInfo(step, e) {
         : "这个源没给出可播放的流。换一条线路,或者换源试试。";
   } else if (kind === "network") {
     title = label + "失败:网络没通";
-    hint = "源站连不上或超时了。如果你在用代理/加速器,点「代理设置」看一眼;不用代理就换个源重试。";
+    hint = "源站连不上或超时了。检查网络后重试;一直不行就换个源。";
   } else {
     title = label + "失败";
     hint = "可以先重试一次;反复失败就换个源。";
@@ -2927,74 +2927,6 @@ function syncPlaySettings() {
   if (r) r.checked = resumeOn();
 }
 
-/* ---------- 网络(设置 → 网络) ---------- */
-// 代理的三段模式与「当前生效」都在 Rust 侧解析(net::proxy):
-// 环境变量 → Windows 注册表 → 手动。这里只负责显示和存盘。
-
-let NET_INFO = null;
-
-function netMode() {
-  return NET_INFO && NET_INFO.mode ? NET_INFO.mode : "system";
-}
-
-function netModeLabel(m) {
-  return m === "manual" ? "手动" : m === "off" ? "不使用" : "跟随系统";
-}
-
-/** 拉一次真实解析结果(设置页打开时、保存后都要) */
-async function loadNetInfo() {
-  try {
-    NET_INFO = await invoke("network_settings");
-  } catch (e) {
-    log("NET INFO FAIL", errText(e));
-    NET_INFO = null;
-  }
-  syncNetSettings();
-  return NET_INFO;
-}
-
-function syncNetSettings() {
-  const seg = $("segProxy");
-  if (seg) {
-    seg.querySelectorAll("button[data-m]").forEach((b) => {
-      b.setAttribute("aria-selected", b.getAttribute("data-m") === netMode() ? "true" : "false");
-    });
-  }
-  const input = $("proxyUrl");
-  if (input && NET_INFO && document.activeElement !== input) input.value = NET_INFO.url || "";
-  const inputBox = $("proxyUrl");
-  if (inputBox) {
-    // 手动模式才需要填地址:别的模式下灰掉,免得用户以为填了就会用
-    inputBox.disabled = netMode() !== "manual";
-    inputBox.style.opacity = netMode() === "manual" ? "1" : ".55";
-  }
-  const now = $("proxyNow");
-  if (now) now.textContent = NET_INFO ? (NET_INFO.effective || "直连") : "读取中…";
-  const note = $("proxyNote");
-  if (note) note.textContent = NET_INFO ? NET_INFO.note || "" : "";
-  const path = $("proxyPath");
-  if (path) {
-    path.textContent = (NET_INFO && NET_INFO.settings_path) || "读取中…";
-    if (NET_INFO && NET_INFO.settings_path) path.title = NET_INFO.settings_path;
-  }
-}
-
-/** 存一次模式或地址。失败不弹 alert:行内提示 + toast 就够(禁止 alert/prompt/confirm) */
-async function saveNet(mode, url) {
-  try {
-    NET_INFO = await invoke("save_network_settings", { mode: mode, url: url || "" });
-    syncNetSettings();
-    syncSetSummaries();
-    toast("代理:" + (NET_INFO.effective || "直连"));
-    log("NET SAVE", mode, NET_INFO.effective || "direct");
-  } catch (e) {
-    log("NET SAVE FAIL", errText(e));
-    const note = $("proxyNote");
-    if (note) note.textContent = errText(e);
-    toast("保存失败:" + errText(e));
-  }
-}
-
 /* ---------- 设置:入口列表 + 二级页 ---------- */
 // 设置首页是入口列表(每行写"当前值"),点进去是整屏二级页。
 // ≥840 走 master-detail(左列 336 固定),<840 走 push(整屏 + 返回箭头)。
@@ -3003,9 +2935,7 @@ async function saveNet(mode, url) {
 const SET_PAGES = [
   { key: "src", icon: "dns", title: "源", group: 0 },
   { key: "play", icon: "play_circle", title: "播放", group: 0 },
-  // 隐藏项:普通用户只需要"跟随系统"。入口只在网络类错误里出现(见 showListError),
-  // 需要时用 openSetPage("net") 进来 —— 所以它还在 SET_PAGES 里,只是不渲染成行
-  { key: "net", icon: "wifi", title: "网络", group: 0, hidden: true },
+  // 没有「网络」页:代理不开放给用户选,出口一律跟着系统走(见 docs/NETWORK.md)
   { key: "look", icon: "palette", title: "外观", group: 0 },
   { key: "debug", icon: "terminal", title: "调试", group: 1 },
   { key: "about", icon: "info", title: "关于", group: 1 },
@@ -3051,10 +2981,6 @@ function setSummary(key) {
   if (key === "play") {
     return (qualityPref() === "high" ? "最高" : "自动") + " · 连播" + (autoplayOn() ? "开" : "关");
   }
-  if (key === "net") {
-    const now = NET_INFO ? (NET_INFO.effective || "直连") : "读取中…";
-    return netModeLabel(netMode()) + " · " + now;
-  }
   if (key === "look") {
     const dark = isDark();
     const mode = dark ? (themeState.pureBlack ? "纯黑" : "深色") : "浅色";
@@ -3087,13 +3013,12 @@ function renderSetHome() {
   const main = $("setGroupMain");
   const low = $("setGroupLow");
   const pages = setPages();
-  const shown = pages.filter((p) => !p.hidden);
-  if (main) main.innerHTML = shown.filter((p) => p.group === 0).map(setEntryHtml).join("");
-  if (low) low.innerHTML = shown.filter((p) => p.group === 1).map(setEntryHtml).join("");
+  if (main) main.innerHTML = pages.filter((p) => p.group === 0).map(setEntryHtml).join("");
+  if (low) low.innerHTML = pages.filter((p) => p.group === 1).map(setEntryHtml).join("");
 
   const master = $("setMaster");
   if (master) {
-    master.innerHTML = shown.map(
+    master.innerHTML = pages.map(
       (p) =>
         '<button type="button" class="set-navrow" role="tab" data-page="' + p.key +
         '" aria-selected="' + (setPage === p.key ? "true" : "false") + '">' +
@@ -3149,8 +3074,6 @@ function openSetPage(key) {
   }
   if (page === "about") fillAbout();
   if (page === "debug") fillLogPath();
-  // 进网络页就问一次真实解析结果:这是唯一能看到"到底走没走代理"的地方
-  if (page === "net") loadNetInfo();
   const scroll = document.querySelector('.set-page[data-page="' + page + '"] .set-page__scroll');
   if (scroll) scroll.scrollTop = 0;
 }
@@ -3365,34 +3288,6 @@ function bindSettings() {
     };
   }
 
-  // 网络:模式三段 + 手动地址 + 保存
-  const segP = $("segProxy");
-  if (segP) {
-    segP.onclick = (e) => {
-      const b = e.target.closest("button[data-m]");
-      if (!b) return;
-      const mode = b.getAttribute("data-m");
-      const input = $("proxyUrl");
-      saveNet(mode, input ? input.value.trim() : "");
-    };
-  }
-  const btnP = $("btnSaveProxy");
-  if (btnP) {
-    btnP.onclick = () => {
-      const input = $("proxyUrl");
-      saveNet(netMode() === "manual" ? "manual" : netMode(), input ? input.value.trim() : "");
-    };
-  }
-  const inputP = $("proxyUrl");
-  if (inputP) {
-    inputP.onkeydown = (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        saveNet("manual", inputP.value.trim());
-      }
-    };
-  }
-
   // 调试:一个开关(记录日志)+ 一个文本按钮(打开日志目录)(评审 2)
   bindDebugToggle();
   const open = $("btnOpenLog");
@@ -3418,12 +3313,9 @@ function bindSettings() {
   });
 
   syncPlaySettings();
-  syncNetSettings();
   syncDebugButtons();
   renderSetHome();
   syncSetSummaries();
-  // 启动就问一次:设置首页那行摘要要写"当前实际走哪条"
-  loadNetInfo();
 }
 const PROG_KEY = "reelbox.progress";
 
@@ -4461,18 +4353,13 @@ function showListError(info, retry) {
     msg: info.hint,
     actions: unsupported
       ? [{ id: "switch", label: "去换源", primary: true }, { id: "retry", label: "重试" }]
-      : info.kind === "network"
-        ? [{ id: "retry", label: "重试", primary: true }, { id: "net", label: "代理设置" }, { id: "switch", label: "源管理" }]
-        : [{ id: "retry", label: "重试", primary: true }, { id: "switch", label: "源管理" }],
+      : [{ id: "retry", label: "重试", primary: true }, { id: "switch", label: "源管理" }],
     raw: info.raw,
   });
   const retryBtn = el.querySelector('[data-act="retry"]');
   if (retryBtn) retryBtn.onclick = () => (retry ? retry() : loadItems());
   const sw = el.querySelector('[data-act="switch"]');
   if (sw) sw.onclick = openSourceManager;
-  // 连不上才给"代理设置":平时不占位置,出问题能一步到位
-  const nb = el.querySelector('[data-act="net"]');
-  if (nb) nb.onclick = () => { showView("settings"); openSetPage("net"); };
 }
 
 /** 翻页失败:已经加载的内容留着,在后面补一条可点的重试 */

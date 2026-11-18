@@ -262,59 +262,6 @@ pub fn apply_engine_arg(args: &[String]) {
     }
 }
 
-
-/* ---------- 设置 → 网络 ---------- */
-
-/// 设置页「网络」要的全部信息:*选的*模式,以及**实际生效**的那条路。
-///
-/// 两件事分开显示是有意的:用户选了"跟随系统",系统代理可能是关的、
-/// 可能是 PAC、也可能被环境变量盖掉 —— 只显示"跟随系统"等于什么都没说。
-#[derive(Debug, serde::Serialize)]
-pub struct NetworkInfo {
-    /// system | manual | off
-    pub mode: String,
-    /// 手动模式下填的地址(规范化后的)
-    pub url: String,
-    /// 实际走的代理;空串 = 直连
-    pub effective: String,
-    /// env / registry / manual / off / pac / default
-    pub from: String,
-    /// 一句人话解释
-    pub note: String,
-    /// settings.json 在哪(设置页要显示出来,用户能自己改)
-    pub settings_path: String,
-}
-
-fn network_info() -> NetworkInfo {
-    use reelbox_core::net::proxy;
-    let settings = proxy::settings();
-    // 每次问都重新解析:用户刚换了端口/刚开系统代理,这里立刻看得见
-    proxy::invalidate();
-    let route = proxy::route();
-    NetworkInfo {
-        mode: settings.mode.as_str().to_string(),
-        url: settings.url,
-        effective: route.proxy.unwrap_or_default(),
-        from: route.from.to_string(),
-        note: route.note,
-        settings_path: proxy::settings_path().to_string_lossy().to_string(),
-    }
-}
-
-#[tauri::command]
-pub fn network_settings() -> NetworkInfo {
-    network_info()
-}
-
-/// 存下来立刻用(下次请求前解析就会读到新值,不用重启)
-#[tauri::command]
-pub fn save_network_settings(mode: String, url: String) -> Result<NetworkInfo, String> {
-    use reelbox_core::net::proxy;
-    let settings = proxy::Settings { mode: proxy::Mode::parse(&mode)?, url };
-    proxy::save_settings(&settings)?;
-    Ok(network_info())
-}
-
 #[tauri::command]
 pub fn list_sources() -> Vec<Source> {
     load_sources()
