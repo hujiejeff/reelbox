@@ -5,10 +5,12 @@
 //! - [`proxy`]:代理在哪(环境变量 → Windows 注册表 → 设置页手动),带 5 秒缓存
 //! - [`http`]:客户端工厂,负责超时、重试、代理接线
 //! - [`policy`]:哪些目标允许连(本机/内网挡掉,FakeIP 放行)
+//! - [`session`]:播放会话表,把"真实地址 + 请求头"换成短 id(反代用)
 
 pub mod http;
 pub mod policy;
 pub mod proxy;
+pub mod session;
 
 use std::sync::Mutex;
 

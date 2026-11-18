@@ -2,7 +2,6 @@
 //! WebView 里直接播 m3u8 有三个坑:桌面 Chromium 不认 HLS、跨域被拦、防盗链要带 UA/Referer。
 //! 这里起一个 127.0.0.1 上的小服务,把 m3u8 和分片都代理一遍,顺手改写里面的地址。
 
-use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -11,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine as _;
 use reelbox_core::net::http;
+use reelbox_core::net::session::Sessions;
 use tiny_http::{Header, Method, Response, Server};
 
 use crate::logging;
@@ -25,40 +25,18 @@ const MAX_SESSIONS: usize = 4096;
 /// 6 小时前的会话不可能还有播放器在用
 const SESSION_TTL_SECS: u64 = 6 * 3600;
 
-/// 只给测试用:构造一条老的 `/p?u=…&h=…` 地址,验证兼容路径还能解出来
-#[cfg(test)]
-fn enc(s: &str) -> String {
-    B64.encode(s.as_bytes())
-}
-
 fn dec(s: &str) -> Option<String> {
     B64.decode(s.as_bytes())
         .ok()
         .and_then(|v| String::from_utf8(v).ok())
 }
 
-/// 一个播放会话:真实地址 + 请求头。
-///
-/// 以前这两样就编码在 URL 里(`/p?u=&h=`),后果是 Cookie/Authorization 会跟着
-/// 地址进日志和播放器调试面板,地址还会随头的大小无限变长。现在 URL 里只有短 id。
-struct Session {
-    url: String,
-    headers: String,
-    /// 插入(或最近一次命中)的 Unix 秒,给 TTL 用
-    at: u64,
-}
-
-/// 会话表 + 插入顺序。两者必须一起改,所以放进同一个锁里
-struct Sessions {
-    map: HashMap<String, Session>,
-    /// 淘汰按这个来。同一个 id 重插入不再记一次(见 `remember`)
-    order: VecDeque<String>,
-}
-
+/// 一个播放会话就是"真实地址 + 请求头",存在 [`Sessions`] 里换成一个短 id。
+/// 表本身在 core(那边能单测),这里只负责:全局放一份 + 提供当前时间。
 static SESSIONS: OnceLock<Mutex<Sessions>> = OnceLock::new();
 
 fn sessions() -> &'static Mutex<Sessions> {
-    SESSIONS.get_or_init(|| Mutex::new(Sessions::new()))
+    SESSIONS.get_or_init(|| Mutex::new(Sessions::new(MAX_SESSIONS, SESSION_TTL_SECS)))
 }
 
 /// 中毒也要能用:反代线程 panic 过一次就不该让播放永久瘫痪
@@ -76,22 +54,6 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// 会话 id:和 `source::id_for_url` 同一套(FNV-1a 32 位 / 8 位十六进制),
-/// 界面上看到的短串风格就一致了。请求头也参与:同一地址换一套头是另一路流。
-fn session_id(url: &str, headers: &str) -> String {
-    let mut h: u32 = 0x811c_9dc5;
-    let sep = 0x1fu16; // 分隔符:避免 ("ab","c") 和 ("a","bc") 撞成同一个 id
-    for unit in url
-        .encode_utf16()
-        .chain(std::iter::once(sep))
-        .chain(headers.encode_utf16())
-    {
-        h ^= unit as u32;
-        h = h.wrapping_mul(0x0100_0193);
-    }
-    format!("{h:08x}")
-}
-
 /// 记住一个会话,返回它的 id(进程级会话表那颗锁的入口)
 fn remember(url: &str, headers: &str) -> String {
     lock().remember(url, headers, now_secs())
@@ -99,63 +61,7 @@ fn remember(url: &str, headers: &str) -> String {
 
 /// 按 id 取回 (url, headers)。取不到就是过期/被淘汰了
 fn recall(id: &str) -> Option<(String, String)> {
-    lock().recall(id)
-}
-
-impl Sessions {
-    fn new() -> Self {
-        Sessions {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-        }
-    }
-
-    /// 记住一个会话,返回它的 id。
-    /// 同一个 (url, headers) 永远得到同一个 id —— 直播清单每次刷新都会重新 wrap,
-    /// 每次都插一条的话表会无限膨胀。
-    fn remember(&mut self, url: &str, headers: &str, now: u64) -> String {
-        let id = session_id(url, headers);
-        self.purge_expired(now);
-        if let Some(s) = self.map.get_mut(&id) {
-            // 命中已有会话:只刷新时间。插入顺序不动,否则热门清单会一直把自己顶成
-            // "最新",淘汰就永远淘汰不到它
-            s.at = now;
-            return id;
-        }
-        self.map.insert(
-            id.clone(),
-            Session {
-                url: url.to_string(),
-                headers: headers.to_string(),
-                at: now,
-            },
-        );
-        self.order.push_back(id.clone());
-        while self.map.len() > MAX_SESSIONS {
-            match self.order.pop_front() {
-                Some(old) => {
-                    self.map.remove(&old);
-                }
-                None => break,
-            }
-        }
-        id
-    }
-
-    fn recall(&self, id: &str) -> Option<(String, String)> {
-        self.map.get(id).map(|s| (s.url.clone(), s.headers.clone()))
-    }
-
-    /// 清掉超过 TTL 的条目,并让 `order` 和 `map` 一一对应。
-    ///
-    /// `order` 得跟着一起对齐:只按时间清 `map` 的话,被清掉的 id 会一直躺在队列中间,
-    /// 直到哪天被淘汰到队首 —— 长时间追剧下来队列只涨不落,属于慢漏。
-    fn purge_expired(&mut self, now: u64) {
-        self.map
-            .retain(|_, s| now.saturating_sub(s.at) < SESSION_TTL_SECS);
-        let map = &self.map;
-        self.order.retain(|id| map.contains_key(id));
-    }
+    lock().recall(id, now_secs())
 }
 
 /// 把绝对地址包成本地代理地址
@@ -465,305 +371,10 @@ fn short(url: &str, max: usize) -> String {
     format!("{head}…({n})")
 }
 
-
-/// 把 m3u8 里的分片、子清单、密钥地址都换成代理地址
-fn rewrite(text: &str, base: &str, headers: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 512);
-    for line in text.lines() {
-        let t = line.trim();
-        if t.is_empty() {
-            out.push('\n');
-            continue;
-        }
-        if let Some(rest) = t.strip_prefix('#') {
-            out.push('#');
-            out.push_str(&rewrite_attrs(rest, base, headers));
-            out.push('\n');
-        } else {
-            out.push_str(&wrap(&resolve(base, t), headers));
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// 处理 #EXT-X-KEY/#EXT-X-MAP 里的 URI="..."
-fn rewrite_attrs(line: &str, base: &str, headers: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(pos) = rest.find("URI=\"") {
-        let (head, tail) = rest.split_at(pos + 5);
-        out.push_str(head);
-        match tail.find('"') {
-            Some(end) => {
-                let uri = &tail[..end];
-                out.push_str(&wrap(&resolve(base, uri), headers));
-                rest = &tail[end..];
-            }
-            None => {
-                out.push_str(tail);
-                return out;
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-/// 相对地址补全成绝对地址。
+/// 把 m3u8 里的分片、子清单、密钥地址都换成代理地址。
 ///
-/// 主路交给 `url` crate:它按 RFC 3986 处理 `../`、`?query`、协议相对地址,
-/// 手写拼接在这些地方都踩过坑。base 本身不是合法绝对地址时才退回字符串逻辑
-/// (`url` 对 `data:` 这类非层级地址会拒绝 join)。
-fn resolve(base: &str, uri: &str) -> String {
-    if let Ok(b) = url::Url::parse(base) {
-        if let Ok(joined) = b.join(uri) {
-            return joined.to_string();
-        }
-    }
-    resolve_manually(base, uri)
-}
-
-/// 兜底:按"最后一个 `/` 之前是目录"手工拼
-fn resolve_manually(base: &str, uri: &str) -> String {
-    if uri.starts_with("http://") || uri.starts_with("https://") {
-        return uri.to_string();
-    }
-    if uri.starts_with("//") {
-        return format!("https:{uri}");
-    }
-    let origin_end = base.find("://").map(|i| i + 3).unwrap_or(0);
-    let after_host = base[origin_end..].find('/').map(|i| i + origin_end);
-    let dir = match after_host {
-        Some(_) => match base.rfind('/') {
-            Some(p) => &base[..=p],
-            None => base,
-        },
-        None => return format!("{base}/{uri}"),
-    };
-    if let Some(stripped) = uri.strip_prefix('/') {
-        let host_end = base[origin_end..].find('/').map(|i| i + origin_end).unwrap_or(base.len());
-        return format!("{}{}", &base[..host_end], format!("/{stripped}"));
-    }
-    format!("{dir}{uri}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 一个"302 之后"的签名清单地址:sig 在查询串里,目录和请求时可能已经不一样
-    const BASE: &str = "https://cdn.example/hls/abc/index.m3u8?sig=1";
-
-    fn rewritten(line: &str) -> String {
-        rewrite(line, BASE, "[]")
-    }
-
-    /// 改写后的地址 → 它指向的真实地址。
-    /// 只认"表里能查回这个地址",不比对地址长什么样:id 怎么算、用不用编码都是实现细节。
-    fn target_of(addr: &str) -> String {
-        assert!(
-            addr.starts_with("http://127.0.0.1:"),
-            "应该被包成本地代理地址: {addr}"
-        );
-        let id = addr.rsplit('/').next().unwrap_or_default();
-        recall(id)
-            .unwrap_or_else(|| panic!("会话表里应该有这个 id: {addr}"))
-            .0
-    }
-
-    /// 从 `#EXT-X-KEY:…,URI="…"` 这类属性行里取出 URI 的值
-    fn uri_attr(line: &str) -> String {
-        let tail = line
-            .split_once("URI=\"")
-            .unwrap_or_else(|| panic!("属性行里应该有 URI: {line}"))
-            .1;
-        tail[..tail.find('"').expect("URI 的引号应该成对")].to_string()
-    }
-
-    #[test]
-    fn relative_segment_is_joined_with_base_dir() {
-        let out = rewritten("seg-1.ts");
-        assert_eq!(
-            target_of(out.trim()),
-            "https://cdn.example/hls/abc/seg-1.ts"
-        );
-    }
-
-    #[test]
-    fn absolute_segment_is_kept() {
-        let out = rewritten("https://cdn2.example/x.ts");
-        assert_eq!(target_of(out.trim()), "https://cdn2.example/x.ts");
-    }
-
-    #[test]
-    fn protocol_relative_segment_takes_base_scheme() {
-        let out = rewritten("//cdn3.example/x.ts");
-        assert_eq!(target_of(out.trim()), "https://cdn3.example/x.ts");
-    }
-
-    #[test]
-    fn key_uri_is_rewritten() {
-        let out = rewritten("#EXT-X-KEY:METHOD=AES-128,URI=\"key.key\"");
-        assert!(
-            out.starts_with("#EXT-X-KEY:METHOD=AES-128,URI=\"http://127.0.0.1:"),
-            "{out}"
-        );
-        assert_eq!(
-            target_of(&uri_attr(out.trim())),
-            "https://cdn.example/hls/abc/key.key"
-        );
-    }
-
-    #[test]
-    fn map_uri_is_rewritten() {
-        let out = rewritten("#EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"720@0\"");
-        assert_eq!(
-            target_of(&uri_attr(out.trim())),
-            "https://cdn.example/hls/abc/init.mp4"
-        );
-        // BYTERANGE 在 URI 后面,不能被一起吃掉
-        assert!(out.contains("BYTERANGE=\"720@0\""), "{out}");
-    }
-
-    #[test]
-    fn media_uri_is_rewritten() {
-        let out = rewritten(
-            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"cn\",URI=\"audio.m3u8\"",
-        );
-        assert_eq!(
-            target_of(&uri_attr(out.trim())),
-            "https://cdn.example/hls/abc/audio.m3u8"
-        );
-        assert!(out.contains("GROUP-ID=\"aud\""), "{out}");
-    }
-
-    #[test]
-    fn low_latency_part_uri_is_rewritten() {
-        let out = rewritten("#EXT-X-PART:DURATION=0.5,URI=\"part0.ts\"");
-        assert_eq!(
-            target_of(&uri_attr(out.trim())),
-            "https://cdn.example/hls/abc/part0.ts"
-        );
-    }
-
-    #[test]
-    fn query_string_is_preserved() {
-        let out = rewritten("seg-1.ts?token=deadbeef&n=2");
-        assert_eq!(
-            target_of(out.trim()),
-            "https://cdn.example/hls/abc/seg-1.ts?token=deadbeef&n=2"
-        );
-    }
-
-    #[test]
-    fn other_lines_pass_through() {
-        let text = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2";
-        let out = rewrite(text, BASE, "[]");
-        assert!(out.starts_with("#EXTM3U\n#EXT-X-VERSION:3\n"), "{out}");
-        assert!(out.contains("#EXT-X-TARGETDURATION:2"), "{out}");
-    }
-
-    #[test]
-    fn hop_note_only_when_redirected() {
-        assert_eq!(hop_note("https://a/x", "https://a/x"), "");
-        let note = hop_note("https://a/x", "https://b/y");
-        assert!(note.contains("base=https://b/y"), "{note}");
-    }
-
-    // ---- 播放会话 ----
-
-    #[test]
-    fn same_pair_always_gets_the_same_id() {
-        let mut t = Sessions::new();
-        let url = "https://v.example/live/index.m3u8";
-        let headers = "[[\"Referer\",\"https://v.example/\"]]";
-        let a = t.remember(url, headers, 1_000);
-        let b = t.remember(url, headers, 1_001);
-        assert_eq!(a, b, "直播清单每次刷新都会重新 wrap,id 必须稳定");
-        assert_eq!(a.len(), 8, "8 位十六进制,和 source 的 id 风格一致: {a}");
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "{a}");
-        // 同一地址换一套头就是另一路流,不能共用会话
-        let other = t.remember(url, "[]", 1_002);
-        assert_ne!(a, other);
-    }
-
-    #[test]
-    fn recall_returns_the_registered_pair() {
-        let mut t = Sessions::new();
-        let url = "https://v.example/a/index.m3u8?sig=2";
-        let headers = "[[\"User-Agent\",\"Mozilla/5.0\"],[\"Cookie\",\"sid=1\"]]";
-        let id = t.remember(url, headers, 1_000);
-        assert_eq!(t.recall(&id), Some((url.to_string(), headers.to_string())));
-    }
-
-    #[test]
-    fn recall_unknown_id_is_none() {
-        assert_eq!(Sessions::new().recall("不存在"), None);
-        assert_eq!(recall("不存在"), None);
-    }
-
-    #[test]
-    fn table_is_capped_and_drops_the_oldest() {
-        let mut t = Sessions::new();
-        let n = MAX_SESSIONS + 4;
-        let ids: Vec<String> = (0..n)
-            .map(|i| t.remember(&format!("https://v.example/seg-{i}.ts"), "[]", 1_000 + i as u64))
-            .collect();
-        assert_eq!(t.map.len(), MAX_SESSIONS, "表不能超过上限");
-        assert!(
-            t.recall(ids.first().unwrap()).is_none(),
-            "最早的那条应该被淘汰"
-        );
-        assert!(
-            t.recall(ids.last().unwrap()).is_some(),
-            "最新的那条必须还在"
-        );
-    }
-
-    #[test]
-    fn expired_entries_do_not_pile_up_in_the_order_queue() {
-        let mut t = Sessions::new();
-        let t0 = 1_000_000u64;
-        let a = t.remember("https://v.example/a.m3u8", "[]", t0);
-        let b = t.remember("https://v.example/b.m3u8", "[]", t0 + 10);
-        // 6 小时后 C 进来:A 过期被清掉,但它在队列中间(B 还没到期)
-        t.remember("https://v.example/c.m3u8", "[]", t0 + SESSION_TTL_SECS + 1);
-        assert!(t.recall(&a).is_none(), "超过 6 小时就该清掉");
-        assert!(t.recall(&b).is_some(), "没到期的要留着");
-        assert_eq!(
-            t.order.len(),
-            t.map.len(),
-            "队列里不能留着已清掉的 id —— 长期追剧会只涨不落"
-        );
-    }
-
-    #[test]
-    fn wrap_keeps_headers_out_of_the_url() {
-        let headers = "[[\"Cookie\",\"sid=secret-value\"]]";
-        let addr = wrap("https://v.example/a/index.m3u8", headers);
-        assert!(addr.contains("/s/"), "{addr}");
-        assert!(!addr.contains('?'), "地址里不该再有查询串: {addr}");
-        assert!(!addr.contains("secret"), "请求头不能进地址: {addr}");
-        assert!(addr.len() < 40, "地址要短: {addr}");
-        assert_eq!(target_of(&addr), "https://v.example/a/index.m3u8");
-    }
-
-    #[test]
-    fn legacy_p_address_still_decodes() {
-        // 老地址 `/p?u=<b64>&h=<b64>` 必须继续能用:已缓存的页面、存下来的调试地址
-        let addr = format!(
-            "/p?u={}&h={}",
-            enc("https://v.example/a/index.m3u8"),
-            enc("[[\"Referer\",\"https://v.example/\"]]")
-        );
-        assert_eq!(
-            query(&addr, "u").as_deref(),
-            Some("https://v.example/a/index.m3u8")
-        );
-        assert_eq!(
-            query(&addr, "h").as_deref(),
-            Some("[[\"Referer\",\"https://v.example/\"]]")
-        );
-    }
+/// 改写逻辑本身在 core(`reelbox_core::playlist`),那边不碰 tiny_http/请求头,
+/// 所以能单测;这里只把请求头塞进 wrap 闭包。
+fn rewrite(text: &str, base: &str, headers: &str) -> String {
+    reelbox_core::playlist::rewrite(text, base, &|uri| wrap(uri, headers))
 }

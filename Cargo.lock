@@ -3283,7 +3283,6 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-shell",
  "tiny_http",
- "url",
 ]
 
 [[package]]
@@ -3297,6 +3296,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]

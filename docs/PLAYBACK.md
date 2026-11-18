@@ -53,7 +53,9 @@ FNV-1a 短哈希去重(直播清单每次刷新都会重新 wrap),超过 4096 �
 
 | 文件 | 职责 |
 | --- | --- |
-| `src-tauri/src/proxy.rs` | 本地反代服务、m3u8 改写、CORS |
+| `src-tauri/src/proxy.rs` | 本地反代服务、CORS、流式透传(Range) |
+| `core/src/playlist.rs` | m3u8 清单改写与相对地址补全(纯逻辑,可单测) |
+| `core/src/net/session.rs` | 播放会话表:地址 + 请求头 → 短 id |
 | `src-tauri/src/commands.rs` | `player_url` 命令:把流地址包成本地地址 |
 | `core/src/source/cms.rs` | `resolve_media`:分享页 → m3u8 |
 | `ui/index.html` | `.player` 整屏覆盖层 + `<script src="vendor/hls.min.js">` |
@@ -67,7 +69,7 @@ FNV-1a 短哈希去重(直播清单每次刷新都会重新 wrap),超过 4096 �
 cargo test -p reelbox-core
 ```
 
-期望:`34 passed; 0 failed`。其中三条覆盖分享页抽流:
+期望:`87 passed; 0 failed`。其中三条覆盖分享页抽流:
 
 - `finds_relative_m3u8` —— 相对路径 `/20251222/.../index.m3u8?sign=abc`
 - `finds_absolute_m3u8` —— 绝对地址

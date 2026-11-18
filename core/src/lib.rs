@@ -3,5 +3,6 @@
 pub mod image;
 pub mod model;
 pub mod net;
+pub mod playlist;
 pub mod plugin;
 pub mod source;
