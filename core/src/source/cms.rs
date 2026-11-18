@@ -151,28 +151,31 @@ impl Client {
     }
 
     /// 从剧集标识里取出播放地址。
+    ///
+    /// 有的源给的是一张分享页(HTML),真正的 m3u8 藏在页面里:能抽出来就直接抽,
+    /// 抽不出来就把 `page = true` 交出去 —— 由前端找解析器插件接着解。
     pub fn stream(&self, episode_id: &str) -> Result<Stream, String> {
         let parts: Vec<&str> = episode_id.splitn(3, ':').collect();
         if parts.len() != 3 || !parts[2].starts_with("http") {
             return Err("INVALID_RESPONSE: 剧集标识无效".into());
         }
-        let (media_owned, referer) = resolve_media(parts[2]);
-        let media = media_owned.as_str();
-        let mime = if media.to_lowercase().contains(".mp4") {
+        let media = resolve_media(parts[2]);
+        let mime = if media.url.to_lowercase().contains(".mp4") {
             "video/mp4"
         } else {
             "application/vnd.apple.mpegurl"
         };
         let mut headers = BTreeMap::new();
         headers.insert("User-Agent".to_string(), DEFAULT_UA.to_string());
-        if let Some(r) = referer {
+        if let Some(r) = media.referer {
             headers.insert("Referer".to_string(), r);
         }
         Ok(Stream {
-            url: media.to_string(),
+            url: media.url,
             mime: mime.to_string(),
             headers,
             options: Vec::new(),
+            page: media.page,
         })
     }
 
@@ -439,6 +442,8 @@ mod tests {
         let st = c.stream("0:1:https://cdn.example.com/a.m3u8").unwrap();
         assert_eq!(st.url, "https://cdn.example.com/a.m3u8");
         assert!(st.mime.contains("mpegurl"));
+        // 媒体地址自己就是播放地址:不走解析页那条路(不发请求)
+        assert!(!st.page, "m3u8 不该被标成解析页");
         assert!(c.stream("bad").is_err());
     }
 
@@ -458,6 +463,7 @@ mod tests {
             name: "非凡资源".into(),
             kind: "vod".into(),
             url: "https://cj.ffzyapi.com/api.php/provide/vod/from/ffm3u8".into(),
+            version: String::new(),
             health: None,
         });
         let p = c.page(1, "").expect("列表失败");
@@ -477,12 +483,32 @@ mod tests {
     }
 }
 
+/// 一次取流的结果:交给播放器的地址、要带的 Referer、以及"这是不是只是一张网页"。
+struct Media {
+    url: String,
+    referer: Option<String>,
+    page: bool,
+}
+
+impl Media {
+    fn played(url: &str) -> Self {
+        Self { url: url.to_string(), referer: None, page: false }
+    }
+}
+
+/// 地址本身看着就是媒体文件(`.m3u8` / `.mp4`)吗?
+fn is_media_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.contains(".m3u8") || lower.contains(".mp4")
+}
+
 /// 有些源给的是一张分享页(HTML),真正的 m3u8 藏在页面里。
 /// 取一次页面把地址抽出来,同时把页面地址当 Referer 带回去。
-fn resolve_media(url: &str) -> (String, Option<String>) {
-    let lower = url.to_lowercase();
-    if lower.contains(".m3u8") || lower.contains(".mp4") {
-        return (url.to_string(), None);
+///
+/// 网络那一半在这里,判断那一半在 `media_from_page`(纯函数,好测)。
+fn resolve_media(url: &str) -> Media {
+    if is_media_url(url) {
+        return Media::played(url);
     }
     let headers = [
         ("User-Agent", DEFAULT_UA.to_string()),
@@ -490,27 +516,49 @@ fn resolve_media(url: &str) -> (String, Option<String>) {
     ];
     let resp = match crate::net::http::get(url, &headers) {
         Ok(r) => r,
-        Err(_) => return (url.to_string(), None),
+        // 连不上就照旧把地址交出去:让播放阶段报"网络没通",别谎称"只给了解析页"
+        Err(_) => return Media::played(url),
     };
     let ct = resp
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
-        .to_lowercase();
-    if ct.contains("mpegurl") || ct.contains("video/") {
-        return (url.to_string(), None);
-    }
-    if resp.status().as_u16() >= 400 {
-        return (url.to_string(), None);
+        .to_string();
+    let status = resp.status().as_u16();
+    if ct.to_lowercase().contains("mpegurl") || ct.to_lowercase().contains("video/") {
+        return Media::played(url);
     }
     let Ok(body) = resp.text() else {
-        return (url.to_string(), None);
+        return Media::played(url);
     };
-    match extract_m3u8(&body, url) {
-        Some(media) => (media, Some(url.to_string())),
-        None => (url.to_string(), None),
+    media_from_page(url, status, &ct, &body)
+}
+
+/// 拿到响应之后怎么判(纯函数,单测直接喂 body):
+///   1. 页面里能抽出 .m3u8 → 用它,原页面地址留作 Referer;
+///   2. 抽不到、且响应确实是 HTML → 这是个解析页,`page = true` 交给解析器插件;
+///   3. 其余情况(404、二进制、奇怪的地址)原样交出去,别抢走播放链路。
+fn media_from_page(url: &str, status: u16, content_type: &str, body: &str) -> Media {
+    if status >= 400 {
+        return Media::played(url);
     }
+    if let Some(media) = extract_m3u8(body, url) {
+        return Media { url: media, referer: Some(url.to_string()), page: false };
+    }
+    if looks_like_html(content_type, body) {
+        return Media { url: url.to_string(), referer: None, page: true };
+    }
+    Media::played(url)
+}
+
+/// 响应像不像一张网页:content-type 说了算,没说就看正文开头。
+fn looks_like_html(content_type: &str, body: &str) -> bool {
+    if content_type.to_lowercase().contains("html") {
+        return true;
+    }
+    let head: String = body.chars().take(400).collect::<String>().to_lowercase();
+    head.contains("<html") || head.contains("<!doctype")
 }
 
 fn extract_m3u8(body: &str, base: &str) -> Option<String> {
@@ -586,5 +634,58 @@ mod extract_tests {
     #[test]
     fn none_when_absent() {
         assert!(extract_m3u8("<html>no video here</html>", "https://a.example/").is_none());
+    }
+
+    /// 分享页:页面上捞不到 m3u8,但响应确实是 HTML → 交给解析器插件
+    #[test]
+    fn share_page_is_flagged() {
+        let html = "<!doctype html><html><body><h1>电影天堂</h1><p>请下载客户端</p></body></html>";
+        let got = media_from_page("https://vip.dytt-cine.com/share/xyz", 200, "text/html", html);
+        assert!(got.page, "HTML 分享页应置 page=true");
+        assert_eq!(got.url, "https://vip.dytt-cine.com/share/xyz");
+        assert!(got.referer.is_none());
+    }
+
+    /// 页面上有 m3u8:直接抽出来,并把页面地址留作 Referer(不算解析页)
+    #[test]
+    fn page_with_stream_is_not_flagged() {
+        let html = r#"<script>src="/20251222/a/index.m3u8?sign=1"</script>"#;
+        let got = media_from_page("https://a.example/p/1", 200, "text/html", html);
+        assert!(!got.page);
+        assert_eq!(got.url, "https://a.example/20251222/a/index.m3u8?sign=1");
+        assert_eq!(got.referer.as_deref(), Some("https://a.example/p/1"));
+    }
+
+    /// 不是 HTML 又没有 m3u8(没有后缀的二进制):照旧原样交出去,不抢播放链路
+    #[test]
+    fn non_html_without_stream_is_played_as_is() {
+        let got = media_from_page(
+            "https://cdn.example.com/play/abc",
+            200,
+            "application/octet-stream",
+            "not html at all",
+        );
+        assert!(!got.page, "不是网页就别当成解析页");
+        assert_eq!(got.url, "https://cdn.example.com/play/abc");
+    }
+
+    /// 错误页(403 之类)不当解析页:让播放阶段报出真实的失败
+    #[test]
+    fn error_response_is_not_a_parse_page() {
+        let got = media_from_page("https://a.example/x", 403, "text/html", "<html>403</html>");
+        assert!(!got.page);
+        assert_eq!(got.url, "https://a.example/x");
+    }
+
+    /// content-type 缺失时靠正文开头认网页
+    #[test]
+    fn detects_html_by_body_when_type_missing() {
+        let got = media_from_page(
+            "https://a.example/share",
+            200,
+            "",
+            "\n  <html><head><title>x</title></head></html>",
+        );
+        assert!(got.page);
     }
 }

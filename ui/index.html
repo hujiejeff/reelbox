@@ -495,6 +495,9 @@
   }
   .set-block { display: flex; flex-direction: column; }
   .set-block__head { display: flex; align-items: center; min-height: 24px; }
+  /* 块头右侧带一个动作(源页的「导入解析器」):标题左、按钮右,间距 12 */
+  .set-block__head--acts { justify-content: space-between; gap: 12px; }
+  .set-block__head--acts .m3e-button { height: 36px; padding-inline: 14px; gap: 6px; }
   .set-block__title {
     font: 500 16px/24px system-ui, "PingFang SC", sans-serif;
     color: var(--m3e-sys-color-on-surface);
@@ -1053,6 +1056,11 @@
     background: var(--m3e-sys-color-error-container);
     color: var(--m3e-sys-color-on-error-container);
   }
+  /* 解析器不是源:用 primary-container 区别于三类源,一眼看出"它是工具" */
+  .srcmgr .m3e-list-item[data-type="parser"] .m3e-list-item__leading {
+    background: var(--m3e-sys-color-primary-container);
+    color: var(--m3e-sys-color-on-primary-container);
+  }
   /* 当前源:容器换成 primary + 名称 600,行底不铺色(§2.4) */
   .srcmgr .m3e-list-item[aria-current="true"] .m3e-list-item__leading {
     background: var(--m3e-sys-color-primary);
@@ -1195,6 +1203,8 @@
   .p-fail__head .m3e-icon { font-size: 22px; color: #ffb4ab; }
   .p-fail__hint { font: 500 12.5px/1.6 system-ui, "PingFang SC", sans-serif; opacity: .8; }
   .p-fail__acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  /* .m3e-button 自带 display:inline-flex,会盖掉 UA 的 [hidden]{display:none} */
+  .p-fail__acts .m3e-button[hidden] { display: none; }
   .p-fail .m3e-button { --_m3e-button-content: #e9ddff; }
   .p-fail .m3e-button[data-primary="1"] {
     background: var(--m3e-sys-color-primary); color: var(--m3e-sys-color-on-primary);
@@ -1311,6 +1321,19 @@
                   <p class="set-page__sub">点播接口(苹果 CMS 的 /api.php/provide/vod 那种)、XML 源,或插件源。</p>
                   <div class="seg--count" id="srcSeg" role="tablist" aria-label="按类型筛选源"></div>
                   <div class="srcmgr" id="srcmgr"></div>
+
+                  <!-- 解析器:不是源,只把"分享页 HTML"解成可播地址(契约见 docs/PARSERS.md)。
+                       数量为 0 时这块也照常显示 —— 否则用户永远不知道有这功能。 -->
+                  <div class="set-block" id="parserBlock">
+                    <div class="set-block__head set-block__head--acts">
+                      <span class="set-block__title">解析器</span>
+                      <button type="button" class="m3e-button m3e-button--outlined" id="parserImport">
+                        <span class="m3e-icon" aria-hidden="true">troubleshoot</span>导入解析器
+                      </button>
+                    </div>
+                    <p class="set-note" id="parserHint"></p>
+                    <div class="srcmgr" id="parsermgr"></div>
+                  </div>
                 </div>
               </div>
               <!-- 底栏两个键,共用一套表单(地址框 / 名称框 / 选择文件),判型用同一套函数:
@@ -1675,6 +1698,8 @@
       <div class="p-fail__acts">
         <button class="m3e-button m3e-button--text" id="pRetry" type="button">重试</button>
         <button class="m3e-button m3e-button--text" id="pSwitch" type="button">换线路</button>
+        <!-- 只有"这个源只给了解析页"时才出现:去「设置 → 源」装解析器 -->
+        <button class="m3e-button m3e-button--text" id="pSettings" type="button" hidden>去设置</button>
       </div>
       <details class="p-fail__raw">
         <summary>原始错误</summary>

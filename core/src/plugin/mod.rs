@@ -10,6 +10,18 @@ pub mod runtime;
 
 use std::collections::BTreeMap;
 
+/// 插件类型:普通源插件(列 / 详情 / 播放钩子)
+pub const KIND_VOD: &str = "vod";
+/// 插件类型:解析器(把分享页变成可播地址,见 docs/PARSERS.md)
+pub const KIND_PARSER: &str = "parser";
+
+/// 解析器的入口前缀(`reelbox.parser({...})`)
+const PARSER_ENTRY: &str = "reelbox.parser(";
+/// 原生源插件的入口前缀
+const NATIVE_ENTRY: &str = "reelbox.define(";
+/// 老插件(WeBox)的入口前缀,只做兼容
+const LEGACY_ENTRY: &str = "WeBox.define(";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginMeta {
     pub id: String,
@@ -17,25 +29,28 @@ pub struct PluginMeta {
     pub version: String,
     /// 站点主页,没有就空
     pub api: String,
+    /// `vod`(源插件)或 `parser`(解析器插件)
+    pub kind: String,
 }
 
-/// 从插件源码里抽 `reelbox.define({...})` 或 `WeBox.define({...})` 的字段
+/// 从插件源码里抽元信息。纯函数:不碰文件系统,也拿不到文件名。
+///
+/// 后缀这条判据(`.parser.js`)只认文件名,所以要么用 `parse_meta_hinted` 传进来,
+/// 要么由调用方自己再判一次 —— 别把路径塞进这个函数。
 pub fn parse_meta(js: &str) -> Result<PluginMeta, String> {
-    // 原生契约优先,其次兼容 WeBox
-    const NATIVE: &str = "reelbox.define(";
-    const LEGACY: &str = "WeBox.define(";
-    let start = match js.find(NATIVE) {
-        Some(i) => i,
-        // 报错文案只提原生契约:老前缀照认(见 LEGACY),但那是兼容细节,不摆给用户
-        None => js
-            .find(LEGACY)
-            .ok_or_else(|| "找不到插件入口 define({...})".to_string())?,
-    };
-    let prefix_len = if js[start..].starts_with(NATIVE) {
-        NATIVE.len()
-    } else {
-        LEGACY.len()
-    };
+    parse_meta_hinted(js, None)
+}
+
+/// 同 `parse_meta`,但允许调用方把文件名(或路径)当提示传进来:
+/// `.parser.js` 后缀同样算解析器(见 `PluginMeta::kind` 的三条判据)。
+pub fn parse_meta_hinted(js: &str, path_hint: Option<&str>) -> Result<PluginMeta, String> {
+    // 原生契约优先,其次解析器,最后兼容 WeBox
+    let (start, prefix_len) = [NATIVE_ENTRY, PARSER_ENTRY, LEGACY_ENTRY]
+        .iter()
+        .filter_map(|p| js.find(p).map(|i| (i, p.len())))
+        .min_by_key(|(i, _)| *i)
+        // 报错文案只提原生契约:老前缀照认(见 LEGACY_ENTRY),但那是兼容细节,不摆给用户
+        .ok_or_else(|| "找不到插件入口 define({...})".to_string())?;
     let body = &js[start + prefix_len..];
     let obj_start = body.find('{').ok_or_else(|| "define() 里没有对象".to_string())?;
     let obj = &body[obj_start..];
@@ -47,12 +62,35 @@ pub fn parse_meta(js: &str) -> Result<PluginMeta, String> {
     if name.is_empty() {
         return Err("缺少 name".into());
     }
+    let kind = detect_kind(js, map.get("kind").map(|s| s.as_str()).unwrap_or(""), path_hint);
     Ok(PluginMeta {
         id: if id.is_empty() { name.clone() } else { id },
         name,
         version: get("version"),
         api: get("api"),
+        kind,
     })
+}
+
+/// 三条判据,命中任一即解析器;都不命中就是普通源插件(`vod`)。
+///   1. 源码里有 `reelbox.parser(` 入口;
+///   2. 入口对象里写了 `kind: "parser"`;
+///   3. 文件名以 `.parser.js` 收尾(只有调用方传了 path_hint 才判得到)。
+fn detect_kind(js: &str, declared: &str, path_hint: Option<&str>) -> String {
+    let declared = declared.trim().to_ascii_lowercase();
+    if js.contains(PARSER_ENTRY) || declared == KIND_PARSER {
+        return KIND_PARSER.to_string();
+    }
+    if let Some(p) = path_hint {
+        if p.trim().to_ascii_lowercase().ends_with(".parser.js") {
+            return KIND_PARSER.to_string();
+        }
+    }
+    if declared.is_empty() {
+        KIND_VOD.to_string()
+    } else {
+        declared
+    }
 }
 
 /// 只解析"顶层键:字符串/数字/布尔"这种浅结构,够读元信息
@@ -71,7 +109,7 @@ fn parse_object(text: &str) -> Result<BTreeMap<String, String>, String> {
         }
         // 读键:支持 'k': 和 k: 两种写法
         let key = if matches!(bytes[i], 39u8 | 34u8 | 96u8) {
-            read_string(bytes, &mut i)?
+            read_string(bytes, &mut i)
         } else {
             let s0 = i;
             while i < bytes.len() && (bytes[i] as char).is_ascii_alphanumeric() { i += 1; }
@@ -84,7 +122,7 @@ fn parse_object(text: &str) -> Result<BTreeMap<String, String>, String> {
         skip_ws(bytes, &mut i);
         if i >= bytes.len() { break; }
         if matches!(bytes[i], 39u8 | 34u8 | 96u8) {
-            let v = read_string(bytes, &mut i)?;
+            let v = read_string(bytes, &mut i);
             if depth == 1 { out.insert(key, v); }
         } else if matches!(bytes[i], 123u8 | 91u8) {
             // 嵌套对象/数组:整体跳过,不计入顶层
@@ -111,7 +149,13 @@ fn skip_ws(bytes: &[u8], i: &mut usize) {
     while *i < bytes.len() && (bytes[*i] as char).is_whitespace() { *i += 1; }
 }
 
-fn read_string(bytes: &[u8], i: &mut usize) -> Result<String, String> {
+/// 读一个引号字符串。
+///
+/// 这里是浅扫描器,不分"字符串"和"正则字面量":钩子体里写的
+/// `/["']/` 这类正则,其中的引号会被当成字符串开头。所以读到文件尾时
+/// 不当错误 —— 元信息(名字、版本、类型)通常写在最前面,已经读到了;
+/// 为一个正则把整份插件判成"坏了"才是更糟的结果。
+fn read_string(bytes: &[u8], i: &mut usize) -> String {
     let quote = bytes[*i];
     *i += 1;
     let mut buf: Vec<u8> = Vec::new();
@@ -124,12 +168,12 @@ fn read_string(bytes: &[u8], i: &mut usize) -> Result<String, String> {
         }
         if c == quote {
             *i += 1;
-            return Ok(String::from_utf8_lossy(&buf).to_string());
+            break;
         }
         buf.push(c);
         *i += 1;
     }
-    Err("字符串没有闭合".into())
+    String::from_utf8_lossy(&buf).to_string()
 }
 
 #[cfg(test)]
@@ -195,6 +239,90 @@ WeBox.define({
         let m = parse_meta(js).unwrap();
         assert_eq!(m.name, "嵌套");
         assert_eq!(m.version, "2");
+    }
+
+    /// 判据 0:普通源插件默认就是 vod
+    #[test]
+    fn default_kind_is_vod() {
+        assert_eq!(parse_meta(SAMPLE).unwrap().kind, KIND_VOD);
+        assert_eq!(parse_meta(REAL).unwrap().kind, KIND_VOD);
+        // 显式写 kind: "vod" 也还是 vod
+        let js = r#"reelbox.define({ name: "写清楚的源", kind: "vod" })"#;
+        assert_eq!(parse_meta(js).unwrap().kind, KIND_VOD);
+    }
+
+    /// 判据 1:源码里有 reelbox.parser( 入口
+    #[test]
+    fn parser_kind_from_entry() {
+        let js = r#"
+reelbox.parser({
+  id: "dytt-share",
+  name: "电影天堂分享页",
+  version: "1",
+  async parse(ctx, { url }) { return { quality: "自动", url: url }; }
+});
+"#;
+        let m = parse_meta(js).unwrap();
+        assert_eq!(m.kind, KIND_PARSER);
+        assert_eq!(m.id, "dytt-share");
+        assert_eq!(m.name, "电影天堂分享页");
+        assert_eq!(m.version, "1");
+    }
+
+    /// 判据 2:入口对象里写了 kind: "parser"
+    #[test]
+    fn parser_kind_from_declared_field() {
+        let js = r#"reelbox.define({ name: "声明式解析器", kind: "parser" })"#;
+        assert_eq!(parse_meta(js).unwrap().kind, KIND_PARSER);
+    }
+
+    /// 钩子体里的正则会带引号(`/["']/`),浅扫描器不该因此判整个文件坏掉
+    #[test]
+    fn regex_with_quotes_does_not_break_meta() {
+        let js = r#"reelbox.parser({
+  id: "quoted-re",
+  name: "带引号正则的解析器",
+  version: "2",
+  match(url) { return /[^"']/.test(url); }
+});"#;
+        let m = parse_meta(js).expect("正则里的引号不该让元信息读不出来");
+        assert_eq!(m.name, "带引号正则的解析器");
+        assert_eq!(m.version, "2");
+        assert_eq!(m.kind, KIND_PARSER);
+    }
+
+    /// 仓库里那个示例解析器必须真的能被认出来(它是导入后开箱可用的样例)
+    #[test]
+    fn reads_example_parser_file() {
+        let js = include_str!("../../../examples/share.reelbox.parser.js");
+        let m = parse_meta(js).expect("示例解析器应能读出元信息");
+        assert_eq!(m.kind, KIND_PARSER);
+        assert_eq!(m.id, "share-page");
+        assert_eq!(m.name, "分享页 m3u8");
+        assert_eq!(m.version, "1");
+        // 不传后缀提示也得靠源码入口认出来
+        assert_eq!(parse_meta_hinted(js, Some("x.js")).unwrap().kind, KIND_PARSER);
+    }
+
+    /// 判据 3:文件名 `.parser.js` —— 只有调用方传了 hint 才判得到
+    #[test]
+    fn parser_kind_from_file_suffix_hint() {
+        let js = r#"reelbox.define({ id: "no-entry-hint", name: "只靠文件名的解析器" })"#;
+        // 没传 hint:纯函数只认源码,是 vod
+        assert_eq!(parse_meta(js).unwrap().kind, KIND_VOD);
+        // 传了 hint:后缀说了算
+        let m = parse_meta_hinted(js, Some("share.reelbox.parser.js")).unwrap();
+        assert_eq!(m.kind, KIND_PARSER);
+        // 普通插件后缀不受影响
+        let m = parse_meta_hinted(js, Some("demo.reelbox.js")).unwrap();
+        assert_eq!(m.kind, KIND_VOD);
+        // 解析器入口 + 普通后缀:源码那条判据照样命中
+        let m = parse_meta_hinted(
+            r#"reelbox.parser({ name: "入口即解析器" })"#,
+            Some("x.reelbox.js"),
+        )
+        .unwrap();
+        assert_eq!(m.kind, KIND_PARSER);
     }
 }
 

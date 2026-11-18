@@ -446,6 +446,8 @@ pub async fn play(source: Source, episode_id: String) -> Result<Stream, String> 
                 mime: "application/vnd.apple.mpegurl".into(),
                 headers,
                 options,
+                // boa 回退引擎不发分享页请求:它给的地址就是播放地址
+                page: false,
             };
             allow_stream(&st.url);
             for o in &st.options {
@@ -709,10 +711,14 @@ pub fn selftest_report(json: String) -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
-/// 保存一个导入的插件文件,返回 (路径, 名称, id)
+/// 保存一个导入的插件文件,返回 (路径, 名称, id, 类型)
+///
+/// `kind` 是 `vod`(源插件)或 `parser`(解析器):前端按它决定是进源下拉还是进
+/// 「设置 → 源」的解析器块。判据见 `plugin::parse_meta_hinted` —— 用户选文件时的
+/// 文件名后缀 `.parser.js` 也参与判断,所以这里把 `file_name` 当提示传进去。
 #[tauri::command]
 pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value, String> {
-    let meta = plugin::parse_meta(&text)?;
+    let meta = plugin::parse_meta_hinted(&text, Some(&file_name))?;
     // 和源配置同一个数据目录(移动端没有 %APPDATA%,见 paths.rs)
     let dir = crate::paths::plugins_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
@@ -722,12 +728,20 @@ pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value,
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect();
-    // 新导入的插件写原生后缀;老的 `.webox.js` 文件照样认(is_plugin / plugin_read)
-    let path = dir.join(format!("{safe}.reelbox.js"));
+    // 新导入的插件写原生后缀;老的 `.webox.js` 文件照样认(is_plugin / plugin_read)。
+    // 解析器单独一个后缀,重新导入时不用再读源码也能认出来。
+    let suffix = if meta.kind == plugin::KIND_PARSER {
+        ".reelbox.parser.js"
+    } else {
+        ".reelbox.js"
+    };
+    let path = dir.join(format!("{safe}{suffix}"));
     std::fs::write(&path, &text).map_err(|e| format!("写插件失败: {e}"))?;
     Ok(serde_json::json!({
         "path": path.to_string_lossy(),
         "name": if meta.name.is_empty() { file_name } else { meta.name },
         "id": safe,
+        "kind": meta.kind,
+        "version": meta.version,
     }))
 }

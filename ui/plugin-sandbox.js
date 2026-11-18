@@ -419,10 +419,15 @@ export function sandboxMain() {
   const plugins = new Map(); // path -> { def, ctx }
 
   function compile(source) {
-    // 插件的 define() 把对象写到 host.captured 上,函数体最后一行把它交出来
+    // 插件的 define() 把对象写到 host.captured 上,函数体最后一行把它交出来。
+    // parser() 是解析器插件的入口,交出的是同一形状的对象(match / parse 钩子)。
     const host = {
       captured: null,
       define: function (o) {
+        host.captured = o;
+        return o;
+      },
+      parser: function (o) {
         host.captured = o;
         return o;
       },
@@ -441,7 +446,7 @@ export function sandboxMain() {
     );
     const def = factory(host, host, host, quiet);
     if (!def || typeof def !== "object") {
-      throw new Error("插件没有调用 reelbox.define({...})");
+      throw new Error("插件没有调用 reelbox.define({...}) 或 reelbox.parser({...})");
     }
     return def;
   }
@@ -471,14 +476,53 @@ export function sandboxMain() {
     }
   }
 
+  /* ---------- 解析器:match ---------- */
+
+  /**
+   * match 的各种写法都收:boolean、正则、正则源码字符串、数组(任一命中就算)。
+   * 写成数组时每一项可以是 `/dytt/i` 这种正则,也可以是 "dytt" 这种子串。
+   */
+  function matchValue(v, url) {
+    if (v === undefined || v === null) return true; // 没写就是不挑页面
+    if (typeof v === "boolean") return v;
+    if (v instanceof RegExp) return v.test(url);
+    if (typeof v === "string") {
+      const s = v.trim();
+      const m = /^\/(.*)\/([a-z]*)$/.exec(s);
+      if (m) {
+        try { return new RegExp(m[1], m[2]).test(url); } catch (e) { /* 当子串处理 */ }
+      }
+      return s ? url.indexOf(s) >= 0 : true;
+    }
+    if (Array.isArray(v)) return v.some(function (x) { return matchValue(x, url); });
+    return !!v;
+  }
+
+  /**
+   * 解析器的 match 钩子:契约是 `match(url)`,只吃一个参数(页面地址)。
+   * 可以没有(视为都匹配),也可以是函数或不带函数的正则/数组。
+   */
+  async function runMatch(entry, raw) {
+    const url = typeof raw === "string" ? raw : String((raw && raw.url) || "");
+    const spec = entry.def.match;
+    if (spec === undefined || spec === null) return true;
+    if (typeof spec !== "function") return matchValue(spec, url);
+    return matchValue(await spec.call(entry.def, url), url);
+  }
+
   async function runHook(d) {
     const reply = { kind: "run.result", id: d.id, ok: false, error: "" };
     try {
       const entry = pluginFor(d.path, d.source);
-      const fn = entry.def[d.hook];
-      if (typeof fn !== "function") throw new Error("插件没有实现 " + d.hook + " 钩子");
-      const arg = d.arg && typeof d.arg === "object" ? d.arg : {};
-      const out = await fn.call(entry.def, entry.ctx, arg);
+      let out;
+      if (d.hook === "match") {
+        out = await runMatch(entry, d.arg);
+      } else {
+        const fn = entry.def[d.hook];
+        if (typeof fn !== "function") throw new Error("插件没有实现 " + d.hook + " 钩子");
+        const arg = d.arg && typeof d.arg === "object" ? d.arg : {};
+        out = await fn.call(entry.def, entry.ctx, arg);
+      }
       reply.ok = true;
       reply.data = cloneable(out);
       reply.error = "";

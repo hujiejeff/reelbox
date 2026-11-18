@@ -65,6 +65,10 @@ pub struct Stream {
     /// 多清晰度:`url` 是默认档,这里放全部可选档(含默认)
     #[serde(default)]
     pub options: Vec<StreamOption>,
+    /// `url` 只是个解析页(分享页 HTML),真正的播放地址得由解析器插件取。
+    /// 老数据/老路径没有这个字段 → 反序列化成 false,播放链路一行不变。
+    #[serde(default)]
+    pub page: bool,
 }
 
 /// 筛选项的一个取值;parent 非空表示它是某个一级分类下的二级分类。
@@ -82,4 +86,31 @@ pub struct Filter {
     pub key: String,
     pub label: String,
     pub options: Vec<Option_>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `page` 是后加的字段:老的 Stream(没有它)反序列化必须是 false,
+    /// 否则播放链路会把普通地址当成"解析页"去找解析器。
+    #[test]
+    fn stream_page_defaults_to_false() {
+        let old = r#"{"url":"https://a/b.m3u8","mime":"application/vnd.apple.mpegurl"}"#;
+        let st: Stream = serde_json::from_str(old).expect("老数据应能读");
+        assert!(!st.page);
+        assert_eq!(st.url, "https://a/b.m3u8");
+        assert!(st.headers.is_empty());
+        assert!(st.options.is_empty());
+
+        let page: Stream = serde_json::from_str(
+            r#"{"url":"https://a/share","mime":"text/html","page":true}"#,
+        )
+        .expect("解析页应能读");
+        assert!(page.page);
+
+        // 序列化时带上(前端只看 page === true)
+        let text = serde_json::to_string(&page).expect("序列化失败");
+        assert!(text.contains("\"page\":true"), "实际: {text}");
+    }
 }

@@ -11,10 +11,14 @@ use serde::{Deserialize, Serialize};
 pub struct Source {
     pub id: String,
     pub name: String,
-    /// vod | xml | live | webox
+    /// vod | xml | live | webox | parser
     #[serde(default, rename = "type")]
     pub kind: String,
     pub url: String,
+    /// 插件自己声明的版本号(只有 `type="parser"` 的解析器会用到,普通源为空)。
+    /// 空的时候不写进配置文件,老配置读进来也不受影响。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
     /// 最近一次「测试连接」的结果;None = 从没测过(界面上是空心圆)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,
@@ -212,6 +216,18 @@ mod tests {
         // 从没测过时不写这个字段,免得配置文件里多一堆 null
         let text = serde_json::to_string(&old).expect("序列化失败");
         assert!(!text.contains("health"), "不该序列化 None: {text}");
+        // 版本只给解析器用:普通源空着,也不写进配置文件
+        assert!(old.version.is_empty());
+        assert!(!text.contains("version"), "空版本不该落盘: {text}");
+
+        // 解析器源:type=parser + 版本号能存能读
+        let p: Source = serde_json::from_str(
+            r#"{"id":"d1","name":"分享页解析器","type":"parser","url":"D:/x/share.reelbox.parser.js","version":"1"}"#,
+        )
+        .expect("解析器源解析失败");
+        assert_eq!(p.format(), "parser");
+        assert_eq!(p.version, "1");
+        assert!(serde_json::to_string(&p).unwrap().contains("\"version\":\"1\""));
 
         // 失败的探测带得上原因
         let bad = Health { ok: false, ms: 5001, checked_at: now_iso(), note: "超时".into() };

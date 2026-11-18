@@ -35,12 +35,27 @@ const rpcs = new Map(); // 沙箱发起的宿主调用(http.get)
 /** 配置里插件源的老 kind 值(新写进去的也用这个,后端 Source.kind 认它) */
 export const PLUGIN_KIND = "webox";
 
+/**
+ * 解析器插件的 kind。解析器不是源:它把"分享页 HTML"变成"可播地址",
+ * 由播放链路按需调用(见 docs/PARSERS.md),不进源下拉、不设为当前源。
+ */
+export const PARSER_KIND = "parser";
+
 /** 插件源码的入口:原生是 reelbox.define;老插件写的是另一个前缀,一并认 */
 const DEFINE_RE = /(?:WeBox|reelbox)\.define\s*\(/;
 
-/** 这段文本是不是插件源码 */
+/** 解析器源码的入口:reelbox.parser({...}) */
+const PARSER_RE = /reelbox\.parser\s*\(/;
+
+/** 这段文本是不是插件源码(源插件或解析器都算) */
 export function looksLikePluginSource(text) {
-  return DEFINE_RE.test(String(text == null ? "" : text));
+  const s = String(text == null ? "" : text);
+  return DEFINE_RE.test(s) || PARSER_RE.test(s);
+}
+
+/** 这段文本是不是解析器源码 */
+export function looksLikeParserSource(text) {
+  return PARSER_RE.test(String(text == null ? "" : text));
 }
 
 /** 类型值是不是插件(历史值 / 新写法 plugin / js) */
@@ -49,14 +64,27 @@ export function isPluginKind(kind) {
   return k === PLUGIN_KIND || k === "plugin" || k === "js";
 }
 
+/** 类型值是不是解析器 */
+export function isParserKind(kind) {
+  return String(kind == null ? "" : kind).toLowerCase() === PARSER_KIND;
+}
+
 /** 地址/路径是不是插件文件:插件就是 js 文件 */
 function isPluginPath(url) {
   return /\.js$/i.test(String(url == null ? "" : url).split(/[?#]/)[0]);
 }
 
-/** 这个源是不是插件源(kind 或路径任一命中) */
+/** 这个源是不是解析器(kind 或文件后缀任一命中) */
+export function isParserSource(src) {
+  if (!src) return false;
+  if (isParserKind(src.kind || src.type)) return true;
+  return /\.parser\.js$/i.test(String(src.url == null ? "" : src.url).split(/[?#]/)[0]);
+}
+
+/** 这个源是不是插件源(kind 或路径任一命中;解析器不算) */
 export function isPluginSource(src) {
   if (!src) return false;
+  if (isParserSource(src)) return false;
   return isPluginKind(src.kind || src.type) || isPluginPath(src.url);
 }
 
@@ -160,14 +188,17 @@ async function handleHttp(d) {
 }
 
 function timeoutFor(hook) {
+  // 解析器的两个钩子都短:整条解析链最多 20 秒(ui/app.js 里另有总预算),
+  // 单个解析器 10 秒 —— 卡住的站点不能把播放一直吊着。
+  if (hook === "parse" || hook === "match") return 10000;
   return hook === "play" ? 60000 : 30000;
 }
 
 /**
  * 在沙箱里跑一个插件钩子。
  * @param {string} path 插件文件路径(同时做插件实例的缓存键)
- * @param {string} hook filters / list / search / detail / play
- * @param {object} arg  钩子参数
+ * @param {string} hook filters / list / search / detail / play,解析器是 match / parse
+ * @param {object|string} arg 钩子参数;`match` 传页面地址(字符串)
  */
 export async function callPlugin(path, hook, arg) {
   if (!frame) throw new Error("插件宿主还没初始化");
