@@ -31,6 +31,21 @@ reelbox.parser({
 });
 ```
 
+### 谁会把页面交给解析器
+
+两条来源,宿主一视同仁:
+
+- **CMS 源**:播放地址取回来是 HTML、里面又没有 m3u8 → `Stream.page = true`;
+- **插件源**:`play` 返回的档位标了 `mime: "text/html"`(或 `page: true`)→ 同样进解析链。
+
+插件这么写就够了:
+
+```js
+async play() {
+  return [{ quality: "自动", url: "https://example.com/share/1", mime: "text/html" }];
+}
+```
+
 入口是 `reelbox.parser({...})`(和源插件的 `reelbox.define({...})` 是两个入口)。
 一个文件只写一个入口;写成 `reelbox.define` 就是源插件,不是解析器。
 

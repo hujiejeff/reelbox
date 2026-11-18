@@ -4077,7 +4077,10 @@ async function pluginStream(groupId, episodeId) {
     episodeId: episodeId,
     purpose: "playback",
   });
-  const list = (res && (res.sources || res.streams)) || (res && res.url ? [res] : []);
+  // play 允许直接返回数组(多档清晰度),别只认 {sources}/{streams}/单对象
+  const list = Array.isArray(res)
+    ? res
+    : (res && (res.sources || res.streams)) || (res && res.url ? [res] : []);
   const usable = list.filter((s) => s && typeof s.url === "string" && /^https?:\/\//i.test(s.url));
   if (!usable.length) throw new Error(res && res.error ? String(res.error) : "插件没有给出可播放的地址");
   // 登记进服务端白名单:player_url 只认本次会话 play 出来的地址
@@ -4092,6 +4095,13 @@ async function pluginStream(groupId, episodeId) {
       url: s.url,
     })),
   };
+}
+
+/** 这条流是不是"一张网页":CMS 抽不到 m3u8 会标 page,插件也可以直接给 text/html */
+function isPageStream(st) {
+  if (!st) return false;
+  if (st.page === true) return true;
+  return String(st.mime || "").toLowerCase().indexOf("text/html") === 0;
 }
 
 /** 播放代际:切集 / 关播放器都 +1,让上一条(可能还在解析的)链路立刻作废 */
@@ -4124,8 +4134,10 @@ async function playEpisode(id, name, groupId) {
       ? await pluginStream(groupId, id)
       : await invoke("play", { source: S.source, episodeId: id });
     if (gen !== playSeq) return; // 期间切集 / 关了播放器:这条链路作废
-    // 这个源只给了一张解析页:交给解析器插件链(见 ui/parser-chain.js)
-    if (st && st.page === true) {
+    // 这个源只给了一张解析页:交给解析器插件链(见 ui/parser-chain.js)。
+    // 插件也可能给 page(它自己标了 text/html),这种情况同样该走解析器 ——
+    // 否则 hls.js 只会拿着 HTML 报 manifestParsingError。
+    if (st && isPageStream(st)) {
       const parsed = await runParserChain({
         parsers: parserSources(), pageUrl: st.url, headers: st.headers,
         call: callPlugin, allow: (urls) => invoke("plugin_stream_allow", { urls }),
