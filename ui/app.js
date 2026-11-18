@@ -850,7 +850,7 @@ function errorInfo(step, e) {
         : "这个源没给出可播放的流。换一条线路,或者换源试试。";
   } else if (kind === "network") {
     title = label + "失败:网络没通";
-    hint = "源站连不上或超时了。检查网络后重试;一直不行就换个源。";
+    hint = "源站连不上或超时了。如果你在用代理/加速器,点「代理设置」看一眼;不用代理就换个源重试。";
   } else {
     title = label + "失败";
     hint = "可以先重试一次;反复失败就换个源。";
@@ -3003,7 +3003,9 @@ async function saveNet(mode, url) {
 const SET_PAGES = [
   { key: "src", icon: "dns", title: "源", group: 0 },
   { key: "play", icon: "play_circle", title: "播放", group: 0 },
-  { key: "net", icon: "wifi", title: "网络", group: 0 },
+  // 隐藏项:普通用户只需要"跟随系统"。入口只在网络类错误里出现(见 showListError),
+  // 需要时用 openSetPage("net") 进来 —— 所以它还在 SET_PAGES 里,只是不渲染成行
+  { key: "net", icon: "wifi", title: "网络", group: 0, hidden: true },
   { key: "look", icon: "palette", title: "外观", group: 0 },
   { key: "debug", icon: "terminal", title: "调试", group: 1 },
   { key: "about", icon: "info", title: "关于", group: 1 },
@@ -3085,12 +3087,13 @@ function renderSetHome() {
   const main = $("setGroupMain");
   const low = $("setGroupLow");
   const pages = setPages();
-  if (main) main.innerHTML = pages.filter((p) => p.group === 0).map(setEntryHtml).join("");
-  if (low) low.innerHTML = pages.filter((p) => p.group === 1).map(setEntryHtml).join("");
+  const shown = pages.filter((p) => !p.hidden);
+  if (main) main.innerHTML = shown.filter((p) => p.group === 0).map(setEntryHtml).join("");
+  if (low) low.innerHTML = shown.filter((p) => p.group === 1).map(setEntryHtml).join("");
 
   const master = $("setMaster");
   if (master) {
-    master.innerHTML = pages.map(
+    master.innerHTML = shown.map(
       (p) =>
         '<button type="button" class="set-navrow" role="tab" data-page="' + p.key +
         '" aria-selected="' + (setPage === p.key ? "true" : "false") + '">' +
@@ -4458,13 +4461,18 @@ function showListError(info, retry) {
     msg: info.hint,
     actions: unsupported
       ? [{ id: "switch", label: "去换源", primary: true }, { id: "retry", label: "重试" }]
-      : [{ id: "retry", label: "重试", primary: true }, { id: "switch", label: "源管理" }],
+      : info.kind === "network"
+        ? [{ id: "retry", label: "重试", primary: true }, { id: "net", label: "代理设置" }, { id: "switch", label: "源管理" }]
+        : [{ id: "retry", label: "重试", primary: true }, { id: "switch", label: "源管理" }],
     raw: info.raw,
   });
   const retryBtn = el.querySelector('[data-act="retry"]');
   if (retryBtn) retryBtn.onclick = () => (retry ? retry() : loadItems());
   const sw = el.querySelector('[data-act="switch"]');
   if (sw) sw.onclick = openSourceManager;
+  // 连不上才给"代理设置":平时不占位置,出问题能一步到位
+  const nb = el.querySelector('[data-act="net"]');
+  if (nb) nb.onclick = () => { showView("settings"); openSetPage("net"); };
 }
 
 /** 翻页失败:已经加载的内容留着,在后面补一条可点的重试 */
