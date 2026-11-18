@@ -57,6 +57,7 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 | [docs/PARSERS.md](docs/PARSERS.md) | 解析器插件(从网页取播放地址) |
 | [docs/SOURCES.md](docs/SOURCES.md) | 源与插件的区别、存放位置、回落规则 |
 | [docs/PLAYBACK.md](docs/PLAYBACK.md) | 播放架构、反代设计、已知限制 |
+| [docs/NETWORK.md](docs/NETWORK.md) | 网络出口:系统代理、FakeIP、超时与重试 |
 | [docs/DESIGN-SPEC-UI.md](docs/DESIGN-SPEC-UI.md) | 界面规格 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 迭代路线 |
 
