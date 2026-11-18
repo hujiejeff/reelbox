@@ -2,9 +2,11 @@
 //! WebView 里直接播 m3u8 有三个坑:桌面 Chromium 不认 HLS、跨域被拦、防盗链要带 UA/Referer。
 //! 这里起一个 127.0.0.1 上的小服务,把 m3u8 和分片都代理一遍,顺手改写里面的地址。
 
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine as _;
@@ -16,6 +18,15 @@ use crate::logging;
 static PORT: OnceLock<u16> = OnceLock::new();
 const MAX_BYTES: u64 = 96 << 20;
 
+/// 表里最多留这么多条:一条 = 一个地址 + 一串头,几千条也就几 MB,
+/// 但足够覆盖"一部剧所有分集 + 直播清单反复刷新"的量
+const MAX_SESSIONS: usize = 4096;
+/// 超过这么久的条目在插入时顺手清掉。直播清单每次刷新都会重新 wrap,
+/// 6 小时前的会话不可能还有播放器在用
+const SESSION_TTL_SECS: u64 = 6 * 3600;
+
+/// 只给测试用:构造一条老的 `/p?u=…&h=…` 地址,验证兼容路径还能解出来
+#[cfg(test)]
 fn enc(s: &str) -> String {
     B64.encode(s.as_bytes())
 }
@@ -26,14 +37,132 @@ fn dec(s: &str) -> Option<String> {
         .and_then(|v| String::from_utf8(v).ok())
 }
 
+/// 一个播放会话:真实地址 + 请求头。
+///
+/// 以前这两样就编码在 URL 里(`/p?u=&h=`),后果是 Cookie/Authorization 会跟着
+/// 地址进日志和播放器调试面板,地址还会随头的大小无限变长。现在 URL 里只有短 id。
+struct Session {
+    url: String,
+    headers: String,
+    /// 插入(或最近一次命中)的 Unix 秒,给 TTL 用
+    at: u64,
+}
+
+/// 会话表 + 插入顺序。两者必须一起改,所以放进同一个锁里
+struct Sessions {
+    map: HashMap<String, Session>,
+    /// 淘汰按这个来。同一个 id 重插入不再记一次(见 `remember`)
+    order: VecDeque<String>,
+}
+
+static SESSIONS: OnceLock<Mutex<Sessions>> = OnceLock::new();
+
+fn sessions() -> &'static Mutex<Sessions> {
+    SESSIONS.get_or_init(|| Mutex::new(Sessions::new()))
+}
+
+/// 中毒也要能用:反代线程 panic 过一次就不该让播放永久瘫痪
+fn lock() -> std::sync::MutexGuard<'static, Sessions> {
+    match sessions().lock() {
+        Ok(g) => g,
+        Err(poison) => poison.into_inner(),
+    }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 会话 id:和 `source::id_for_url` 同一套(FNV-1a 32 位 / 8 位十六进制),
+/// 界面上看到的短串风格就一致了。请求头也参与:同一地址换一套头是另一路流。
+fn session_id(url: &str, headers: &str) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    let sep = 0x1fu16; // 分隔符:避免 ("ab","c") 和 ("a","bc") 撞成同一个 id
+    for unit in url
+        .encode_utf16()
+        .chain(std::iter::once(sep))
+        .chain(headers.encode_utf16())
+    {
+        h ^= unit as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("{h:08x}")
+}
+
+/// 记住一个会话,返回它的 id(进程级会话表那颗锁的入口)
+fn remember(url: &str, headers: &str) -> String {
+    lock().remember(url, headers, now_secs())
+}
+
+/// 按 id 取回 (url, headers)。取不到就是过期/被淘汰了
+fn recall(id: &str) -> Option<(String, String)> {
+    lock().recall(id)
+}
+
+impl Sessions {
+    fn new() -> Self {
+        Sessions {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    /// 记住一个会话,返回它的 id。
+    /// 同一个 (url, headers) 永远得到同一个 id —— 直播清单每次刷新都会重新 wrap,
+    /// 每次都插一条的话表会无限膨胀。
+    fn remember(&mut self, url: &str, headers: &str, now: u64) -> String {
+        let id = session_id(url, headers);
+        self.purge_expired(now);
+        if let Some(s) = self.map.get_mut(&id) {
+            // 命中已有会话:只刷新时间。插入顺序不动,否则热门清单会一直把自己顶成
+            // "最新",淘汰就永远淘汰不到它
+            s.at = now;
+            return id;
+        }
+        self.map.insert(
+            id.clone(),
+            Session {
+                url: url.to_string(),
+                headers: headers.to_string(),
+                at: now,
+            },
+        );
+        self.order.push_back(id.clone());
+        while self.map.len() > MAX_SESSIONS {
+            match self.order.pop_front() {
+                Some(old) => {
+                    self.map.remove(&old);
+                }
+                None => break,
+            }
+        }
+        id
+    }
+
+    fn recall(&self, id: &str) -> Option<(String, String)> {
+        self.map.get(id).map(|s| (s.url.clone(), s.headers.clone()))
+    }
+
+    /// 清掉超过 TTL 的条目,并让 `order` 和 `map` 一一对应。
+    ///
+    /// `order` 得跟着一起对齐:只按时间清 `map` 的话,被清掉的 id 会一直躺在队列中间,
+    /// 直到哪天被淘汰到队首 —— 长时间追剧下来队列只涨不落,属于慢漏。
+    fn purge_expired(&mut self, now: u64) {
+        self.map
+            .retain(|_, s| now.saturating_sub(s.at) < SESSION_TTL_SECS);
+        let map = &self.map;
+        self.order.retain(|id| map.contains_key(id));
+    }
+}
+
 /// 把绝对地址包成本地代理地址
 pub fn wrap(url: &str, headers: &str) -> String {
     let port = ensure();
-    format!(
-        "http://127.0.0.1:{port}/p?u={}&h={}",
-        enc(url),
-        enc(headers)
-    )
+    let id = remember(url, headers);
+    format!("http://127.0.0.1:{port}/s/{id}")
 }
 
 /// 起服务(只起一次),返回端口
@@ -90,13 +219,37 @@ const SEG_LOG_FIRST: usize = 6;
 
 fn handle(req: tiny_http::Request) {
     let url = req.url().to_string();
-    if !url.starts_with("/p?") {
-        let _ = req.respond(Response::empty(404));
-        return;
-    }
-    let (Some(target), headers) = (query(&url, "u"), query(&url, "h").unwrap_or_default()) else {
-        let _ = req.respond(Response::empty(400));
-        return;
+    // 新地址只带会话 id;老地址 `/p?u=&h=` 继续认(已缓存的页面、别人存的调试地址)
+    let (target, headers) = match url.strip_prefix("/s/") {
+        Some(id) => {
+            let id = id.split(['?', '#']).next().unwrap_or(id);
+            match recall(id) {
+                Some(s) => s,
+                None => {
+                    logging::event(&format!("PROXY 会话不存在 id={}", short(id, 40)));
+                    send_status(
+                        req,
+                        404,
+                        "播放会话已过期，请重新点播".as_bytes().to_vec(),
+                        "text/plain; charset=utf-8",
+                    );
+                    return;
+                }
+            }
+        }
+        None if url.starts_with("/p?") => {
+            let (Some(target), headers) =
+                (query(&url, "u"), query(&url, "h").unwrap_or_default())
+            else {
+                let _ = req.respond(Response::empty(400));
+                return;
+            };
+            (target, headers)
+        }
+        None => {
+            let _ = req.respond(Response::empty(404));
+            return;
+        }
     };
     // 头一次转成键值对:既要发给源站,也要写进日志
     let pairs: Vec<(String, String)> = serde_json::from_str::<Vec<Vec<String>>>(&headers)
@@ -407,13 +560,16 @@ mod tests {
     }
 
     /// 改写后的地址 → 它指向的真实地址。
-    /// 不断言地址长什么样:id 怎么算、要不要编码都是实现细节(会话表那版就是 `/s/<id>`)。
+    /// 只认"表里能查回这个地址",不比对地址长什么样:id 怎么算、用不用编码都是实现细节。
     fn target_of(addr: &str) -> String {
         assert!(
             addr.starts_with("http://127.0.0.1:"),
             "应该被包成本地代理地址: {addr}"
         );
-        query(addr, "u").unwrap_or_else(|| panic!("代理地址里应该能解出真实地址: {addr}"))
+        let id = addr.rsplit('/').next().unwrap_or_default();
+        recall(id)
+            .unwrap_or_else(|| panic!("会话表里应该有这个 id: {addr}"))
+            .0
     }
 
     /// 从 `#EXT-X-KEY:…,URI="…"` 这类属性行里取出 URI 的值
@@ -513,5 +669,101 @@ mod tests {
         assert_eq!(hop_note("https://a/x", "https://a/x"), "");
         let note = hop_note("https://a/x", "https://b/y");
         assert!(note.contains("base=https://b/y"), "{note}");
+    }
+
+    // ---- 播放会话 ----
+
+    #[test]
+    fn same_pair_always_gets_the_same_id() {
+        let mut t = Sessions::new();
+        let url = "https://v.example/live/index.m3u8";
+        let headers = "[[\"Referer\",\"https://v.example/\"]]";
+        let a = t.remember(url, headers, 1_000);
+        let b = t.remember(url, headers, 1_001);
+        assert_eq!(a, b, "直播清单每次刷新都会重新 wrap,id 必须稳定");
+        assert_eq!(a.len(), 8, "8 位十六进制,和 source 的 id 风格一致: {a}");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "{a}");
+        // 同一地址换一套头就是另一路流,不能共用会话
+        let other = t.remember(url, "[]", 1_002);
+        assert_ne!(a, other);
+    }
+
+    #[test]
+    fn recall_returns_the_registered_pair() {
+        let mut t = Sessions::new();
+        let url = "https://v.example/a/index.m3u8?sig=2";
+        let headers = "[[\"User-Agent\",\"Mozilla/5.0\"],[\"Cookie\",\"sid=1\"]]";
+        let id = t.remember(url, headers, 1_000);
+        assert_eq!(t.recall(&id), Some((url.to_string(), headers.to_string())));
+    }
+
+    #[test]
+    fn recall_unknown_id_is_none() {
+        assert_eq!(Sessions::new().recall("不存在"), None);
+        assert_eq!(recall("不存在"), None);
+    }
+
+    #[test]
+    fn table_is_capped_and_drops_the_oldest() {
+        let mut t = Sessions::new();
+        let n = MAX_SESSIONS + 4;
+        let ids: Vec<String> = (0..n)
+            .map(|i| t.remember(&format!("https://v.example/seg-{i}.ts"), "[]", 1_000 + i as u64))
+            .collect();
+        assert_eq!(t.map.len(), MAX_SESSIONS, "表不能超过上限");
+        assert!(
+            t.recall(ids.first().unwrap()).is_none(),
+            "最早的那条应该被淘汰"
+        );
+        assert!(
+            t.recall(ids.last().unwrap()).is_some(),
+            "最新的那条必须还在"
+        );
+    }
+
+    #[test]
+    fn expired_entries_do_not_pile_up_in_the_order_queue() {
+        let mut t = Sessions::new();
+        let t0 = 1_000_000u64;
+        let a = t.remember("https://v.example/a.m3u8", "[]", t0);
+        let b = t.remember("https://v.example/b.m3u8", "[]", t0 + 10);
+        // 6 小时后 C 进来:A 过期被清掉,但它在队列中间(B 还没到期)
+        t.remember("https://v.example/c.m3u8", "[]", t0 + SESSION_TTL_SECS + 1);
+        assert!(t.recall(&a).is_none(), "超过 6 小时就该清掉");
+        assert!(t.recall(&b).is_some(), "没到期的要留着");
+        assert_eq!(
+            t.order.len(),
+            t.map.len(),
+            "队列里不能留着已清掉的 id —— 长期追剧会只涨不落"
+        );
+    }
+
+    #[test]
+    fn wrap_keeps_headers_out_of_the_url() {
+        let headers = "[[\"Cookie\",\"sid=secret-value\"]]";
+        let addr = wrap("https://v.example/a/index.m3u8", headers);
+        assert!(addr.contains("/s/"), "{addr}");
+        assert!(!addr.contains('?'), "地址里不该再有查询串: {addr}");
+        assert!(!addr.contains("secret"), "请求头不能进地址: {addr}");
+        assert!(addr.len() < 40, "地址要短: {addr}");
+        assert_eq!(target_of(&addr), "https://v.example/a/index.m3u8");
+    }
+
+    #[test]
+    fn legacy_p_address_still_decodes() {
+        // 老地址 `/p?u=<b64>&h=<b64>` 必须继续能用:已缓存的页面、存下来的调试地址
+        let addr = format!(
+            "/p?u={}&h={}",
+            enc("https://v.example/a/index.m3u8"),
+            enc("[[\"Referer\",\"https://v.example/\"]]")
+        );
+        assert_eq!(
+            query(&addr, "u").as_deref(),
+            Some("https://v.example/a/index.m3u8")
+        );
+        assert_eq!(
+            query(&addr, "h").as_deref(),
+            Some("[[\"Referer\",\"https://v.example/\"]]")
+        );
     }
 }
