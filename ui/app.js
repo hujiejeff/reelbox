@@ -10,6 +10,8 @@ import {
   PARSER_KIND,
   PLUGIN_KIND,
 } from "./plugin-host.js";
+// 解析器链路是纯逻辑(不碰 DOM / tauri),抽出去才能 node --test
+import { runParserChain } from "./parser-chain.js";
 import { buildSrcPanel } from "./src-panel.js";
 import { openSheet } from "./sheet.js";
 import { closeMenu, menuOpen, openMenu } from "./menu.js";
@@ -4052,120 +4054,7 @@ function openPlayer(url, name, mime, kind) {
   }
 }
 
-/* ---------- 解析器链路:分享页 → 可播地址 ---------- */
-// 有的源只给网页地址(cms.rs 里抽不到 m3u8 就把 Stream.page 置 true)。
-// 这时按顺序问「设置 → 源 → 解析器」里的插件:第一个认出页面、又给出地址的就算数。
-//   * 串行,不并行:并行会把站点打爆,也看不出是哪个解析器解的;
-//   * 整条链最多 20 秒,单个解析器最多 10 秒;
-//   * 切集/关播放器把 playSeq 换代,链上每个 await 之后都会立刻退出。
-// 契约见 docs/PARSERS.md。
-
-const PARSER_TOTAL_MS = 20000; // 整条解析链的预算
-const PARSER_ONE_MS = 10000; // 单个解析器(match + parse)的预算
-
-/** 给任意 Promise 加一个截止时间:插件卡住不能把播放一直吊着 */
-function withTimeout(promise, ms, tag) {
-  if (!(ms > 0)) return Promise.reject(new Error((tag || "解析") + " 没有时间预算了"));
-  return new Promise((resolve, reject) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      reject(new Error((tag || "解析") + " 超时(" + ms + "ms)"));
-    }, ms);
-    Promise.resolve(promise).then(
-      (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } },
-      (e) => { if (!done) { done = true; clearTimeout(timer); reject(e); } }
-    );
-  });
-}
-
-/**
- * 解析器的返回值三种形态都收(别让插件作者猜):
- *   {quality, url} / {streams:[{quality,url}]} / [{quality,url}]
- */
-function parserStreamsOf(res) {
-  const out = [];
-  const push = (o) => {
-    if (!o || typeof o !== "object") return;
-    const url = String(o.url == null ? "" : o.url).trim();
-    if (!/^https?:\/\//i.test(url)) return;
-    out.push({ quality: String(o.quality || o.name || "档 " + (out.length + 1)), url: url });
-  };
-  if (Array.isArray(res)) res.forEach(push);
-  else if (res && Array.isArray(res.streams)) res.streams.forEach(push);
-  else if (res && Array.isArray(res.sources)) res.sources.forEach(push); // 顺手兼容 play 的形状
-  else push(res);
-  return out;
-}
-
-/** 解析出来的地址是 mp4 还是清单:后缀能看出来就先猜,真正的类型由 stream_kind 探 */
-function parserMime(url) {
-  return /\.mp4(\?|#|$)/i.test(String(url || ""))
-    ? "video/mp4"
-    : "application/vnd.apple.mpegurl";
-}
-
-/**
- * 依序问所有解析器,第一个成功就用它。返回内部 Stream 形状,全失败返回 null。
- * gen 是播放代际:变了(切集 / 关播放器)就立刻放弃。
- */
-async function parsePageStream(st, gen) {
-  const parsers = parserSources();
-  const pageUrl = String(st.url || "");
-  if (!parsers.length) {
-    log("parser: 没有解析器,page =", shortUrl(pageUrl, 120));
-    return null;
-  }
-  const deadline = Date.now() + PARSER_TOTAL_MS;
-  for (const src of parsers) {
-    if (gen !== playSeq) return null;
-    const name = String(src.name || "解析器");
-    const t0 = Date.now();
-    // 单个解析器的剩余预算:自己的 10 秒,整条链的 20 秒,取更紧的那个
-    const left = () => Math.max(0, Math.min(PARSER_ONE_MS - (Date.now() - t0), deadline - Date.now()));
-    if (left() <= 0) break;
-    try {
-      pStatus("解析中:" + name);
-      const hit = await withTimeout(callPlugin(src.url, "match", pageUrl), left(), "match");
-      if (!hit) {
-        log("parser skip", name, "(match=false)");
-        continue;
-      }
-      const res = await withTimeout(
-        callPlugin(src.url, "parse", { url: pageUrl, headers: st.headers || {} }),
-        left(),
-        "parse"
-      );
-      if (gen !== playSeq) return null;
-      const streams = parserStreamsOf(res);
-      if (!streams.length) {
-        log("parser skip", name, "(没有给出可播地址)");
-        continue;
-      }
-      // 登记进服务端白名单:player_url 只认本次会话里给出的地址
-      await invoke("plugin_stream_allow", { urls: streams.map((s) => s.url) });
-      log("parser hit", name, "→", shortUrl(streams[0].url, 160), "档=" + streams.length);
-      const headers = Object.assign({}, st.headers || {});
-      // 解析出来的地址大多要 Referer = 原页面,没有就补上
-      if (!Object.keys(headers).some((k) => k.toLowerCase() === "referer") && /^https?:/i.test(pageUrl)) {
-        headers.Referer = pageUrl;
-      }
-      return {
-        url: streams[0].url,
-        mime: parserMime(streams[0].url),
-        headers: headers,
-        options: streams.map((s, i) => ({ quality: s.quality || "档 " + (i + 1), url: s.url })),
-        page: false,
-      };
-    } catch (e) {
-      // 一个解析器失败不该拖死整条链:记下来,问下一个
-      log("parser fail", name, errText(e));
-    }
-  }
-  log("parser: 全部失败,page =", shortUrl(pageUrl, 120), "n=" + parsers.length);
-  return null;
-}
+// 解析器链路(分享页 → 可播地址)在 ui/parser-chain.js:纯逻辑,能 node --test。
 
 /** 只有解析页、又没解析出地址:播放器里给具体下一步(去设置 / 换线路) */
 function pageOnlyFail(st) {
@@ -4235,9 +4124,13 @@ async function playEpisode(id, name, groupId) {
       ? await pluginStream(groupId, id)
       : await invoke("play", { source: S.source, episodeId: id });
     if (gen !== playSeq) return; // 期间切集 / 关了播放器:这条链路作废
-    // 这个源只给了一张解析页:交给解析器插件链(见 parsePageStream)
+    // 这个源只给了一张解析页:交给解析器插件链(见 ui/parser-chain.js)
     if (st && st.page === true) {
-      const parsed = await parsePageStream(st, gen);
+      const parsed = await runParserChain({
+        parsers: parserSources(), pageUrl: st.url, headers: st.headers,
+        call: callPlugin, allow: (urls) => invoke("plugin_stream_allow", { urls }),
+        isAlive: () => gen === playSeq, status: pStatus, log,
+      });
       if (gen !== playSeq) return;
       if (!parsed) {
         pageOnlyFail(st);

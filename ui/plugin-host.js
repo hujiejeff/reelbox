@@ -188,7 +188,7 @@ async function handleHttp(d) {
 }
 
 function timeoutFor(hook) {
-  // 解析器的两个钩子都短:整条解析链最多 20 秒(ui/app.js 里另有总预算),
+  // 解析器的两个钩子都短:整条解析链最多 20 秒(ui/parser-chain.js 里另有总预算),
   // 单个解析器 10 秒 —— 卡住的站点不能把播放一直吊着。
   if (hook === "parse" || hook === "match") return 10000;
   return hook === "play" ? 60000 : 30000;

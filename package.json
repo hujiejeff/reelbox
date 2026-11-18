@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:ui": "node --test ui/parser-chain.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0"
