@@ -15,16 +15,11 @@ pub const DEFAULT_UA: &str =
 /// 一个苹果 CMS 源的客户端。
 pub struct Client {
     src: Source,
-    agent: ureq::Agent,
 }
 
 impl Client {
     pub fn new(src: Source) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(35))
-            .user_agent(DEFAULT_UA)
-            .build();
-        Self { src, agent }
+        Self { src }
     }
 
     pub fn source(&self) -> &Source {
@@ -48,12 +43,9 @@ impl Client {
             url.push(sep);
             url.push_str(&qs);
         }
-        let resp = self
-            .agent
-            .get(&url)
-            .call()
-            .map_err(|e| format!("NETWORK: {e}"))?;
-        resp.into_string().map_err(|e| format!("NETWORK: {e}"))
+        // 代理由 net::proxy 每次解析,超时/重试在 net::http 里统一管
+        let resp = crate::net::http::get(&url, &[("User-Agent", DEFAULT_UA.to_string())])?;
+        resp.text().map_err(|e| format!("NETWORK: {e}"))
     }
 
     /// 取一页条目,page 从 1 开始。
@@ -492,32 +484,29 @@ fn resolve_media(url: &str) -> (String, Option<String>) {
     if lower.contains(".m3u8") || lower.contains(".mp4") {
         return (url.to_string(), None);
     }
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(12))
-        .build();
-    let resp = match agent
-        .get(url)
-        .set("User-Agent", DEFAULT_UA)
-        .set("Referer", url)
-        .call()
-    {
+    let headers = [
+        ("User-Agent", DEFAULT_UA.to_string()),
+        ("Referer", url.to_string()),
+    ];
+    let resp = match crate::net::http::get(url, &headers) {
         Ok(r) => r,
         Err(_) => return (url.to_string(), None),
     };
-    let ct = resp.header("content-type").unwrap_or("").to_lowercase();
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
     if ct.contains("mpegurl") || ct.contains("video/") {
         return (url.to_string(), None);
     }
-    let mut body = String::new();
-    use std::io::Read as _;
-    if resp
-        .into_reader()
-        .take(4 << 20)
-        .read_to_string(&mut body)
-        .is_err()
-    {
+    if resp.status().as_u16() >= 400 {
         return (url.to_string(), None);
     }
+    let Ok(body) = resp.text() else {
+        return (url.to_string(), None);
+    };
     match extract_m3u8(&body, url) {
         Some(media) => (media, Some(url.to_string())),
         None => (url.to_string(), None),

@@ -12,17 +12,11 @@ fn main() {
     let arg = args.get(3).cloned().unwrap_or_else(|| "{}".into());
 
     let fetch = Box::new(|url: &str| -> Option<String> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(15))
-            .build();
-        match agent
-            .get(url)
-            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36")
-            .call()
-        {
+        let headers = [("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36".to_string())];
+        match reelbox_core::net::http::get(url, &headers) {
             Ok(r) => {
                 let mut s = String::new();
-                let _ = r.into_reader().take(4_000_000).read_to_string(&mut s);
+                let _ = r.take(4_000_000).read_to_string(&mut s);
                 eprintln!("[fetch] {} -> {} bytes", &url[..url.len().min(80)], s.len());
                 Some(s)
             }

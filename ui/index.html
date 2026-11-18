@@ -1375,7 +1375,53 @@
               </div>
             </section>
 
-            <!-- 3. 外观 -->
+            <!-- 3. 网络 -->
+            <section class="set-page" data-page="net">
+              <header class="set-page__bar">
+                <button type="button" class="set-page__back" data-back aria-label="返回">
+                  <span class="m3e-icon" aria-hidden="true">arrow_back</span>
+                </button>
+                <h2 class="set-page__title">网络</h2>
+              </header>
+              <div class="set-page__scroll">
+                <div class="set-page__body">
+                  <p class="set-page__sub">采集站、封面、播放清单都走这条出口。换代理端口不用重启。</p>
+
+                  <div class="set-row">
+                    <div class="set-row__text">
+                      <b>代理</b><span>跟随系统 = 环境变量,再看 Windows 的「Internet 选项」</span>
+                    </div>
+                    <div class="seg" id="segProxy">
+                      <button data-m="system">跟随系统</button>
+                      <button data-m="manual">手动</button>
+                      <button data-m="off">不使用</button>
+                    </div>
+                  </div>
+
+                  <div class="set-block">
+                    <div class="set-block__head"><span class="set-block__title">手动地址</span></div>
+                    <input class="dlg-input" id="proxyUrl" type="text" inputmode="url"
+                           placeholder="127.0.0.1:7890" aria-label="代理地址" autocomplete="off" spellcheck="false">
+                    <div class="set-acts">
+                      <button type="button" class="m3e-button m3e-button--filled" id="btnSaveProxy">保存</button>
+                    </div>
+                  </div>
+
+                  <div class="set-block">
+                    <div class="set-block__head"><span class="set-block__title">当前生效</span></div>
+                    <p class="set-mono" id="proxyNow">读取中…</p>
+                    <p class="set-note" id="proxyNote"></p>
+                  </div>
+
+                  <div class="set-block">
+                    <div class="set-block__head"><span class="set-block__title">设置文件</span></div>
+                    <p class="set-mono" id="proxyPath">读取中…</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- 4. 外观 -->
             <section class="set-page" data-page="look">
               <header class="set-page__bar">
                 <button type="button" class="set-page__back" data-back aria-label="返回">
@@ -1426,7 +1472,7 @@
               </div>
             </section>
 
-            <!-- 4. 调试 -->
+            <!-- 5. 调试 -->
             <section class="set-page" data-page="debug">
               <header class="set-page__bar">
                 <button type="button" class="set-page__back" data-back aria-label="返回">
@@ -1460,7 +1506,7 @@
               </div>
             </section>
 
-            <!-- 5. 关于 -->
+            <!-- 6. 关于 -->
             <section class="set-page" data-page="about">
               <header class="set-page__bar">
                 <button type="button" class="set-page__back" data-back aria-label="返回">

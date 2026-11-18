@@ -16,6 +16,7 @@ pub fn run() {
             // 数据目录必须在这里解析:Android/iOS 上只有 Tauri 起来之后才知道应用私有目录在哪。
             // 桌面解析结果仍然是 %APPDATA%/reelbox,老用户数据不受影响(见 paths.rs)。
             paths::init(app.handle());
+            wire_network();
             boot_log();
             Ok(())
         })
@@ -41,9 +42,26 @@ pub fn run() {
             commands::selftest_mode,
             commands::selftest_title,
             commands::selftest_report,
+            commands::network_settings,
+            commands::save_network_settings,
         ])
         .run(tauri::generate_context!())
         .expect("reelbox: 启动失败");
+}
+
+/// 把 core 的网络层接到宿主上:
+/// - 日志出口:代理换了、请求重试了,都写进同一个日志文件
+/// - 设置目录:core 不认识 Tauri,`settings.json` 的真实位置由这里告诉它(移动端必须)
+fn wire_network() {
+    reelbox_core::net::set_logger(logging::event);
+    reelbox_core::net::proxy::bind_dir(paths::base_dir());
+    // 启动就把解析结果记一条:出问题时第一时间能看出"走没走代理"
+    let route = reelbox_core::net::proxy::route();
+    logging::event(&format!(
+        "NET proxy={} note={}",
+        route.proxy.as_deref().unwrap_or("direct"),
+        route.note
+    ));
 }
 
 /// 启动标记:用来区分"路径不可写"和"前端没调用"。

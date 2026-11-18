@@ -2,5 +2,6 @@
 
 pub mod image;
 pub mod model;
+pub mod net;
 pub mod plugin;
 pub mod source;

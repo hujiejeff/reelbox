@@ -3,6 +3,11 @@
 //! 插件跑在 WebView 的沙箱 iframe 里,但它的每一个请求最终都由 Rust 的
 //! `plugin_fetch` 发出。插件是不可信代码,所以这里必须挡掉指向本机和内网的地址:
 //! 否则一个恶意插件就能借宿主之手扫描 `127.0.0.1`、`192.168.*` 这些地址。
+//!
+//! 「哪些地址算内网」的判定在 [`crate::net::policy`]:那边还处理了 FakeIP
+//! (`198.18.0.0/15`,走 Clash 时必须放行)和 `::ffff:` 映射地址。
+
+use std::net::IpAddr;
 
 /// 从 URL 里取出主机名(小写,去掉 IPv6 的方括号),取不到返回 None
 pub fn host_of(url: &str) -> Option<String> {
@@ -48,49 +53,16 @@ pub fn host_of(url: &str) -> Option<String> {
 /// 这个地址是不是只属于本机/内网(以及非 http(s) 协议)
 pub fn is_private_url(url: &str) -> bool {
     match host_of(url) {
-        Some(host) => is_private_host(&host),
+        Some(host) => !crate::net::policy::allowed_host(&host),
         None => true,
     }
 }
 
-fn is_private_host(host: &str) -> bool {
-    if host == "localhost" || host.ends_with(".localhost") || host == "localhost.localdomain" {
-        return true;
-    }
-    // IPv6:回环、链路本地、唯一本地地址
-    if host.contains(':') {
-        let h = host.trim_start_matches('[').trim_end_matches(']');
-        if h == "::1" || h == "0:0:0:0:0:0:0:1" || h == "::" {
-            return true;
-        }
-        if h.starts_with("fe80:") || h.starts_with("fc") || h.starts_with("fd") {
-            return true;
-        }
-        // IPv4-mapped: ::ffff:127.0.0.1
-        if let Some(v4) = h.strip_prefix("::ffff:") {
-            return is_private_host(v4);
-        }
-        return false;
-    }
-    let octets: Vec<u8> = host.split('.').filter_map(|p| p.parse::<u8>().ok()).collect();
-    if octets.len() == 4 && host.split('.').count() == 4 {
-        let (a, b) = (octets[0], octets[1]);
-        return match (a, b) {
-            (0, _) | (127, _) => true,        // 本机 / 未指定
-            (10, _) => true,                  // 私有 A
-            (192, 168) => true,               // 私有 C
-            (172, 16..=31) => true,           // 私有 B
-            (169, 254) => true,               // 链路本地(云元数据常见)
-            (100, 64..=127) => true,          // CGNAT
-            _ => false,
-        };
-    }
-    // 纯数字形式的地址(如 2130706433 == 127.0.0.1):别让插件绕过去
-    if host.chars().all(|c| c.is_ascii_digit()) && host.len() >= 8 {
-        return true;
-    }
-    false
+/// 主机名里的字面量 IP(给 DNS 之后的二次检查用)
+pub fn literal_ip(host: &str) -> Option<IpAddr> {
+    crate::net::policy::ip_literal(host)
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -142,6 +114,24 @@ mod tests {
         ] {
             assert!(!is_private_url(u), "{u} 应该放行");
         }
+    }
+
+    #[test]
+    fn allows_fakeip_but_still_rejects_mapped_private() {
+        // Clash 的 FakeIP 段必须放行,否则挂代理时所有采集站都打不开
+        for u in [
+            "http://198.18.0.7/api.php/provide/vod",
+            "https://198.19.3.9/x",
+            "http://[::ffff:198.18.0.7]/x",
+        ] {
+            assert!(!is_private_url(u), "{u} 是 FakeIP,应放行");
+        }
+        // 映射写法不能成为后门
+        for u in ["http://[::ffff:127.0.0.1]/x", "http://[::ffff:192.168.1.1]/x"] {
+            assert!(is_private_url(u), "{u} 应被挡");
+        }
+        assert_eq!(literal_ip("[::ffff:198.18.0.7]").map(|i| i.to_string()).as_deref(), Some("::ffff:198.18.0.7"));
+        assert!(literal_ip("example.com").is_none());
     }
 
     #[test]

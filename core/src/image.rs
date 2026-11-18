@@ -7,21 +7,28 @@ use std::io::{Cursor, Read};
 /// 卡片最宽也就一两百像素,按 320 转足够清晰。
 pub const THUMB_WIDTH: u32 = 320;
 
-/// 带 UA 取一张图。
+/// 一张封面最多收这么大:源站的"封面"偶尔是个几百 MB 的错链接
+const MAX_IMAGE_BYTES: u64 = 16 << 20;
+
+/// 带 UA 取一张图。网络出口统一走 `net::http`(代理/超时/重试都在那里)。
 pub fn fetch(url: &str, ua: &str) -> Result<(Vec<u8>, String), String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(25))
-        .user_agent(ua)
-        .build();
-    let resp = agent.get(url).call().map_err(|e| format!("NETWORK: {e}"))?;
-    let ct = resp.header("content-type").unwrap_or("").to_string();
+    let resp = crate::net::http::get(url, &[("User-Agent", ua.to_string())])?;
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     let mut buf = Vec::new();
-    let mut reader = resp.into_reader();
+    let mut reader = resp;
     reader
         .by_ref()
-        .take(16 << 20)
+        .take(MAX_IMAGE_BYTES)
         .read_to_end(&mut buf)
         .map_err(|e| format!("NETWORK: {e}"))?;
+    if buf.is_empty() {
+        return Err("NETWORK: 封面是空的".into());
+    }
     Ok((buf, ct))
 }
 

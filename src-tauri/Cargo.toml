@@ -25,5 +25,6 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
+# 兼容老播放地址 `/p?u=…&h=…` 用(新地址是 `/s/<id>`,不再编码任何东西)
 base64 = "0.22"
-ureq = { version = "2", default-features = false, features = ["tls"] }
+# 网络统一走 core 里的 reqwest(见 reelbox_core::net),这里不再引第二套 HTTP 栈

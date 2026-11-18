@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
 
 use reelbox_core::model::{Detail, Filter, Page, Stream};
 use reelbox_core::plugin;
@@ -46,15 +45,13 @@ pub fn save_sources(list: Vec<Source>) -> Result<(), String> {
     std::fs::write(&path, text).map_err(|e| format!("写文件失败: {e}"))
 }
 
-/// 插件里的网络请求:统一带 UA
+/// 插件里的网络请求:统一带 UA,并且和别处一样走代理解析链
 fn boa_fetch() -> Box<dyn Fn(&str) -> Option<String>> {
     Box::new(|url: &str| {
-        ureq::get(url)
-            .timeout(std::time::Duration::from_secs(15))
-            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36")
-            .call()
+        let headers = [("User-Agent", FETCH_UA.to_string())];
+        reelbox_core::net::http::get(url, &headers)
             .ok()
-            .and_then(|r| r.into_string().ok())
+            .and_then(|r| r.text().ok())
     })
 }
 
@@ -131,43 +128,47 @@ pub async fn plugin_fetch(
 
 fn fetch_guarded(url: &str, headers: Option<&HashMap<String, String>>) -> Result<PluginResponse, String> {
     use std::io::Read as _;
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(20))
-        .redirects(0)
-        .build();
+    // 自己跟重定向:每一跳都要重新做一次"是不是内网"的检查
+    let client = reelbox_core::net::http::client_no_redirect();
     let mut target = url.to_string();
     for _ in 0..6 {
         if reelbox_core::plugin::net::is_private_url(&target) {
             return Err(format!("拒绝访问本机或内网地址: {target}"));
         }
-        let mut req = agent.get(&target).set("User-Agent", FETCH_UA);
-        if let Some(list) = headers {
-            for (k, v) in list {
+        let mut list: Vec<(&str, String)> = vec![("User-Agent", FETCH_UA.to_string())];
+        if let Some(map) = headers {
+            for (k, v) in map {
                 match k.to_ascii_lowercase().as_str() {
                     // 别让插件改掉连接层面的关键头
                     "host" | "content-length" | "connection" | "transfer-encoding" => continue,
-                    _ => req = req.set(k, v),
+                    _ => list.push((k.as_str(), v.clone())),
                 }
             }
         }
-        let resp = match req.call() {
-            Ok(r) => r,
-            Err(ureq::Error::Status(_, r)) => r,
-            Err(e) => return Err(format!("请求失败: {e}")),
-        };
-        let status = resp.status();
+        let resp = reelbox_core::net::http::get_once(&client, &target, &list)
+            .map_err(|e| format!("请求失败: {e}"))?;
+        let status = resp.status().as_u16();
         if (300..400).contains(&status) {
-            if let Some(loc) = resp.header("location") {
-                target = absolute_url(&target, loc);
+            let location = resp
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            if let Some(loc) = location {
+                target = absolute_url(&target, &loc);
                 continue;
             }
         }
         let mime = resp
-            .header("content-type")
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
             .unwrap_or("text/html")
             .to_string();
         let mut body = Vec::new();
-        resp.into_reader()
+        let mut reader = resp;
+        reader
+            .by_ref()
             .take(FETCH_MAX_BYTES)
             .read_to_end(&mut body)
             .map_err(|e| format!("读响应失败: {e}"))?;
@@ -261,6 +262,58 @@ pub fn apply_engine_arg(args: &[String]) {
     }
 }
 
+
+/* ---------- 设置 → 网络 ---------- */
+
+/// 设置页「网络」要的全部信息:*选的*模式,以及**实际生效**的那条路。
+///
+/// 两件事分开显示是有意的:用户选了"跟随系统",系统代理可能是关的、
+/// 可能是 PAC、也可能被环境变量盖掉 —— 只显示"跟随系统"等于什么都没说。
+#[derive(Debug, serde::Serialize)]
+pub struct NetworkInfo {
+    /// system | manual | off
+    pub mode: String,
+    /// 手动模式下填的地址(规范化后的)
+    pub url: String,
+    /// 实际走的代理;空串 = 直连
+    pub effective: String,
+    /// env / registry / manual / off / pac / default
+    pub from: String,
+    /// 一句人话解释
+    pub note: String,
+    /// settings.json 在哪(设置页要显示出来,用户能自己改)
+    pub settings_path: String,
+}
+
+fn network_info() -> NetworkInfo {
+    use reelbox_core::net::proxy;
+    let settings = proxy::settings();
+    // 每次问都重新解析:用户刚换了端口/刚开系统代理,这里立刻看得见
+    proxy::invalidate();
+    let route = proxy::route();
+    NetworkInfo {
+        mode: settings.mode.as_str().to_string(),
+        url: settings.url,
+        effective: route.proxy.unwrap_or_default(),
+        from: route.from.to_string(),
+        note: route.note,
+        settings_path: proxy::settings_path().to_string_lossy().to_string(),
+    }
+}
+
+#[tauri::command]
+pub fn network_settings() -> NetworkInfo {
+    network_info()
+}
+
+/// 存下来立刻用(下次请求前解析就会读到新值,不用重启)
+#[tauri::command]
+pub fn save_network_settings(mode: String, url: String) -> Result<NetworkInfo, String> {
+    use reelbox_core::net::proxy;
+    let settings = proxy::Settings { mode: proxy::Mode::parse(&mode)?, url };
+    proxy::save_settings(&settings)?;
+    Ok(network_info())
+}
 
 #[tauri::command]
 pub fn list_sources() -> Vec<Source> {
@@ -487,33 +540,29 @@ pub async fn stream_kind(stream: Stream) -> Result<StreamProbe, String> {
 
 fn probe_stream(stream: &Stream) -> Result<StreamProbe, String> {
     use std::io::Read as _;
-    let mut call = ureq::get(&stream.url)
-        .timeout(Duration::from_secs(15))
-        .set("User-Agent", FETCH_UA)
-        .set("Accept-Encoding", "identity")
-        .set("Range", "bytes=0-4095");
+    let mut list: Vec<(&str, String)> = vec![
+        ("User-Agent", FETCH_UA.to_string()),
+        ("Accept-Encoding", "identity".to_string()),
+        ("Range", "bytes=0-4095".to_string()),
+    ];
     for (k, v) in &stream.headers {
         if k.eq_ignore_ascii_case("host") || k.eq_ignore_ascii_case("range") {
             continue;
         }
-        call = call.set(k, v);
+        list.push((k.as_str(), v.clone()));
     }
-    let (status, mime, head) = match call.call() {
-        Ok(r) => {
-            let status = r.status();
-            let mime = r.header("content-type").unwrap_or("").to_string();
-            let mut head = Vec::new();
-            let _ = r.into_reader().take(4096).read_to_end(&mut head);
-            (status, mime, head)
-        }
-        Err(ureq::Error::Status(code, r)) => {
-            let mime = r.header("content-type").unwrap_or("").to_string();
-            let mut head = Vec::new();
-            let _ = r.into_reader().take(1024).read_to_end(&mut head);
-            (code, mime, head)
-        }
-        Err(e) => return Err(format!("探测播放地址失败: {e}")),
-    };
+    let resp = reelbox_core::net::http::get(&stream.url, &list)
+        .map_err(|e| format!("探测播放地址失败: {e}"))?;
+    let status = resp.status().as_u16();
+    let mime = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let mut head = Vec::new();
+    let mut reader = resp;
+    let _ = reader.by_ref().take(4096).read_to_end(&mut head);
     let kind = classify_stream(&mime, &head).to_string();
     crate::logging::event(&format!(
         "PROBE kind={kind} status={status} mime={mime} bytes={} url={}",

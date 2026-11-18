@@ -5,18 +5,16 @@
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine as _;
+use reelbox_core::net::http;
 use tiny_http::{Header, Method, Response, Server};
 
 use crate::logging;
 
 static PORT: OnceLock<u16> = OnceLock::new();
 const MAX_BYTES: u64 = 96 << 20;
-const AGENT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 fn enc(s: &str) -> String {
     B64.encode(s.as_bytes())
@@ -117,31 +115,22 @@ fn handle(req: tiny_http::Request) {
         .map(|h| h.value.as_str().to_string());
     let is_head = req.method() == &Method::Head;
 
-    let mut call = ureq::get(&target)
-        .timeout(Duration::from_secs(20))
-        .set("User-Agent", AGENT_UA)
+    // 媒体流不掐总时长(一部电影可能放两小时),普通清单/分片仍受 20s 约束
+    let streaming = range.is_some() || is_media_path(&target);
+    let client = if streaming { http::client_stream() } else { http::client() };
+    let mut headers_out: Vec<(&str, String)> = vec![
         // 明确要原始字节:压缩过的 m3u8 交给 hls.js 只会得到 manifestParsingError
-        .set("Accept-Encoding", "identity");
+        ("Accept-Encoding", "identity".to_string()),
+    ];
     for (k, v) in &pairs {
-        call = call.set(k, v);
+        headers_out.push((k.as_str(), v.clone()));
     }
     if let Some(r) = &range {
-        call = call.set("Range", r);
+        headers_out.push(("Range", r.clone()));
     }
 
-    let resp = match call.call() {
+    let resp = match http::get_once(&client, &target, &headers_out) {
         Ok(r) => r,
-        // 源站 4xx/5xx:原样回给播放器,别用 502 把它糊掉(否则日志里看不出真实状态码)
-        Err(ureq::Error::Status(code, r)) => {
-            let (body, ct) = read_body(r);
-            logging::event(&format!(
-                "PROXY http status={code} ct={ct} target={} {header_note} body={}",
-                short(&target, 160),
-                logging::one_line(&String::from_utf8_lossy(&body), 160)
-            ));
-            send_status(req, code, body, &ct);
-            return;
-        }
         Err(e) => {
             logging::event(&format!(
                 "PROXY ERR transport target={} {header_note} err={e}",
@@ -152,17 +141,30 @@ fn handle(req: tiny_http::Request) {
         }
     };
 
-    let status = resp.status();
-    let ct = resp
-        .header("content-type")
-        .unwrap_or("application/octet-stream")
-        .to_string();
-    let ce = resp.header("content-encoding").unwrap_or("").to_string();
-    let len = resp
-        .header("content-length")
-        .and_then(|v| v.parse::<usize>().ok());
-    let content_range = resp.header("content-range").map(|v| v.to_string());
-    let accept_ranges = resp.header("accept-ranges").map(|v| v.to_string());
+    let status = resp.status().as_u16();
+    let header_get = |name: &str| {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+    };
+    let ct = header_get("content-type").unwrap_or_else(|| "application/octet-stream".to_string());
+    let ce = header_get("content-encoding").unwrap_or_default();
+    let len = resp.content_length().map(|n| n as usize);
+    let content_range = header_get("content-range");
+    let accept_ranges = header_get("accept-ranges");
+
+    // 源站 4xx/5xx:原样回给播放器,别用 502 把它糊掉(否则日志里看不出真实状态码)
+    if status >= 400 && !is_media_path(&target) {
+        let (body, _) = read_body(resp);
+        logging::event(&format!(
+            "PROXY http status={status} ct={ct} target={} {header_note} body={}",
+            short(&target, 160),
+            logging::one_line(&String::from_utf8_lossy(&body), 160)
+        ));
+        send_status(req, status, body, &ct);
+        return;
+    }
 
     // 真正的媒体文件(不是清单)直接流式转发:不占内存、不截断、支持 Range
     if range.is_some() || is_media_body(&ct, &target) {
@@ -184,13 +186,8 @@ fn handle(req: tiny_http::Request) {
             let _ = req.respond(Response::empty(status).with_status_code(status));
             return;
         }
-        let out = Response::new(
-            tiny_http::StatusCode(status),
-            headers,
-            resp.into_reader(),
-            len,
-            None,
-        );
+        // reqwest 的 blocking 响应本身就是 Read:直接交给 tiny_http 边读边发
+        let out = Response::new(tiny_http::StatusCode(status), headers, resp, len, None);
         let _ = req.respond(out);
         return;
     }
@@ -235,19 +232,27 @@ fn is_media_body(ct: &str, target: &str) -> bool {
     if c.starts_with("video/") || c.starts_with("audio/") || c.starts_with("image/") {
         return true;
     }
+    is_media_path(target)
+}
+
+/// 只看地址后缀:还没拿到 content-type 时(选客户端之前)也要能判
+fn is_media_path(target: &str) -> bool {
     let path = target.split('?').next().unwrap_or(target).to_ascii_lowercase();
     [".mp4", ".m4v", ".ts", ".m4s", ".flv", ".mkv", ".mp3", ".m4a", ".aac"]
         .iter()
         .any(|ext| path.ends_with(ext))
 }
 
-fn read_body(resp: ureq::Response) -> (Vec<u8>, String) {
+fn read_body(resp: http::HttpResponse) -> (Vec<u8>, String) {
     let ct = resp
-        .header("content-type")
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
     let mut body = Vec::new();
-    let _ = resp.into_reader().take(MAX_BYTES).read_to_end(&mut body);
+    let mut reader = resp;
+    let _ = reader.by_ref().take(MAX_BYTES).read_to_end(&mut body);
     (body, ct)
 }
 
