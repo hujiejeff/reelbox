@@ -27,4 +27,7 @@ serde_json = "1"
 tiny_http = "0.12"
 # 兼容老播放地址 `/p?u=…&h=…` 用(新地址是 `/s/<id>`,不再编码任何东西)
 base64 = "0.22"
+# m3u8 里的相对地址按 RFC 3986 解析(`../`、协议相对、查询串)。
+# 版本必须和 core 里 reqwest 依赖的那份一致,否则会各编一份 —— 改动前先跑 `cargo tree -i url`
+url = "2"
 # 网络统一走 core 里的 reqwest(见 reelbox_core::net),这里不再引第二套 HTTP 栈

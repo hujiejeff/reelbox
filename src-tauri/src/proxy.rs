@@ -141,6 +141,14 @@ fn handle(req: tiny_http::Request) {
         }
     };
 
+    // 清单里的相对地址要相对**最终地址**才是对的:源站经常 302 到签名地址,
+    // 一跳之后目录甚至主机都变了,按请求时的 target 拼出来的分片会整片 404。
+    // 这里在任何 move 之前先取下来(reqwest 的 blocking 响应带着这个信息)。
+    let base = {
+        let u = resp.url().to_string();
+        if u.is_empty() { target.clone() } else { u }
+    };
+
     let status = resp.status().as_u16();
     let header_get = |name: &str| {
         resp.headers()
@@ -158,8 +166,9 @@ fn handle(req: tiny_http::Request) {
     if status >= 400 && !is_media_path(&target) {
         let (body, _) = read_body(resp);
         logging::event(&format!(
-            "PROXY http status={status} ct={ct} target={} {header_note} body={}",
+            "PROXY http status={status} ct={ct} target={}{} {header_note} body={}",
             short(&target, 160),
+            hop_note(&target, &base),
             logging::one_line(&String::from_utf8_lossy(&body), 160)
         ));
         send_status(req, status, body, &ct);
@@ -171,10 +180,11 @@ fn handle(req: tiny_http::Request) {
         let n = SEG_LOGGED.fetch_add(1, Ordering::Relaxed);
         if n < SEG_LOG_FIRST || status >= 400 {
             logging::event(&format!(
-                "PROXY media status={status} ct={ct} len={:?} range={:?} target={}",
+                "PROXY media status={status} ct={ct} len={:?} range={:?} target={}{}",
                 len,
                 range,
-                short(&target, 120)
+                short(&target, 120),
+                hop_note(&target, &base)
             ));
         }
         let mut headers = cors(&ct);
@@ -205,12 +215,13 @@ fn handle(req: tiny_http::Request) {
 
     if body.starts_with(b"#EXTM3U") {
         logging::event(&format!(
-            "PROXY m3u8 status={status} bytes={} ct={ct} ce={ce} target={} {header_note}",
+            "PROXY m3u8 status={status} bytes={} ct={ct} ce={ce} target={}{} {header_note}",
             body.len(),
-            short(&target, 160)
+            short(&target, 160),
+            hop_note(&target, &base)
         ));
         let text = String::from_utf8_lossy(&body).to_string();
-        let out = rewrite(&text, &target, &headers);
+        let out = rewrite(&text, &base, &headers);
         send(req, out.into_bytes(), "application/vnd.apple.mpegurl");
     } else {
         // 不是清单:这就是 hls.js 报 manifestParsingError 的直接证据,原样回给播放器
@@ -282,6 +293,15 @@ fn describe_headers(pairs: &[(String, String)]) -> String {
     out
 }
 
+/// 跟过跳转就把最终地址一起写进日志。
+/// 清单解析用的是 base,排查时只看到 target 会以为"地址没错却全 404"。
+fn hop_note(target: &str, base: &str) -> String {
+    if base == target {
+        return String::new();
+    }
+    format!(" base={}", short(base, 160))
+}
+
 /// 日志里的地址只留前 160 字符(签名串很长)
 fn short(url: &str, max: usize) -> String {
     let n = url.chars().count();
@@ -337,8 +357,22 @@ fn rewrite_attrs(line: &str, base: &str, headers: &str) -> String {
     out
 }
 
-/// 相对地址补全成绝对地址
+/// 相对地址补全成绝对地址。
+///
+/// 主路交给 `url` crate:它按 RFC 3986 处理 `../`、`?query`、协议相对地址,
+/// 手写拼接在这些地方都踩过坑。base 本身不是合法绝对地址时才退回字符串逻辑
+/// (`url` 对 `data:` 这类非层级地址会拒绝 join)。
 fn resolve(base: &str, uri: &str) -> String {
+    if let Ok(b) = url::Url::parse(base) {
+        if let Ok(joined) = b.join(uri) {
+            return joined.to_string();
+        }
+    }
+    resolve_manually(base, uri)
+}
+
+/// 兜底:按"最后一个 `/` 之前是目录"手工拼
+fn resolve_manually(base: &str, uri: &str) -> String {
     if uri.starts_with("http://") || uri.starts_with("https://") {
         return uri.to_string();
     }
@@ -359,4 +393,125 @@ fn resolve(base: &str, uri: &str) -> String {
         return format!("{}{}", &base[..host_end], format!("/{stripped}"));
     }
     format!("{dir}{uri}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一个"302 之后"的签名清单地址:sig 在查询串里,目录和请求时可能已经不一样
+    const BASE: &str = "https://cdn.example/hls/abc/index.m3u8?sig=1";
+
+    fn rewritten(line: &str) -> String {
+        rewrite(line, BASE, "[]")
+    }
+
+    /// 改写后的地址 → 它指向的真实地址。
+    /// 不断言地址长什么样:id 怎么算、要不要编码都是实现细节(会话表那版就是 `/s/<id>`)。
+    fn target_of(addr: &str) -> String {
+        assert!(
+            addr.starts_with("http://127.0.0.1:"),
+            "应该被包成本地代理地址: {addr}"
+        );
+        query(addr, "u").unwrap_or_else(|| panic!("代理地址里应该能解出真实地址: {addr}"))
+    }
+
+    /// 从 `#EXT-X-KEY:…,URI="…"` 这类属性行里取出 URI 的值
+    fn uri_attr(line: &str) -> String {
+        let tail = line
+            .split_once("URI=\"")
+            .unwrap_or_else(|| panic!("属性行里应该有 URI: {line}"))
+            .1;
+        tail[..tail.find('"').expect("URI 的引号应该成对")].to_string()
+    }
+
+    #[test]
+    fn relative_segment_is_joined_with_base_dir() {
+        let out = rewritten("seg-1.ts");
+        assert_eq!(
+            target_of(out.trim()),
+            "https://cdn.example/hls/abc/seg-1.ts"
+        );
+    }
+
+    #[test]
+    fn absolute_segment_is_kept() {
+        let out = rewritten("https://cdn2.example/x.ts");
+        assert_eq!(target_of(out.trim()), "https://cdn2.example/x.ts");
+    }
+
+    #[test]
+    fn protocol_relative_segment_takes_base_scheme() {
+        let out = rewritten("//cdn3.example/x.ts");
+        assert_eq!(target_of(out.trim()), "https://cdn3.example/x.ts");
+    }
+
+    #[test]
+    fn key_uri_is_rewritten() {
+        let out = rewritten("#EXT-X-KEY:METHOD=AES-128,URI=\"key.key\"");
+        assert!(
+            out.starts_with("#EXT-X-KEY:METHOD=AES-128,URI=\"http://127.0.0.1:"),
+            "{out}"
+        );
+        assert_eq!(
+            target_of(&uri_attr(out.trim())),
+            "https://cdn.example/hls/abc/key.key"
+        );
+    }
+
+    #[test]
+    fn map_uri_is_rewritten() {
+        let out = rewritten("#EXT-X-MAP:URI=\"init.mp4\",BYTERANGE=\"720@0\"");
+        assert_eq!(
+            target_of(&uri_attr(out.trim())),
+            "https://cdn.example/hls/abc/init.mp4"
+        );
+        // BYTERANGE 在 URI 后面,不能被一起吃掉
+        assert!(out.contains("BYTERANGE=\"720@0\""), "{out}");
+    }
+
+    #[test]
+    fn media_uri_is_rewritten() {
+        let out = rewritten(
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"cn\",URI=\"audio.m3u8\"",
+        );
+        assert_eq!(
+            target_of(&uri_attr(out.trim())),
+            "https://cdn.example/hls/abc/audio.m3u8"
+        );
+        assert!(out.contains("GROUP-ID=\"aud\""), "{out}");
+    }
+
+    #[test]
+    fn low_latency_part_uri_is_rewritten() {
+        let out = rewritten("#EXT-X-PART:DURATION=0.5,URI=\"part0.ts\"");
+        assert_eq!(
+            target_of(&uri_attr(out.trim())),
+            "https://cdn.example/hls/abc/part0.ts"
+        );
+    }
+
+    #[test]
+    fn query_string_is_preserved() {
+        let out = rewritten("seg-1.ts?token=deadbeef&n=2");
+        assert_eq!(
+            target_of(out.trim()),
+            "https://cdn.example/hls/abc/seg-1.ts?token=deadbeef&n=2"
+        );
+    }
+
+    #[test]
+    fn other_lines_pass_through() {
+        let text = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2";
+        let out = rewrite(text, BASE, "[]");
+        assert!(out.starts_with("#EXTM3U\n#EXT-X-VERSION:3\n"), "{out}");
+        assert!(out.contains("#EXT-X-TARGETDURATION:2"), "{out}");
+    }
+
+    #[test]
+    fn hop_note_only_when_redirected() {
+        assert_eq!(hop_note("https://a/x", "https://a/x"), "");
+        let note = hop_note("https://a/x", "https://b/y");
+        assert!(note.contains("base=https://b/y"), "{note}");
+    }
 }
