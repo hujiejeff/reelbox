@@ -4212,10 +4212,15 @@ function clearSkeleton() {
 }
 
 /**
- * 骨架屏兜底:接口 10 秒还不回来,就一直转下去没人知道发生了什么。
+ * 骨架屏兜底:接口迟迟不回来,就一直转下去没人知道发生了什么。
  * 超时后直接给错误三态里的「重试」,用户至少能自己再来一次。
+ *
+ * 22 秒 = 后端一次请求整体 20 秒 + 一次 800ms 重试(core/src/net/http.rs 的
+ * REQUEST_TIMEOUT / RETRY_DELAY)。比以前在这里的 10 秒长:按域名选路之后,
+ * 一个 host 第一次可能要走两条路线(先代理再直连,或被反代/被墙那次要等超时),
+ * 10 秒会在后端还在试的时候先把界面判死。等真的通了,记忆会把这十几秒只付一次。
  */
-const SKEL_TIMEOUT_MS = 10000;
+const SKEL_TIMEOUT_MS = 22000;
 let skelTimer = 0;
 
 function clearSkelTimer() {
@@ -4230,7 +4235,7 @@ function armListTimeout() {
     if (!S.loading || (S.items || []).length) return;
     log("LIST TIMEOUT", SKEL_TIMEOUT_MS + "ms");
     S.loading = false;
-    showListError(errorInfo("list", "超时:10 秒没有回应"), () => loadItems());
+    showListError(errorInfo("list", "超时:" + SKEL_TIMEOUT_MS / 1000 + " 秒没有回应"), () => loadItems());
   }, SKEL_TIMEOUT_MS);
 }
 
@@ -4263,7 +4268,7 @@ function renderDetailSkeleton() {
   $("v-detail").scrollTop = 0;
 }
 
-/** 列表:加载中(骨架屏 + 10s 超时兜底) */
+/** 列表:加载中(骨架屏 + 22s 超时兜底,见 SKEL_TIMEOUT_MS) */
 function showListLoading() {
   const el = $("empty");
   el.style.display = "none";

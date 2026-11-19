@@ -187,9 +187,9 @@ fn handle(req: tiny_http::Request) {
         headers_out.push(("Range", r.clone()));
     }
 
-    // 上游两条路都要:采集站直连超时、必须走代理;国内 CDN 反过来,被代理节点
-    // 访问时按 geo 回 404。core 那边在代理失败(403/404/410/451 或连不上)时
-    // 已经用同一条请求走了直连,这里只负责把结果和"是哪条路救回来的"记进日志。
+    // 上游按域名自动选路:采集站(量子)直连超时、必须走代理;国内 CDN(ffzy)反过来,
+    // 被代理节点访问时按 geo 回 403/404。core 那边按候选依次试,第一条通了就记住,
+    // 这里只负责把结果和"是哪条路救回来的"记进日志。
     let upstream = if streaming {
         http::get_stream(&target, &headers_out)
     } else {
@@ -199,7 +199,8 @@ fn handle(req: tiny_http::Request) {
         Ok(u) => {
             if let Some(why) = u.fallback {
                 logging::event(&format!(
-                    "PROXY route=direct note=代理失败回退 reason={} target={}",
+                    "PROXY route={} note=换路 reason={} target={}",
+                    u.via.describe(),
                     why.reason(),
                     short(&target, 160)
                 ));
