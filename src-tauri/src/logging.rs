@@ -14,15 +14,27 @@ pub fn log_path() -> std::path::PathBuf {
     crate::paths::log_path()
 }
 
+/// 写日志的进程内锁。
+///
+/// Windows 上"追加"其实是 seek 到末尾再写,两个线程同时来就会互相踩:
+/// 日志里出现过 `reason=ok16:04:21 ROUTE …` 这种两条粘在一起的行。
+/// 加锁 + 一次 write_all(整行含换行)就不会再错位。
+static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// 原样写一行(调用方自己带时间戳)
 pub fn append(line: &str) {
     let path = log_path();
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    let _guard = match WRITE_LOCK.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         Ok(mut f) => {
-            let _ = writeln!(f, "{line}");
+            let _ = f.write_all(format!("{line}
+").as_bytes());
         }
         Err(e) => eprintln!("log: 写 {} 失败: {e}", path.display()),
     }
