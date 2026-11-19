@@ -176,7 +176,6 @@ fn handle(req: tiny_http::Request) {
 
     // 媒体流不掐总时长(一部电影可能放两小时),普通清单/分片仍受 20s 约束
     let streaming = range.is_some() || is_media_path(&target);
-    let client = if streaming { http::client_stream() } else { http::client() };
     let mut headers_out: Vec<(&str, String)> = vec![
         // 明确要原始字节:压缩过的 m3u8 交给 hls.js 只会得到 manifestParsingError
         ("Accept-Encoding", "identity".to_string()),
@@ -188,8 +187,25 @@ fn handle(req: tiny_http::Request) {
         headers_out.push(("Range", r.clone()));
     }
 
-    let resp = match http::get_once(&client, &target, &headers_out) {
-        Ok(r) => r,
+    // 上游两条路都要:采集站直连超时、必须走代理;国内 CDN 反过来,被代理节点
+    // 访问时按 geo 回 404。core 那边在代理失败(403/404/410/451 或连不上)时
+    // 已经用同一条请求走了直连,这里只负责把结果和"是哪条路救回来的"记进日志。
+    let upstream = if streaming {
+        http::get_stream(&target, &headers_out)
+    } else {
+        http::get_upstream(&target, &headers_out)
+    };
+    let resp = match upstream {
+        Ok(u) => {
+            if let Some(why) = u.fallback {
+                logging::event(&format!(
+                    "PROXY route=direct note=代理失败回退 reason={} target={}",
+                    why.reason(),
+                    short(&target, 160)
+                ));
+            }
+            u.resp
+        }
         Err(e) => {
             logging::event(&format!(
                 "PROXY ERR transport target={} {header_note} err={e}",
