@@ -12,9 +12,22 @@ pub struct Source {
     pub id: String,
     pub name: String,
     /// vod | xml | live | webox | parser
+    ///
+    /// **界面仍在用这个字段**(下拉里的徽标、解析器分块都按它判),所以它留着;
+    /// 运行时走哪条路由 `adapter`,见 [架构](../docs/ARCHITECTURE.md)。
     #[serde(default, rename = "type")]
     pub kind: String,
     pub url: String,
+    /// 用哪个适配器解析:`vod` | `iplayr` | `webox` | `reelbox` | `parser`。
+    ///
+    /// 导入时探测决定、落盘后运行时不改(见 `docs/ARCHITECTURE.md` 第 2 节)。
+    /// 老配置没有这个字段:读到空串时用 [`Source::adapter`] 现推一个、由
+    /// `load_sources` 落盘一次;空串不写进文件,免得污染没迁移过的老数据。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub adapter: String,
+    /// 当初判定这个源能用的证据(导入探测时写入,P2 才有写入方)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<Probe>,
     /// 插件自己声明的版本号(只有 `type="parser"` 的解析器会用到,普通源为空)。
     /// 空的时候不写进配置文件,老配置读进来也不受影响。
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -39,6 +52,26 @@ pub struct Health {
     /// 失败原因 / 备注;成功时为空
     #[serde(default)]
     pub note: String,
+}
+
+/// 「导入时探测」留下来的证据:当初凭什么判定这个源能用。
+///
+/// 和 [`Health`] 不是一回事:`health` 是界面上的「测试连接」(可以反复测、只看当前),
+/// `probe` 是**判定适配器时的那一次**证据,落盘后基本不动 —— 判定错了只能重新探测,
+/// 不会自己变(见 `docs/ARCHITECTURE.md` 第 2 节)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Probe {
+    /// UTC ISO8601,判定发生的时刻
+    pub at: String,
+    /// 那次判定成功了吗(`items == 0` 不算成功)
+    pub ok: bool,
+    /// 首次探测出的条目数
+    pub items: u32,
+    /// 首条标题,截断到 60 字:给用户一眼看出「抓的是不是这个站」
+    pub sample: String,
+    /// 失败时的错误摘要(四类码 `network` / `parse` / `auth` / `unsupported` + 一句话)
+    #[serde(default)]
+    pub error: String,
 }
 
 /// 源的 id:地址的 32 位短哈希(FNV-1a,8 位十六进制)。
@@ -103,6 +136,94 @@ impl Source {
             "vod"
         }
     }
+
+    /// 运行时用哪个适配器(`vod` / `iplayr` / `webox` / `reelbox` / `parser`)。
+    ///
+    /// 落过盘的源直接用自己的 `adapter` —— 判定只做一次,不每次加载重新猜;
+    /// 老数据(没这个字段)现推一个,好让运行时不必关心迁移有没有跑过。
+    pub fn adapter(&self) -> &str {
+        if !self.adapter.is_empty() {
+            return &self.adapter;
+        }
+        derive_adapter(&self.kind, &self.url)
+    }
+}
+
+/// 老数据没有 `adapter` 时,按 `type` / 地址推断一个;推断不出来给 `"reelbox"`。
+///
+/// 顺序即优先级。返回 `&'static str` 是刻意的:适配器名是有限的几个,
+/// 不需要为每条源各存一份字符串。规则见 `docs/ARCHITECTURE.md` 第 2 节。
+pub fn derive_adapter(kind: &str, url: &str) -> &'static str {
+    let k = kind.trim().to_ascii_lowercase();
+    let u = url.trim().to_ascii_lowercase();
+    // 去掉查询串 / 片段再看文件后缀:接口地址不会以 `.json` 收尾,
+    // 而 iplayr 的规则文件会(iplayr 索引里那些 `crawl.json?raw=1` 也算)。
+    let bare = u.split(|c| c == '?' || c == '#').next().unwrap_or("");
+    match k.as_str() {
+        // 解析器不是源:它只把一张网页变成播放地址
+        "parser" => "parser",
+        // 现有插件源都还是 `type=webox` 的老写法;`.parser.js` 同样是 `.js`,
+        // 得先认出来,否则会让解析器跑到源列表里
+        "webox" => {
+            if bare.ends_with(".parser.js") {
+                "parser"
+            } else {
+                "reelbox"
+            }
+        }
+        "xml" => "vod",
+        "vod" => {
+            if u.contains("api.php") || u.contains("ac=list") || u.contains("ac=detail") {
+                "vod"
+            } else if bare.ends_with(".json") {
+                // 苹果 CMS 的外壳、iplayr 的 XPath 规则:拿它当接口只会把配置本身当响应体
+                "iplayr"
+            } else {
+                // 判不出来:按插件试(插件路径认不出来时本来就是这个下场,
+                // 报错文案也比走 CMS 的空响应好懂)
+                "reelbox"
+            }
+        }
+        // `type` 一个字都没有(很早的数据 / 手改过):只能按地址判 ——
+        // 这类源今天就是靠地址走通的(`Source::format()` 同一个口径),
+        // 直接给 reelbox 会把它们一次性迁坏,而迁移只做一次、写下去就不再改
+        "" => derive_adapter_from_url(&u, bare),
+        _ => "reelbox",
+    }
+}
+
+/// 没有 `type` 可用时,只看地址:和 `Source::format()` 认得出的一样多。
+fn derive_adapter_from_url(u: &str, bare: &str) -> &'static str {
+    if u.contains("api.php")
+        || u.contains("ac=list")
+        || u.contains("ac=detail")
+        || u.contains("/at/xml")
+        || u.contains("ac=xml")
+        || bare.ends_with(".xml")
+    {
+        "vod"
+    } else if bare.ends_with(".parser.js") {
+        "parser"
+    } else if bare.ends_with(".json") {
+        "iplayr"
+    } else {
+        "reelbox"
+    }
+}
+
+/// 迁移:给没有 `adapter` 的源补上(见 `docs/ARCHITECTURE.md` P1)。
+///
+/// 只碰空的那个字段 —— `type` 一个字都不动(界面还在用它)。返回补了几条:
+/// `0` 说明这条数据已经迁移过,调用方不必再写文件(`load_sources` 靠这个保持幂等)。
+pub fn fill_adapters(list: &mut [Source]) -> usize {
+    let mut filled = 0;
+    for src in list.iter_mut() {
+        if src.adapter.is_empty() {
+            src.adapter = derive_adapter(&src.kind, &src.url).to_string();
+            filled += 1;
+        }
+    }
+    filled
 }
 
 /// `options` 算不算「没有配置」:Null(老配置 / 没填)和空对象都算。
@@ -151,7 +272,9 @@ pub fn is_crawl_config(kind: &str, url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, id_for_url, is_crawl_config, now_iso, Health, Source};
+    use super::{
+        civil_from_days, derive_adapter, id_for_url, is_crawl_config, now_iso, Health, Probe, Source,
+    };
 
     #[test]
     fn source_id_depends_on_url_not_name() {
@@ -221,6 +344,233 @@ mod tests {
         );
         let text = serde_json::to_string(&with).unwrap();
         assert!(text.contains(r#""options":{"config":"https://a/b.json"}"#), "实际: {text}");
+    }
+
+    /// 老数据没有 `adapter`:按 type / 地址推断,顺序即优先级
+    #[test]
+    fn derives_adapter_from_type_and_url() {
+        // 苹果 CMS 的 JSON 接口
+        assert_eq!(derive_adapter("vod", "https://caiji.dyttzyapi.com/api.php/provide/vod"), "vod");
+        assert_eq!(derive_adapter("vod", "https://cj.ffzyapi.com/api.php?ac=list"), "vod");
+        assert_eq!(derive_adapter("vod", "https://x.com/api.php/provide/vod?ac=detail"), "vod");
+        // XML 变体:老配置是 type=xml,新写法常常只是地址带 /at/xml
+        assert_eq!(derive_adapter("xml", "https://cj.lziapi.com/api.php/provide/vod/at/xml"), "vod");
+        assert_eq!(derive_adapter("xml", "https://example.com/feed.xml"), "vod");
+        // `type` 一个字都没有:只能按地址判(和 Source::format() 同一个口径),
+        // 否则这些源会被一次性迁成插件
+        assert_eq!(derive_adapter("", "https://cj.lziapi.com/api.php/provide/vod/at/xml"), "vod");
+        assert_eq!(derive_adapter("", "https://example.com/feed.xml"), "vod");
+        // iplayr:接口外壳里的 `.json` 规则文件(查询串不算后缀)
+        assert_eq!(
+            derive_adapter("vod", "https://raw.githubusercontent.com/m3u8playlist/dp/master/iplayr/dbk.json"),
+            "iplayr"
+        );
+        assert_eq!(derive_adapter("vod", "https://example.com/crawl.json?raw=1"), "iplayr");
+        assert_eq!(derive_adapter("", "https://example.com/crawl.json#top"), "iplayr");
+        // 现有插件源都是 type=webox
+        assert_eq!(
+            derive_adapter("webox", "C:/Users/x/AppData/Roaming/reelbox/plugins/4k.webox.js"),
+            "reelbox"
+        );
+        assert_eq!(derive_adapter("webox", "D:/x/iplayr.reelbox.js"), "reelbox");
+        // 解析器:type 说了算,`.parser.js` 的后缀也算
+        assert_eq!(derive_adapter("parser", "D:/x/share.reelbox.parser.js"), "parser");
+        assert_eq!(derive_adapter("webox", "D:/x/share.reelbox.parser.js"), "parser");
+        // 大小写不该影响判断
+        assert_eq!(derive_adapter(" Parser ", "D:/x/share.reelbox.parser.js"), "parser");
+        assert_eq!(derive_adapter("xml", "https://X.com/API.PHP/provide/vod"), "vod");
+        // 认不出来:给 reelbox
+        assert_eq!(derive_adapter("", ""), "reelbox");
+        assert_eq!(derive_adapter("", "https://example.com/list"), "reelbox");
+        assert_eq!(derive_adapter("vod", "https://example.com/list"), "reelbox");
+        assert_eq!(derive_adapter("live", "https://example.com/a.m3u8"), "reelbox");
+        // 地址说了,`type` 说了别的:先听 `type`(顺序即优先级)
+        assert_eq!(derive_adapter("xml", "https://example.com/crawl.json"), "vod");
+        assert_eq!(derive_adapter("webox", "D:/x/share.reelbox.parser.js"), "parser");
+    }
+
+    /// 迁移只补空的 `adapter`;已经有值的一个字都不改(判定一旦落盘就不再变)
+    #[test]
+    fn adapter_uses_stored_value_before_derivation() {
+        let stored = Source {
+            kind: "webox".into(),
+            url: "D:/x/4k.webox.js".into(),
+            adapter: "reelbox".into(),
+            ..Default::default()
+        };
+        assert_eq!(stored.adapter(), "reelbox");
+
+        // 存着的值和推断结果不同:以存着的为准
+        let mut odd = Source {
+            kind: "xml".into(),
+            url: "https://x/api.php/provide/vod/at/xml".into(),
+            ..Default::default()
+        };
+        assert_eq!(odd.adapter(), "vod", "没填时按 type / 地址推");
+        odd.adapter = "parser".into();
+        assert_eq!(odd.adapter(), "parser", "有值时必须用它");
+
+        // 老配置(没有 adapter)现推一个,推出来和迁移写进去的一致
+        let old: Source = serde_json::from_str(
+            r#"{"id":"a","name":"A","type":"webox","url":"D:/x/4k.webox.js"}"#,
+        )
+        .expect("老配置解析失败");
+        assert!(old.adapter.is_empty());
+        assert_eq!(old.adapter(), derive_adapter(&old.kind, &old.url));
+    }
+
+    /// `adapter` / `probe` 没值时不该落盘:不然老文件被无端改写一遍
+    #[test]
+    fn adapter_and_probe_round_trip() {
+        let bare = Source {
+            id: "a".into(),
+            name: "A".into(),
+            kind: "vod".into(),
+            url: "https://x/api.php/provide/vod".into(),
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&bare).expect("序列化失败");
+        assert!(!text.contains("adapter"), "空适配器不该落盘: {text}");
+        assert!(!text.contains("probe"), "没探测过不该落盘: {text}");
+
+        let with = Source {
+            id: "b".into(),
+            name: "独播库".into(),
+            kind: "webox".into(),
+            url: "D:/x/iplayr.reelbox.js".into(),
+            adapter: "iplayr".into(),
+            probe: Some(Probe {
+                at: "2026-11-21T07:30:00Z".into(),
+                ok: true,
+                items: 48,
+                sample: "极限逃生".into(),
+                error: String::new(),
+            }),
+            options: serde_json::json!({ "config": "https://a/dbk.json" }),
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&with).expect("序列化失败");
+        assert!(text.contains(r#""adapter":"iplayr""#), "实际: {text}");
+        assert!(text.contains(r#""items":48"#), "实际: {text}");
+        assert!(text.contains("极限逃生"), "实际: {text}");
+
+        let back: Source = serde_json::from_str(&text).expect("往返解析失败");
+        assert_eq!(back.adapter, "iplayr");
+        assert_eq!(back.adapter(), "iplayr");
+        let probe = back.probe.expect("probe 丢了");
+        assert!(probe.ok);
+        assert_eq!(probe.items, 48);
+        assert_eq!(probe.sample, "极限逃生");
+        assert_eq!(probe.at, "2026-11-21T07:30:00Z");
+        // `type` 还在,界面照旧能用
+        assert_eq!(back.kind, "webox");
+
+        // 失败的探测带得上错误摘要
+        let bad = Probe {
+            at: now_iso(),
+            ok: false,
+            items: 0,
+            sample: String::new(),
+            error: "network: 超时".into(),
+        };
+        let text = serde_json::to_string(&bad).expect("序列化失败");
+        assert!(text.contains(r#""ok":false"#));
+        assert!(text.contains("network: 超时"));
+    }
+
+    /// 缺 `adapter` / `probe` 的老 JSON 必须照样能读(迁移靠这一步)
+    #[test]
+    fn old_json_without_adapter_or_probe_still_loads() {
+        let old: Vec<Source> = serde_json::from_str(
+            r#"[
+              {"id":"dytt","name":"电影天堂","type":"xml","url":"https://cj.lziapi.com/api.php/provide/vod/at/xml",
+               "health":{"ok":true,"ms":320,"checked_at":"2026-11-14T13:45:07Z","note":""}},
+              {"id":"4kvm","name":"4K影视","type":"webox","url":"D:/x/4k.webox.js"},
+              {"id":"dbk","name":"独播库","type":"vod","url":"https://raw.githubusercontent.com/m3u8playlist/dp/master/iplayr/dbk.json"}
+            ]"#,
+        )
+        .expect("老配置解析失败");
+        assert_eq!(old.len(), 3);
+        // `type` 原样保留(界面还在用),adapter 各自按规则补上
+        assert_eq!(old[0].kind, "xml");
+        assert_eq!(old[0].adapter(), "vod");
+        assert_eq!(old[1].adapter(), "reelbox");
+        assert_eq!(old[2].adapter(), "iplayr");
+        assert!(old.iter().all(|s| s.adapter.is_empty() && s.probe.is_none()));
+        // 迁移后写回去:只多出 adapter,`type` 没被动过
+        let mut migrated = old.clone();
+        for s in &mut migrated {
+            s.adapter = derive_adapter(&s.kind, &s.url).to_string();
+        }
+        let text = serde_json::to_string(&migrated).expect("序列化失败");
+        assert!(text.contains(r#""adapter":"iplayr""#), "实际: {text}");
+        assert!(text.contains(r#""type":"xml""#), "type 不该被改: {text}");
+        let back: Vec<Source> = serde_json::from_str(&text).expect("迁移后解析失败");
+        assert_eq!(back[0].kind, "xml");
+        assert_eq!(back[0].adapter(), "vod");
+    }
+
+    /// 迁移:只补空的 `adapter`,补完第二次一条也不补(`load_sources` 靠它决定写不写文件),
+    /// `type` 一个字都不动。
+    #[test]
+    fn fill_adapters_is_idempotent() {
+        let mut list: Vec<Source> = serde_json::from_str(
+            r#"[
+              {"id":"dytt","name":"电影天堂","type":"xml","url":"https://cj.lziapi.com/api.php/provide/vod/at/xml"},
+              {"id":"dbk","name":"独播库","type":"vod","url":"https://raw.githubusercontent.com/m3u8playlist/dp/master/iplayr/dbk.json","adapter":"iplayr"},
+              {"id":"4kvm","name":"4K影视","type":"webox","url":"D:/x/4k.webox.js"}
+            ]"#,
+        )
+        .expect("解析失败");
+
+        assert_eq!(super::fill_adapters(&mut list), 2, "只有两条缺 adapter");
+        assert_eq!(list[0].adapter, "vod");
+        assert_eq!(list[1].adapter, "iplayr", "已有值的不能被改");
+        assert_eq!(list[2].adapter, "reelbox");
+        // `type` 不动
+        assert_eq!(list[0].kind, "xml");
+        assert_eq!(list[2].kind, "webox");
+
+        // 再跑一遍:没什么可补的 → 调用方不该再写文件
+        assert_eq!(super::fill_adapters(&mut list), 0);
+        assert_eq!(list[0].adapter, "vod");
+
+        // 已经迁移过的数据(空列表也算)同样返回 0
+        let mut none: Vec<Source> = Vec::new();
+        assert_eq!(super::fill_adapters(&mut none), 0);
+    }
+
+    /// 迁移的验收口径:本机现有的 9 个源,补完 `adapter` 之后走的路和今天一样
+    /// (`vod` / `xml` → CMS;插件 → 插件;iplayr 的 `.json` → 插件)。
+    #[test]
+    fn existing_sources_keep_their_route() {
+        // (type, url, 迁移后该得到的 adapter)
+        let real = [
+            ("vod", "https://cj.ffzyapi.com/api.php/provide/vod/from/ffm3u8", "vod"),
+            (
+                "vod",
+                "https://raw.githubusercontent.com/m3u8playlist/dp/refs/heads/master/iplayr/libvio2.json",
+                "iplayr",
+            ),
+            ("vod", "https://caiji.dyttzyapi.com/api.php/provide/vod", "vod"),
+            ("vod", "https://raw.githubusercontent.com/m3u8playlist/dp/master/iplayr/dbk.json", "iplayr"),
+            ("xml", "https://cj.lziapi.com/api.php/provide/vod/at/xml", "vod"),
+            ("vod", "https://raw.githubusercontent.com/m3u8playlist/dp/master/iplayr/cz.json", "iplayr"),
+            (
+                "vod",
+                "https://raw.githubusercontent.com/m3u8playlist/dp/master/iplayr/olevod.json",
+                "iplayr",
+            ),
+            ("vod", "https://api.wsyzy.net/api.php/provide/vod", "vod"),
+            (
+                "webox",
+                r"C:\Users\hujie\AppData\Roaming\reelbox\plugins\user-4kvm.reelbox.js",
+                "reelbox",
+            ),
+        ];
+        for (kind, url, want) in real {
+            assert_eq!(derive_adapter(kind, url), want, "type={kind} url={url}");
+        }
     }
 
     #[test]

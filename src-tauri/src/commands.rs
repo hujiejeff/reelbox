@@ -5,7 +5,7 @@ use std::sync::{Mutex, OnceLock};
 
 use reelbox_core::model::{Detail, Filter, Page, Stream};
 use reelbox_core::plugin;
-use reelbox_core::source::{cms::Client, Source};
+use reelbox_core::source::{cms::Client, fill_adapters, Source};
 use tauri::ipc::Response;
 
 async fn blocking<T, F>(f: F) -> Result<T, String>
@@ -29,10 +29,29 @@ fn sources_path() -> std::path::PathBuf {
 /// (空态见 ui/app.js 的 showNoSources / renderSourceManager)。
 pub fn load_sources() -> Vec<Source> {
     let path = sources_path();
-    std::fs::read_to_string(&path)
+    let Some(list) = std::fs::read_to_string(&path)
         .ok()
         .and_then(|text| serde_json::from_str::<Vec<Source>>(&text).ok())
-        .unwrap_or_default()
+    else {
+        return Vec::new();
+    };
+    migrate_adapters(&path, list)
+}
+
+/// 老配置没有 `adapter`:按 `type` / 地址补一个(规则在 core 的 `fill_adapters`),
+/// 补到了才写回文件。
+///
+/// 幂等:第二次读到已经填好的就一条也不补,文件不动。`type` 一个字都不动 ——
+/// 界面还在用它(徽标、解析器分块);运行时只看 `adapter`。写回失败不影响这次加载:
+/// 内存里已经补好了,下次启动再补。
+fn migrate_adapters(path: &std::path::Path, mut list: Vec<Source>) -> Vec<Source> {
+    if fill_adapters(&mut list) == 0 {
+        return list;
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&list) {
+        let _ = std::fs::write(path, text);
+    }
+    list
 }
 
 #[tauri::command]
@@ -55,12 +74,30 @@ fn boa_fetch() -> Box<dyn Fn(&str) -> Option<String>> {
     })
 }
 
-fn is_plugin(src: &Source) -> bool {
-    // 老配置里 kind 可能被序列化成 type 而丢掉,所以再看一眼扩展名
-    let by_path = src.url.to_ascii_lowercase().ends_with(".webox.js")
-        || src.url.to_ascii_lowercase().ends_with(".reelbox.js");
-    src.kind == "webox" || by_path
+/// 一条源该走哪条路。判定只看 `adapter`(见 `docs/ARCHITECTURE.md` 第 2 节):
+/// 判定发生在导入,落盘后运行时不再重新猜格式,否则会出现「昨天能看、今天变成
+/// 另一个适配器」这种查不出来的鬼故事。
+#[derive(Debug, Clone, Copy)]
+enum Route {
+    /// `vod`:苹果 CMS 接口(JSON / XML),现在还是 Rust 的 `cms::Client`
+    Cms,
+    /// `reelbox` / `webox` / `iplayr`:都是插件文件,交前端沙箱(ui/plugin-host.js);
+    /// 显式要求回退时才走 boa
+    Plugin,
 }
+
+fn route(src: &Source) -> Result<Route, String> {
+    match src.adapter() {
+        "vod" => Ok(Route::Cms),
+        // 解析器不是源:它只把一张网页变成播放地址,没有列表 / 详情
+        "parser" => Err(PARSER_IS_NOT_SOURCE.into()),
+        // iplayr 眼下只是个插件文件,和 reelbox 同路;认不出的适配器也按插件试
+        _ => Ok(Route::Plugin),
+    }
+}
+
+const PARSER_IS_NOT_SOURCE: &str =
+    "解析器不是源:它只把网页变成播放地址,不能取列表 / 详情 / 播放。请换一个源,或在「设置 → 源」里用它的站点";
 
 /* ---------- 插件运行时:两套引擎 ---------- */
 
@@ -269,26 +306,26 @@ pub fn list_sources() -> Vec<Source> {
 
 #[tauri::command]
 pub async fn list_items(source: Source, page: u32, classify: String) -> Result<Page, String> {
-    if is_plugin(&source) {
-        // 默认引擎是前端沙箱;只有显式要求回退时才走 boa
-        if !boa_engine() {
-            return Err(NO_BOA.into());
-        }
-        return blocking(move || {
-            let path = std::path::PathBuf::from(&source.url);
-            // 两种契约都喂:page(WeBox) + cursor(filters 版本插件) + filters
-            let c = classify.replace('"', "");
-            let cursor = if page <= 1 { "null".to_string() } else { format!("\"{}\"", page) };
-            let arg = format!(
-                "{{\"page\":{},\"classify\":\"{}\",\"cursor\":{},\"filters\":{{\"classify\":\"{}\"}}}}",
-                page, c, cursor, c
-            );
-            let out = plugin::run_file(&path, "list", &arg, boa_fetch())?;
-            plugin::adapt::page_from_json(&out)
-        })
-        .await;
+    if let Route::Cms = route(&source)? {
+        return blocking(move || Client::new(source).page(page, &classify)).await;
     }
-    blocking(move || Client::new(source).page(page, &classify)).await
+    // 默认引擎是前端沙箱;只有显式要求回退时才走 boa
+    if !boa_engine() {
+        return Err(NO_BOA.into());
+    }
+    blocking(move || {
+        let path = std::path::PathBuf::from(&source.url);
+        // 两种契约都喂:page(WeBox) + cursor(filters 版本插件) + filters
+        let c = classify.replace('"', "");
+        let cursor = if page <= 1 { "null".to_string() } else { format!("\"{}\"", page) };
+        let arg = format!(
+            "{{\"page\":{},\"classify\":\"{}\",\"cursor\":{},\"filters\":{{\"classify\":\"{}\"}}}}",
+            page, c, cursor, c
+        );
+        let out = plugin::run_file(&path, "list", &arg, boa_fetch())?;
+        plugin::adapt::page_from_json(&out)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -298,137 +335,137 @@ pub async fn search(source: Source, keyword: String, page: u32) -> Result<Page, 
 
 #[tauri::command]
 pub async fn detail(source: Source, id: String) -> Result<Detail, String> {
-    if is_plugin(&source) {
-        // 默认引擎是前端沙箱;只有显式要求回退时才走 boa
-        if !boa_engine() {
-            return Err(NO_BOA.into());
-        }
-        return blocking(move || {
-            use reelbox_core::model::{Detail, Episode, Group};
-            let path = std::path::PathBuf::from(&source.url);
-            let did = id.clone();
-            let arg = format!("{{\"id\":\"{}\"}}", id.replace('"', ""));
-            let out = plugin::run_file(&path, "detail", &arg, boa_fetch())?;
-            let v: serde_json::Value =
-                serde_json::from_str(&out).map_err(|e| format!("detail 返回值不是 JSON: {e}"))?;
-            let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-            let mut groups = Vec::new();
-            if let Some(gs) = v.get("groups").and_then(|x| x.as_array()) {
-                for (i, g) in gs.iter().enumerate() {
-                    let mut eps = Vec::new();
-                    if let Some(es) = g.get("episodes").and_then(|x| x.as_array()) {
-                        for (j, e) in es.iter().enumerate() {
-                            let eid = e.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                            if eid.is_empty() {
-                                continue;
-                            }
-                            let name = e
-                                .get("name")
-                                .and_then(|x| x.as_str())
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| format!("第 {} 集", j + 1));
-                            eps.push(Episode { id: eid, name });
-                        }
-                    }
-                    let gname = g
-                        .get("name")
-                        .and_then(|x| x.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| format!("线路 {}", i + 1));
-                    groups.push(Group { id: format!("g{}", i), name: gname, episodes: eps });
-                }
-            }
-            Ok(Detail { id: did, title: s("title"), poster: s("poster"), summary: s("summary"), groups })
-        })
-        .await;
+    if let Route::Cms = route(&source)? {
+        return blocking(move || Client::new(source).detail(&id)).await;
     }
-    blocking(move || Client::new(source).detail(&id)).await
+    // 默认引擎是前端沙箱;只有显式要求回退时才走 boa
+    if !boa_engine() {
+        return Err(NO_BOA.into());
+    }
+    blocking(move || {
+        use reelbox_core::model::{Detail, Episode, Group};
+        let path = std::path::PathBuf::from(&source.url);
+        let did = id.clone();
+        let arg = format!("{{\"id\":\"{}\"}}", id.replace('"', ""));
+        let out = plugin::run_file(&path, "detail", &arg, boa_fetch())?;
+        let v: serde_json::Value =
+            serde_json::from_str(&out).map_err(|e| format!("detail 返回值不是 JSON: {e}"))?;
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let mut groups = Vec::new();
+        if let Some(gs) = v.get("groups").and_then(|x| x.as_array()) {
+            for (i, g) in gs.iter().enumerate() {
+                let mut eps = Vec::new();
+                if let Some(es) = g.get("episodes").and_then(|x| x.as_array()) {
+                    for (j, e) in es.iter().enumerate() {
+                        let eid = e.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                        if eid.is_empty() {
+                            continue;
+                        }
+                        let name = e
+                            .get("name")
+                            .and_then(|x| x.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("第 {} 集", j + 1));
+                        eps.push(Episode { id: eid, name });
+                    }
+                }
+                let gname = g
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("线路 {}", i + 1));
+                groups.push(Group { id: format!("g{}", i), name: gname, episodes: eps });
+            }
+        }
+        Ok(Detail { id: did, title: s("title"), poster: s("poster"), summary: s("summary"), groups })
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn play(source: Source, episode_id: String) -> Result<Stream, String> {
-    if is_plugin(&source) {
-        // 默认引擎是前端沙箱;只有显式要求回退时才走 boa
-        if !boa_engine() {
-            return Err(NO_BOA.into());
+    if let Route::Cms = route(&source)? {
+        let st = blocking(move || Client::new(source).stream(&episode_id)).await?;
+        allow_stream(&st.url);
+        for o in &st.options {
+            allow_stream(&o.url);
         }
-        return blocking(move || {
-            let path = std::path::PathBuf::from(&source.url);
-            let arg = format!("{{\"id\":\"{}\"}}", episode_id.replace('"', ""));
-            let out = plugin::run_file(&path, "play", &arg, boa_fetch())?;
-            let mut v: serde_json::Value =
-                serde_json::from_str(&out).map_err(|e| format!("play 返回值不是 JSON: {e}"))?;
-            // play 允许返回数组(多清晰度):url 取第一档,其余放进 options
-            let mut options = Vec::new();
-            if let Some(arr) = v.as_array() {
-                for (i, one) in arr.iter().enumerate() {
-                    let u = one.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    if u.is_empty() {
-                        continue;
-                    }
-                    let q = one
-                        .get("quality")
-                        .and_then(|x| x.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| format!("档 {}", i + 1));
-                    options.push(reelbox_core::model::StreamOption { quality: q, url: u });
-                }
-                v = arr.first().cloned().unwrap_or(serde_json::Value::Null);
-            }
-            let url = v
-                .get("url")
-                .and_then(|x| x.as_str())
-                .ok_or("play 没返回 url")?
-                .to_string();
-            let mut headers = std::collections::BTreeMap::new();
-            if let Some(h) = v.get("headers").and_then(|x| x.as_object()) {
-                for (k, val) in h {
-                    if let Some(sv) = val.as_str() {
-                        headers.insert(k.clone(), sv.to_string());
-                    }
-                }
-            }
-            let st = Stream {
-                url,
-                mime: "application/vnd.apple.mpegurl".into(),
-                headers,
-                options,
-                // boa 回退引擎不发分享页请求:它给的地址就是播放地址
-                page: false,
-            };
-            allow_stream(&st.url);
-            for o in &st.options {
-                allow_stream(&o.url);
-            }
-            Ok(st)
-        })
-        .await;
+        return Ok(st);
     }
-    let st = blocking(move || Client::new(source).stream(&episode_id)).await?;
-    allow_stream(&st.url);
-    for o in &st.options {
-        allow_stream(&o.url);
+    // 默认引擎是前端沙箱;只有显式要求回退时才走 boa
+    if !boa_engine() {
+        return Err(NO_BOA.into());
     }
-    Ok(st)
+    blocking(move || {
+        let path = std::path::PathBuf::from(&source.url);
+        let arg = format!("{{\"id\":\"{}\"}}", episode_id.replace('"', ""));
+        let out = plugin::run_file(&path, "play", &arg, boa_fetch())?;
+        let mut v: serde_json::Value =
+            serde_json::from_str(&out).map_err(|e| format!("play 返回值不是 JSON: {e}"))?;
+        // play 允许返回数组(多清晰度):url 取第一档,其余放进 options
+        let mut options = Vec::new();
+        if let Some(arr) = v.as_array() {
+            for (i, one) in arr.iter().enumerate() {
+                let u = one.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                if u.is_empty() {
+                    continue;
+                }
+                let q = one
+                    .get("quality")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("档 {}", i + 1));
+                options.push(reelbox_core::model::StreamOption { quality: q, url: u });
+            }
+            v = arr.first().cloned().unwrap_or(serde_json::Value::Null);
+        }
+        let url = v
+            .get("url")
+            .and_then(|x| x.as_str())
+            .ok_or("play 没返回 url")?
+            .to_string();
+        let mut headers = std::collections::BTreeMap::new();
+        if let Some(h) = v.get("headers").and_then(|x| x.as_object()) {
+            for (k, val) in h {
+                if let Some(sv) = val.as_str() {
+                    headers.insert(k.clone(), sv.to_string());
+                }
+            }
+        }
+        let st = Stream {
+            url,
+            mime: "application/vnd.apple.mpegurl".into(),
+            headers,
+            options,
+            // boa 回退引擎不发分享页请求:它给的地址就是播放地址
+            page: false,
+        };
+        allow_stream(&st.url);
+        for o in &st.options {
+            allow_stream(&o.url);
+        }
+        Ok(st)
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn filters(source: Source) -> Result<Vec<Filter>, String> {
-    if is_plugin(&source) {
-        // 默认引擎是前端沙箱;只有显式要求回退时才走 boa
-        if !boa_engine() {
-            return Err(NO_BOA.into());
-        }
-        return Ok(tauri::async_runtime::spawn_blocking(move || {
-            let path = std::path::PathBuf::from(&source.url);
-            plugin::plugin_filters(&path, boa_fetch())
-        })
-        .await
-        .unwrap_or_default());
+    if let Route::Cms = route(&source)? {
+        return Ok(tauri::async_runtime::spawn_blocking(move || Client::new(source).filters())
+            .await
+            .unwrap_or_default());
     }
-    Ok(tauri::async_runtime::spawn_blocking(move || Client::new(source).filters())
-        .await
-        .unwrap_or_default())
+    // 默认引擎是前端沙箱;只有显式要求回退时才走 boa
+    if !boa_engine() {
+        return Err(NO_BOA.into());
+    }
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        let path = std::path::PathBuf::from(&source.url);
+        plugin::plugin_filters(&path, boa_fetch())
+    })
+    .await
+    .unwrap_or_default())
 }
 
 /// 取一张封面并转成 jpeg,直接以二进制回给前端(不占 JSON 体积)。
@@ -675,7 +712,7 @@ pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value,
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect();
-    // 新导入的插件写原生后缀;老的 `.webox.js` 文件照样认(is_plugin / plugin_read)。
+    // 新导入的插件写原生后缀;老的 `.webox.js` 文件照样认(plugin_read / `derive_adapter`)。
     // 解析器单独一个后缀,重新导入时不用再读源码也能认出来。
     let suffix = if meta.kind == plugin::KIND_PARSER {
         ".reelbox.parser.js"

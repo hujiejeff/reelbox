@@ -458,14 +458,13 @@ mod tests {
         if std::env::var("REELBOX_NET").as_deref() != Ok("1") {
             return;
         }
+        // 其余字段(version / options / adapter / probe / health)都用缺省值
         let c = Client::new(Source {
             id: "ffzy".into(),
             name: "非凡资源".into(),
             kind: "vod".into(),
             url: "https://cj.ffzyapi.com/api.php/provide/vod/from/ffm3u8".into(),
-            version: String::new(),
-            options: serde_json::Value::Null,
-            health: None,
+            ..Default::default()
         });
         let p = c.page(1, "").expect("列表失败");
         assert!(!p.items.is_empty(), "列表为空");
