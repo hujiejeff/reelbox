@@ -570,28 +570,88 @@ async function switchSource(src, opts) {
   syncSetSummaries();
 }
 
-/* ---------- 插件源:钩子在 sandbox iframe 里跑 ---------- */
+/* ---------- 适配器:导入时判定,运行时只读 ---------- */
+// 一条源走哪条路只看 `adapter`(见 docs/ARCHITECTURE.md 第 2 节):
+//   vod            → Rust 的 CMS 客户端(苹果 CMS 的 JSON / XML)
+//   reelbox/webox  → 沙箱,源的 url 就是插件文件
+//   iplayr         → 沙箱,但插件是**随包安装的内置引擎**,源的 url 是站点配置
+// 判定只做一次(导入时写进 adapter + probe),运行时不再重新猜格式。
 
-function pluginMode() {
-  return isPluginSource(S.source);
+/** 钩子跑在沙箱里的三种适配器(其余的交给 Rust) */
+const SANDBOX_ADAPTERS = ["reelbox", "webox", "iplayr"];
+
+/**
+ * 这条源用哪个适配器。
+ * 后端 `load_sources` 一定会把 `adapter` 补齐,这里只兜住极老的内存数据。
+ */
+function sourceAdapter(src) {
+  const a = String((src && src.adapter) || "").trim().toLowerCase();
+  if (a) return a;
+  const t = sourceType(src);
+  if (t === "parser") return PARSER_KIND;
+  if (t === "plugin") return "reelbox";
+  return "vod";
+}
+
+/** 钩子跑在沙箱 iframe 里吗(vod 走 Rust,解析器不是源) */
+function pluginMode(src) {
+  return SANDBOX_ADAPTERS.indexOf(sourceAdapter(src || S.source)) >= 0;
 }
 
 /**
- * 交给插件的源配置(引擎插件靠它知道爬哪个站)。没有就是空对象:
- * 普通插件不会因为多了个字段而变。
+ * 内置适配器的路径(`builtin_adapters()` 返回的那张表,见 src-tauri/src/builtin.rs)。
+ * 拿一次记一辈子:文件是启动时装的,应用跑起来之后不会变。
  */
-function pluginOptions() {
-  return (S.source && S.source.options) || {};
+let builtinTable = null;
+
+function builtinAdapter(name) {
+  if (!builtinTable) {
+    builtinTable = Promise.resolve(invoke("builtin_adapters")).catch((e) => {
+      log("BUILTIN ADAPTERS FAIL", errText(e));
+      builtinTable = null; // 下次再问一遍,别把一次失败记成永久没有
+      return {};
+    });
+  }
+  return builtinTable.then((t) => String((t && t[name]) || ""));
 }
 
-/** 列表:插件源走沙箱(ui/plugin-host.js),内置源走 Rust */
+/**
+ * 这个源的插件文件在哪儿。
+ * reelbox / webox 的地址就是插件文件;iplayr 的地址是站点配置,插件是内置引擎。
+ */
+async function adapterPath(src) {
+  if (sourceAdapter(src) === "iplayr") {
+    const path = await builtinAdapter("iplayr");
+    if (!path) throw new Error("内置 iplayr 引擎没装上(插件目录里找不到 builtin/iplayr.adapter.js)");
+    return path;
+  }
+  return String((src && src.url) || "");
+}
+
+/**
+ * 交给插件的 options。引擎类适配器从 `url` 里拿站点配置(它不知道别的);
+ * 其余源用自己存的 options —— 普通插件不会因为多了个字段而变。
+ */
+function adapterOptions(src) {
+  if (!src) return {};
+  if (sourceAdapter(src) === "iplayr") return { config: String(src.url || "") };
+  return src.options || {};
+}
+
+/** 在这个源的适配器里跑一个钩子(沙箱侧入口只有这一个) */
+async function callAdapter(src, hook, arg) {
+  const args = Object.assign({}, arg || {});
+  args.options = adapterOptions(src);
+  return callPlugin(await adapterPath(src), hook, args);
+}
+
+/** 列表:沙箱类适配器走 ui/plugin-host.js,vod 走 Rust */
 async function fetchPage(page, classify) {
   if (!pluginMode()) return invoke("list_items", { source: S.source, page, classify });
-  const res = await callPlugin(S.source.url, "list", {
+  const res = await callAdapter(S.source, "list", {
     page: page,
     cursor: page > 1 ? String(page) : null,
     filters: { classify: classify || "" },
-    options: pluginOptions(),
   });
   return {
     items: (res && (res.items || res.list)) || [],
@@ -601,11 +661,10 @@ async function fetchPage(page, classify) {
 
 async function fetchSearch(keyword, page) {
   if (!pluginMode()) return invoke("search", { source: S.source, keyword, page });
-  const res = await callPlugin(S.source.url, "search", {
+  const res = await callAdapter(S.source, "search", {
     query: keyword,
     keyword: keyword,
     cursor: page > 1 ? String(page) : null,
-    options: pluginOptions(),
   });
   return {
     items: (res && (res.items || res.list)) || [],
@@ -614,13 +673,14 @@ async function fetchSearch(keyword, page) {
 }
 
 async function fetchFilters() {
+  // 沙箱类适配器的分类由插件自己说(iplayr 从站点配置的 category 算)
   if (!pluginMode()) return invoke("filters", { source: S.source });
-  return callPlugin(S.source.url, "filters", { options: pluginOptions() });
+  return callAdapter(S.source, "filters", {});
 }
 
 async function fetchDetail(id) {
   if (!pluginMode()) return invoke("detail", { source: S.source, id });
-  const d = (await callPlugin(S.source.url, "detail", { id, options: pluginOptions() })) || {};
+  const d = (await callAdapter(S.source, "detail", { id })) || {};
   const groups = Array.isArray(d.groups) ? d.groups : [];
   return {
     id: d.id || id,
@@ -808,9 +868,11 @@ function errText(e) {
   return String(e);
 }
 
-/** 导入进来的 iplayr HTML 爬取配置:地址不是接口,天然取不到数据 */
+/** 当作接口导入的 HTML 爬取配置:地址不是接口,拿它取列表只会把配置本身当响应体 */
 function isCrawlSource(src) {
   if (!src) return false;
+  // iplayr 的地址**就是**站点配置(.json):它有内置引擎解释,不是"取不到数据"
+  if (sourceAdapter(src) === "iplayr") return false;
   if (isPluginSource(src)) return false;
   if (srcKind(src) === "xml") return false;
   const url = String(src.url || "").toLowerCase();
@@ -1626,6 +1688,22 @@ function normSource(raw) {
   const id = String(raw.id == null ? "" : raw.id).trim();
   // 后端把 kind 序列化成 type,这里跟着用 type,免得存回去时丢类型
   const src = { id: id, name: name, type: kind, url: url };
+  // 适配器与探测证据(P1/P2):导入时判定一次就落盘,之后一条源"走哪条路"
+  // 只看 adapter —— 存回去时不能弄丢(见 docs/ARCHITECTURE.md 第 2 节)
+  const adapter = String(raw.adapter == null ? "" : raw.adapter).trim();
+  if (adapter) src.adapter = adapter;
+  const probe = raw.probe;
+  if (probe && typeof probe === "object" && !Array.isArray(probe)) {
+    const one = {
+      at: String(probe.at || ""),
+      ok: !!probe.ok,
+      items: Number(probe.items) || 0,
+      sample: String(probe.sample || ""),
+    };
+    // 失败的那次带一句原因(四类码 + 一句话),成功的不用
+    if (probe.error) one.error = String(probe.error);
+    src.probe = one;
+  }
   // 版本只有解析器用(源页那块要显示「v1」);空的时候不占字段
   const version = String(raw.version == null ? "" : raw.version).trim();
   if (version) src.version = version;
@@ -1860,6 +1938,8 @@ function sourceKindLabel(s) {
 /** 技术子类型不进徽标,只出现在「更多」菜单首行与编辑对话框 */
 function sourceTechLabel(s) {
   const t = sourceType(s);
+  // iplayr:地址是站点配置,不是接口也不是插件文件
+  if (sourceAdapter(s) === "iplayr") return "站点配置";
   const path = String((s && s.url) || "").split(/[?#]/)[0].toLowerCase();
   if (t === "plugin") return path.endsWith(".reelbox.js") ? ".reelbox.js" : "JS 文件";
   if (t === "live") return path.endsWith(".m3u") ? "m3u" : "m3u8";
@@ -2214,17 +2294,16 @@ function syncTestAllBtn() {
   b.textContent = testingAll ? "测速中…" : "全部测速";
 }
 
-/** 单源探测:点播/XML 走 Rust 的 list_items,插件源走沙箱(和首页同一个请求) */
-async function probeSource(src) {
+/** 单源测速:点播/XML 走 Rust 的 list_items,沙箱类适配器走沙箱(和首页同一个请求) */
+async function checkSourceHealth(src) {
   const t0 = performance.now();
   const spent = () => Math.round(performance.now() - t0);
   try {
-    if (isPluginSource(src)) {
-      await callPlugin(src.url, "list", {
+    if (pluginMode(src)) {
+      await callAdapter(src, "list", {
         page: 1,
         cursor: null,
         filters: { classify: "" },
-        options: src.options || {},
       });
     } else {
       await invoke("list_items", { source: src, page: 1, classify: "" });
@@ -2264,7 +2343,7 @@ async function testAllSources() {
 
   let okCount = 0;
   for (const src of targets) {
-    const health = await probeSource(src);
+    const health = await checkSourceHealth(src);
     if (health.ok) okCount++;
     delete src._testing;
     src.health = health;
@@ -2321,9 +2400,9 @@ async function editSource(src) {
       { id: "name", label: "名称", value: src.name, placeholder: "例如 我的源" },
       {
         id: "url",
-        label: "接口地址",
+        label: "地址",
         value: src.url,
-        placeholder: "https://xxx/api.php/provide/vod",
+        placeholder: "https://xxx/api.php/provide/vod 或 https://…/iplayr/dbk.json",
       },
       {
         id: "kind",
@@ -2334,12 +2413,20 @@ async function editSource(src) {
         options: KIND_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
       },
     ],
-    note: "地址能看出类型就自动选好;认不出来时才需要手动选。以 .json 结尾的多半是 HTML 爬取配置,取不到数据。",
+    note: "地址能看出类型就自动选好;认不出来时才需要手动选。",
     onOpen: (d) => wireKindGuess(d),
   });
   if (!res) return;
-  // options 不在编辑表单里(它是导入时填的站点配置),但要跟着搬,不能编辑一下就丢
-  const src2 = normSource({ name: res.name, url: res.url, kind: res.kind, options: src.options });
+  // options / adapter / probe 都不在编辑表单里,但要跟着搬:
+  // adapter 是导入时判定的(运行时只看它),编辑一下名字不能把它弄丢
+  const src2 = normSource({
+    name: res.name,
+    url: res.url,
+    kind: res.kind,
+    options: src.options,
+    adapter: src.adapter,
+    probe: src.probe,
+  });
   if (!src2) return;
   const list = S.sources.slice();
   // 按对象找位置(不是按 id):同 id 的两条源不会互相误伤
@@ -2412,17 +2499,10 @@ async function removeSource(src) {
 
 /* ---------- 导入:两个入口,共用一套表单与判型 ---------- */
 // 用户的心智模型:一次加一条,和一次加一包,是两件事。
-//   「导入源」  单条源:JSON(苹果 CMS)、XML、JS 插件。判型后加一条并设为当前。
+//   「导入源」  单条源:接口地址 / 站点配置 / 插件文件。判型后**先探测**,能用才建源。
 //   「批量导入」集合/索引:JSON 里带 sources / sites 数组的那种,一次加入多条。
 // 两条路读内容、判型、落地都走同一批函数(analyzeImport / collectionOf /
 // singleSourceOf / applyImport),区别只在标题、允许的类型和落地行为。
-
-/** 「导入源」判型失败时才出现的手选清单 —— 单条源只有这三种 */
-const SINGLE_IMPORT_TYPES = [
-  { value: "plugin", label: "插件(JS)" },
-  { value: "json", label: "源(JSON)" },
-  { value: "xml", label: "源(XML)" },
-];
 
 /** 单源 JSON 里可能装着接口地址的字段 */
 const SINGLE_SOURCE_KEYS = ["api", "url", "apiurl", "api_url", "interface", "baseurl", "base_url"];
@@ -2520,6 +2600,207 @@ function nameFromTarget(target) {
   return base.replace(/(\.[^.]+)+$/, "") || base || "新源";
 }
 
+/* ---------- 导入即探测(docs/ARCHITECTURE.md 第 3 节) ---------- */
+// 用户粘一个地址 → ①静态特征缩小候选(不发网络)→ ②依次试跑 list(page=1),
+// 每个限时 8 秒 → ③第一个出条目的定案,写进 adapter + probe。
+// 判定只做一次:之后运行时只看 adapter,不会"昨天能看、今天变成另一个适配器"。
+// 失败分三态(第 3 节):格式不对 → 不建源;网络没通 → **照样建源**;一个候选都没有 → unknown。
+
+/** 每个候选的试跑上限。三个候选都试完 ≈ 24 秒封顶,比"导进来才发现不能用"划算 */
+const PROBE_TIMEOUT_MS = 8000;
+
+/** 进度提示里的叫法:用户不需要认识 vod / iplayr 这些词 */
+const PROBE_LABEL = { vod: "接口", iplayr: "站点配置", reelbox: "插件", webox: "插件" };
+
+/** 认不出来时依次试这三个(顺序即优先级) */
+const PROBE_FALLBACK = ["vod", "iplayr", "reelbox"];
+
+/**
+ * 静态特征表(不发网络):返回候选适配器,最可能的排在最前。
+ * 一条都认不出来时退回 [`PROBE_FALLBACK`] —— 那时只能靠试跑回答。
+ */
+function probeCandidates(target, text) {
+  const body = String(text == null ? "" : text);
+  const addr = String(target == null ? "" : target).trim().toLowerCase();
+  const bare = addr.split(/[?#]/)[0];
+  const out = [];
+  const add = (a) => {
+    if (out.indexOf(a) < 0) out.push(a);
+  };
+  // 解析器不是源(它只把一张网页变成播放地址):走各自的流程,不进探测
+  if (/reelbox\s*\.\s*parser\s*\(/.test(body)) return { parser: true, list: [] };
+  if (/reelbox\s*\.\s*define\s*\(/.test(body)) add("reelbox");
+  if (/WeBox\s*\.\s*define\s*\(/.test(body)) add("webox");
+  // iplayr 的站点配置是一份 JSON:同时有 category 与 vod_node 就是它
+  const data = tryJson(body);
+  if (data && typeof data === "object" && !Array.isArray(data) && data.category && data.vod_node) {
+    add("iplayr");
+  }
+  // 苹果 CMS:接口关键字 / XML 变体
+  if (/api\.php|ac=list|ac=detail/i.test(addr)) add("vod");
+  if (bare.endsWith(".xml") || /ac=xml/i.test(addr)) add("vod");
+  return { parser: false, list: out.length ? out : PROBE_FALLBACK.slice() };
+}
+
+/** 配置自称的名字(iplayr 的配置有 title):比"从域名猜"准得多 */
+function probeNameOf(text) {
+  const data = tryJson(text);
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "";
+  for (const k of ["title", "name"]) {
+    const v = data[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+/** 首条标题:给用户一眼看出"抓的是不是这个站"(probe.sample,最长 60 字) */
+function probeSampleOf(items) {
+  for (const it of items || []) {
+    const t = String((it && it.title) || "").trim();
+    if (t) return t.length > 60 ? t.slice(0, 60) + "…" : t;
+  }
+  return "";
+}
+
+/** 返回前 100 字(格式不对时给用户看:一眼就知道地址粘错了) */
+function probeHeadOf(text) {
+  return String(text == null ? "" : text).replace(/\s+/g, " ").trim().slice(0, 100);
+}
+
+/**
+ * 超时。插件沙箱自己有 30 秒的超时,导入这边等不了那么久 —— 8 秒还没回,
+ * 就当"网络没通"(判不了),而不是格式错。
+ */
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("network: " + label + "超时(" + Math.round(ms / 1000) + " 秒没回应)"));
+    }, ms);
+    Promise.resolve(promise).then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
+/**
+ * 错误文案 → 两种判定(对应架构文档第 4 节的四类码)。
+ * 网络问题绝不能当成"格式不对":那会让用户去改一个本来没错的地址。
+ */
+function probeErrorKind(raw) {
+  const s = String(raw == null ? "" : raw);
+  if (/network|超时|timed? ?out|请求失败|连不上|connect|dns|unreachable|reset|eof|读响应失败|failed to fetch|networkerror/i.test(s)) {
+    return "network";
+  }
+  return "format"; // parse / auth / unsupported 以及认不出来的,都算"这个地址不是源"
+}
+
+/** 试跑一次 list(page=1),出条目就算过 */
+async function probeRunList(adapter, target, name) {
+  if (adapter === "vod") {
+    // 苹果 CMS:和正常取列表同一条路(Rust 的接口客户端)
+    const page = await invoke("list_items", {
+      source: {
+        id: shortHash(target),
+        name: name || nameFromTarget(target),
+        type: /\bac=xml\b|\.xml$/i.test(String(target).split(/[?#]/)[0]) ? "xml" : "vod",
+        url: target,
+        adapter: "vod",
+      },
+      page: 1,
+      classify: "",
+    });
+    return (page && page.items) || [];
+  }
+  // reelbox / webox:地址就是插件文件;iplayr:内置引擎 + 地址当站点配置
+  const path = adapter === "iplayr" ? await builtinAdapter("iplayr") : target;
+  if (!path) throw new Error("unsupported: 内置 " + adapter + " 引擎没装上");
+  const res = await callPlugin(path, "list", {
+    page: 1,
+    cursor: null,
+    filters: { classify: "" },
+    options: adapter === "iplayr" ? { config: target } : {},
+  });
+  return (res && (res.items || res.list)) || [];
+}
+
+/**
+ * 探测一个地址用哪个适配器。入参 `{ target, text, fileName }`。
+ *
+ * 返回 `{ adapter, ok, items, sample, name, error, head, tried, kind, at }`:
+ *   kind = "ok"       出条目了,定案
+ *        = "network"  网络没通 / 超时 → **判不了**,调用方仍然建源
+ *        = "format"   试过的都答"不是这种格式" → 不建源
+ *        = "unknown"  一个候选都没有(理论上到不了)
+ *        = "parser"   这是解析器,不是源(调用方该走解析器流程)
+ * onProgress(第几个, 共几个, 适配器) 给界面报进度。
+ */
+async function probeSource(input, onProgress) {
+  const o = input || {};
+  const target = String(o.target == null ? "" : o.target).trim();
+  const text = String(o.text == null ? "" : o.text);
+  const at = nowIso();
+  const name = probeNameOf(text) || nameFromTarget(target);
+  const head = probeHeadOf(text);
+  const cand = probeCandidates(target, text);
+  if (cand.parser) {
+    return {
+      adapter: "", ok: false, items: 0, sample: "", name: name, head: head, tried: [],
+      error: "parse: 这是解析器(reelbox.parser),不是源", kind: "parser", at: at,
+    };
+  }
+  const tried = cand.list || [];
+  if (!tried.length) {
+    return {
+      adapter: "", ok: false, items: 0, sample: "", name: name, head: head, tried: [],
+      error: "没有可试的适配器", kind: "unknown", at: at,
+    };
+  }
+  let netFail = null; // 第一个"网络没通"的候选:它决定了失败时用哪个 adapter
+  let lastError = "";
+  for (let i = 0; i < tried.length; i += 1) {
+    const adapter = tried[i];
+    if (onProgress) onProgress(i + 1, tried.length, adapter);
+    try {
+      const items = await withTimeout(
+        probeRunList(adapter, target, name),
+        PROBE_TIMEOUT_MS,
+        PROBE_LABEL[adapter] || adapter
+      );
+      if (items && items.length) {
+        log("PROBE ok", adapter, "items=" + items.length, shortUrl(target, 90));
+        return {
+          adapter: adapter, ok: true, items: items.length, sample: probeSampleOf(items),
+          name: name, head: head, tried: tried.slice(0, i + 1), error: "", kind: "ok", at: at,
+        };
+      }
+      // 没报错但一条都没有:和"格式不对"同类,接着试下一个候选
+      lastError = "parse: 这个适配器一条也没取到";
+    } catch (e) {
+      const raw = errText(e);
+      lastError = raw;
+      if (!netFail && probeErrorKind(raw) === "network") netFail = { adapter: adapter, raw: raw };
+      log("PROBE trial fail", adapter, shortNote(raw));
+    }
+  }
+  if (netFail) {
+    return {
+      adapter: netFail.adapter, ok: false, items: 0, sample: "", name: name, head: head,
+      tried: tried, error: netFail.raw, kind: "network", at: at,
+    };
+  }
+  return {
+    adapter: tried[0], ok: false, items: 0, sample: "", name: name, head: head,
+    tried: tried, error: lastError, kind: "format", at: at,
+  };
+}
+
 /**
  * 两个导入对话框共用的表单:地址/路径 + 可选名称 + 「选择文件」。
  * cfg = { headline, okText, icon, note, placeholder, namePlaceholder, preset }
@@ -2574,27 +2855,6 @@ function wireImportFile(d) {
   };
 }
 
-/** 判型失败:让人手选一次类型(界面上唯一需要用户选类型的地方,只给单源的三种) */
-async function askImportType(target) {
-  const res = await formDialog({
-    icon: "help",
-    headline: "无法自动识别",
-    okText: "继续导入",
-    fields: [
-      {
-        id: "type",
-        label: "类型",
-        type: "select",
-        value: "json",
-        hint: "内容里既没有 define(),也不是 XML,也不像源配置的 JSON。",
-        options: SINGLE_IMPORT_TYPES,
-      },
-    ],
-    note: "地址:" + String(target || ""),
-  });
-  return res ? res.type : "";
-}
-
 /**
  * 把「地址或文件」读成文本:本地文件直接读,链接先抓
  * (plugin_fetch,和插件走同一个带 SSRF 兜底的出口)。
@@ -2637,7 +2897,12 @@ async function pickImportTarget(cfg) {
 }
 
 /**
- * 「导入源」:单个源(JSON / XML / 插件)。判型后加一条并设为当前。
+ * 「导入源」:单个源(接口地址 / 站点配置 / 插件)。加一条并设为当前。
+ *
+ * 三条路:
+ *   插件(js)      → 存进插件目录就是一条源,不发网络:规则文件不用试跑
+ *   解析器(js)    → 走解析器那一块(不是源,不进源列表)
+ *   其余(地址 / 配置) → **先探测**(probeSource),判出适配器再建源 —— P2 的主路径
  *
  * opts.parser = true 是「导入解析器」:同一套表单与判型,只是文案换成解析器的,
  * 且只收解析器插件(普通的源插件不加进源列表,也不设当前源)。
@@ -2652,7 +2917,7 @@ async function runSingleImport(preset, opts) {
     placeholder: asParser ? "D:\\…\\share.reelbox.parser.js" : "https://…/api.php/provide/vod 或 D:\\…\\source.json",
     note: asParser
       ? "解析器是一个 js 文件,写 reelbox.parser({...}):有些源只给网页地址,靠它把播放地址取出来。选本地文件或填路径都行。"
-      : "一个源:插件是 js、源是 json/xml;链接和本地文件都行。类型自动判断(define() → 插件,<?xml → XML,带 api/url/provide 的 JSON → 源),认不出来才问你。",
+      : "一个源:接口地址、站点配置或插件文件;链接和本地文件都行。加进去之前会先试一下能不能取到片单,能用才建源。",
   });
   if (!ctx) return;
   // 集合源里有几条说不清,不该悄悄只加第一条 —— 指到「批量导入」去
@@ -2663,8 +2928,6 @@ async function runSingleImport(preset, opts) {
     );
     return;
   }
-  const type = ctx.hit.type || (await askImportType(ctx.target));
-  if (!type) return;
   // 「导入解析器」只吃解析器:普通插件/源从这里进来会被当成源,和用户点的按钮不符
   if (asParser && !looksLikeParserSource(ctx.text)) {
     alertDialog(
@@ -2674,10 +2937,39 @@ async function runSingleImport(preset, opts) {
     return;
   }
   if (!asParser && looksLikeParserSource(ctx.text)) {
-    // 从「导入源」里进来的是解析器:照解析器的规则落地(不进源列表)
+    // 从「导入源」里进来的是解析器:照解析器的规则落地(不进源列表,也不探测)
     log("import:识别为解析器");
   }
-  await applyImport(type, ctx.hit, ctx);
+  // 插件与解析器都是 js 文件:文件本身就是规则,存下来即可,不需要发网络试跑
+  if (asParser || looksLikeParserSource(ctx.text) || ctx.hit.type === "plugin") {
+    await applyImport("plugin", ctx.hit, ctx);
+    importPicked = null;
+    return;
+  }
+  // 其余一律先探测:地址是接口、是站点配置、还是一个包装过的源配置(api 字段指向真地址)
+  const one = ctx.hit.source || null;
+  const target = String((one && one.url) || ctx.target || "").trim();
+  // 进度复用底部 snackbar(不新造组件):三个候选最多转 24 秒,不提示会像卡死
+  const closeTip = toast("正在验证 1/1 …", { timeout: 60000, dismissible: true });
+  let probe;
+  try {
+    probe = await probeSource(
+      { target: target, text: ctx.text, fileName: ctx.fileName },
+      (i, n, adapter) => {
+        toast(
+          "正在验证 " + i + "/" + n + "(" + (PROBE_LABEL[adapter] || adapter) + ")…",
+          { timeout: 60000, dismissible: true }
+        );
+      }
+    );
+  } catch (e) {
+    closeTip();
+    log("IMPORT PROBE FAIL", errText(e));
+    alertDialog("验证失败", errText(e));
+    return;
+  }
+  closeTip();
+  await applyImport("source", ctx.hit, Object.assign({}, ctx, { probe: probe, probeTarget: target }));
   importPicked = null;
 }
 
@@ -2705,35 +2997,8 @@ async function runBatchImport(preset) {
 }
 
 /**
- * 引擎插件专用的那一步:问「站点配置地址」。
- * 引擎插件是通用的(一份代码爬所有同类站),站点全在这份配置里,
- * 所以它不是一个新概念 —— 就是源的一个字段(见 docs/ENGINE-PLUGINS.md)。
- * 返回 "" 表示没填(只装插件、不建源)。
- */
-async function askEngineConfig(pluginName) {
-  const res = await formDialog({
-    icon: "dns",
-    headline: "站点配置地址",
-    okText: "生成源",
-    fields: [
-      {
-        id: "config",
-        label: "站点配置地址",
-        placeholder: "https://raw.githubusercontent.com/…/iplayr/dbk.json",
-        hint: "引擎插件 + 一份站点配置 = 一条源。",
-        required: false,
-      },
-    ],
-    note:
-      "「" + (pluginName || "这个引擎插件") + "」只是爬取规则,爬哪个站看这份配置。" +
-      "留空直接确定 = 只装插件、不建源。",
-  });
-  return res ? String(res.config || "").trim() : "";
-}
-
-/**
- * 按判型结果落地:插件存进插件目录,集合源逐个加入,单源加进列表并设为当前。
- * ctx = { target, text, fileName, name }
+ * 按判型结果落地:插件存进插件目录,集合源逐个加入,单源(探测过)加进列表并设为当前。
+ * ctx = { target, text, fileName, name, probe, probeTarget }
  */
 async function applyImport(type, hit, ctx) {
   const given = String(ctx.name || "").trim();
@@ -2761,39 +3026,21 @@ async function applyImport(type, hit, ctx) {
         return;
       }
 
-      // 引擎插件:文件本身只有"怎么爬",站点在配置地址里 —— 问到了才建得出源
+      // 引擎插件:从 P2 起引擎随包安装(见 src-tauri/src/builtin.rs),人不用再导它。
+      // 它本身不是源 —— 一份引擎 + 一份站点配置才是一条源,而那一步由探测接管:
+      // 直接粘站点配置地址,自动判出 iplayr 并建源。
       if (isEngine) {
-        const config = await askEngineConfig(name);
-        if (!config) {
-          log("engine imported without config", path);
-          await alertDialog(
-            "引擎插件已装好,还差站点配置",
-            "引擎插件只是一套爬取规则,站点信息在配置里,所以这次没有建源。" +
-              "再用「导入源」选一次这个插件,填上站点配置地址就会生成一条能用的源。"
-          );
-          return;
-        }
-        // 同一个插件文件再导一次 = 补/换配置地址,不重复建源
-        const options = Object.assign({}, (known && known.options) || {}, { config: config });
-        if (known) {
-          await applySources(
-            (S.sources || []).map((x) => (x === known ? Object.assign({}, x, { options: options }) : x))
-          );
-        } else {
-          await applySources(
-            (S.sources || []).concat([{ id: res.id, name: name, type: PLUGIN_KIND, url: path, options: options }])
-          );
-        }
-        const src = (S.sources || []).find((x) => x.url === path);
-        log("engine imported", String(res && res.id), shortUrl(config, 100));
-        if (src) await setCurrentSource(src, { stay: true });
-        else toast("已导入引擎插件:" + name);
+        log("engine plugin not needed", path);
+        toast("引擎已经内置了:不用导入它,直接粘站点配置地址即可");
         return;
       }
 
       if (!known) {
+        // adapter 顺手写死:插件文件的格式是确定的(它自己就是适配器),不用探测
         await applySources(
-          (S.sources || []).concat([{ id: res.id, name: name, type: PLUGIN_KIND, url: path }])
+          (S.sources || []).concat([
+            { id: res.id, name: name, type: PLUGIN_KIND, url: path, adapter: "reelbox" },
+          ])
         );
       }
       const src = (S.sources || []).find((x) => x.url === path) || known;
@@ -2827,12 +3074,56 @@ async function applyImport(type, hit, ctx) {
     return;
   }
 
-  // 单源(JSON / XML / 直播):地址优先用配置里带的那个,没有再退回用户填的
-  const one = hit.source || null;
-  const url = (one && one.url) || String(ctx.target || "").trim();
-  const name = given || (one && one.name) || nameFromTarget(ctx.target);
-  const kind = type === "xml" ? "xml" : type === "live" ? "live" : "vod";
-  const src = normSource({ name: name, url: url, kind: kind });
+  // 单源:ctx.probe 是 probeSource 的结论(见架构文档第 3 节的三态)
+  await applyProbedSource(hit, ctx);
+}
+
+/**
+ * 探测之后落地一条源(P2 的主路径):适配器已经判好,这里只做三态分流。
+ *
+ * 成功          → 建源(带 `probe` 证据)并设为当前
+ * 网络没通      → **仍然建源**:地址本身没被否定,adapter 用第一个候选,
+ *                 probe.ok=false 记下原因,网络好了直接就能看
+ * 格式不对      → 不建源:把试过的适配器和返回前 100 字摆出来
+ *
+ * `type` 继续按老规则写一份(vod / xml / live):界面还在用它(徽标、分块)。
+ */
+async function applyProbedSource(hit, ctx) {
+  const given = String(ctx.name || "").trim();
+  const probe = ctx.probe || { adapter: "", ok: false, items: 0, sample: "", error: "", kind: "unknown" };
+  const target = String(ctx.probeTarget || (hit.source && hit.source.url) || ctx.target || "").trim();
+  const tried = (probe.tried || [probe.adapter]).filter(Boolean).join(" / ");
+
+  if (probe.kind === "format" || probe.kind === "unknown") {
+    log("IMPORT probe rejected", probe.kind, shortNote(probe.error));
+    await alertDialog(
+      "这个地址不是能识别的源格式",
+      "试过:" + (tried || "无") + "。" +
+        (probe.error ? "错误:" + probe.error : "") +
+        (probe.head ? " 返回前 100 字:「" + probe.head + "」" : "")
+    );
+    return;
+  }
+  if (!target) {
+    alertDialog("导入失败", "没拿到可用的地址。");
+    return;
+  }
+  // 名字:用户填的 > 配置自称的(iplayr 配置里的 title)> 配置里的名字 > 从地址猜
+  const name = given || probe.name || (hit.source && hit.source.name) || nameFromTarget(ctx.target);
+  const kind = hit.type === "xml" ? "xml" : hit.type === "live" ? "live" : "vod";
+  const src = normSource({
+    name: name,
+    url: target,
+    kind: kind,
+    adapter: probe.adapter || "vod",
+    probe: {
+      at: probe.at || nowIso(),
+      ok: !!probe.ok,
+      items: Number(probe.items) || 0,
+      sample: String(probe.sample || ""),
+      error: probe.ok ? "" : String(probe.error || ""),
+    },
+  });
   if (!src) {
     alertDialog("导入失败", "没拿到可用的地址。");
     return;
@@ -2845,9 +3136,20 @@ async function applyImport(type, hit, ctx) {
   }
   await applySources((S.sources || []).concat([src]));
   const added = (S.sources || []).find((x) => x.url === src.url);
-  log("source imported", src.url);
+  log(
+    "source imported",
+    "adapter=" + src.adapter,
+    "items=" + Number(probe.items || 0),
+    "ok=" + (probe.ok ? "yes" : "no"),
+    shortUrl(src.url, 100)
+  );
   if (added) await setCurrentSource(added, { stay: true });
-  else toast("已导入「" + name + "」");
+  // 网络没通也要说清楚:源已经存下了,等网络好了再点它
+  toast(
+    probe.kind === "network"
+      ? "网络没通,源已保存,可稍后重试"
+      : "已导入「" + name + "」" + (Number(probe.items) ? "· " + probe.items + " 条" : "")
+  );
 }
 
 let srcRowMenuAnchor = null; // 当前打开「更多」的按钮(再点同一个算收起)
@@ -4061,14 +4363,13 @@ function pageOnlyFail(st) {
 
 /** 插件源的 play 钩子:返回 {sources:[{id,name,url,mime,headers}]},换成内部 Stream 形状 */
 async function pluginStream(groupId, episodeId) {
-  const res = await callPlugin(S.source.url, "play", {
+  const res = await callAdapter(S.source, "play", {
     contentId: S.detailId || "",
     groupId: groupId || "",
     episodeId: episodeId,
     // 契约里的名字是 id(见 docs/PLUGIN.md):两个都喂,插件写哪个都能拿到
     id: episodeId,
     purpose: "playback",
-    options: pluginOptions(),
   });
   // play 允许直接返回数组(多档清晰度),别只认 {sources}/{streams}/单对象
   const list = Array.isArray(res)
