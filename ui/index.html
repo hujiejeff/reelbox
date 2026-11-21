@@ -1569,16 +1569,52 @@
   </div>
 </div>
 <script>
+  // 前端运行期报错贴条。以前只能涨不能消:一旦抛错,底部那条红就永远占着。
+  // 现在有「关闭」按钮 / 最多留 8 条 / 按 Esc 也能收起。
   window.__err = function (msg) {
     var d = document.getElementById("errbox");
     if (!d) {
       d = document.createElement("div");
       d.id = "errbox";
-      d.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#b3261e;color:#fff;font:12px/1.5 monospace;padding:10px;white-space:pre-wrap;max-height:40%;overflow:auto";
+      d.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#b3261e;color:#fff;font:12px/1.5 monospace;padding:8px 10px;max-height:40%;overflow:auto;box-sizing:border-box";
+      var bar = document.createElement("div");
+      bar.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:4px";
+      var title = document.createElement("b");
+      title.textContent = "页面报错";
+      var sp = document.createElement("span");
+      sp.style.cssText = "opacity:.75";
+      sp.textContent = "点这一行或按 Esc 收起";
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "关闭";
+      btn.setAttribute("aria-label", "关闭报错提示");
+      btn.style.cssText = "margin-left:auto;background:transparent;border:1px solid rgba(255,255,255,.55);color:#fff;border-radius:6px;padding:2px 10px;font:12px/1.4 inherit;cursor:pointer";
+      var close = function () { d.style.display = "none"; };
+      btn.onclick = close;
+      bar.onclick = close;
+      d.__close = close;
+      bar.appendChild(title);
+      bar.appendChild(sp);
+      bar.appendChild(btn);
+      var body = document.createElement("pre");
+      body.id = "errbox-body";
+      body.style.cssText = "margin:0;white-space:pre-wrap;font:12px/1.5 monospace";
+      d.appendChild(bar);
+      d.appendChild(body);
       document.body.appendChild(d);
     }
-    d.textContent += msg + "\n";
+    var text = document.getElementById("errbox-body") || d;
+    var lines = String(text.textContent || "").split(String.fromCharCode(10)).filter(Boolean);
+    lines.push(String(msg));
+    if (lines.length > 8) lines = lines.slice(lines.length - 8);
+    text.textContent = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
+    d.style.display = "";
   };
+  window.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    var d = document.getElementById("errbox");
+    if (d && d.style.display !== "none" && typeof d.__close === "function") d.__close();
+  });
   window.addEventListener("error", function (e) {
     window.__err("error: " + (e.message || e.type) + "\n  at " + (e.filename || "") + ":" + (e.lineno || 0));
   });

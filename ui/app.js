@@ -3722,7 +3722,6 @@ function bindSettings() {
   bindSrcSeg();
   bindSetScrollLines();
   bindSourceManager();
-  bindParserManager();
   bindAdapterManager();
 
   // 播放
