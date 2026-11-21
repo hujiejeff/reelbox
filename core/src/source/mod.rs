@@ -43,6 +43,15 @@ pub struct Source {
     /// = 不同站点。空对象 / Null 都算「没有配置」,不落盘;老配置读进来是 Null。
     #[serde(default, skip_serializing_if = "options_is_empty")]
     pub options: serde_json::Value,
+    /// 这个源要先让用户人工过校验(Cloudflare / 登录)。开起来以后,运行时
+    /// 第一次取数据会自动弹校验页,拿到会话再继续(见 docs/ARCHITECTURE.md 4.1)。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub verify: bool,
+    /// 校验页要打开的站点地址。iplayr 这类源的 `url` 是**配置地址**,
+    /// 推不出站点域名,所以留一个字段显式指定;空着就按 `url` 的 origin 走。
+    /// 落盘用 camelCase:前端只认 `verifyUrl`(和它的其它字段同名习惯一致)。
+    #[serde(default, rename = "verifyUrl", skip_serializing_if = "String::is_empty")]
+    pub verify_url: String,
     /// 最近一次「测试连接」的结果;None = 从没测过(界面上是空心圆)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,

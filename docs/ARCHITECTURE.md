@@ -130,7 +130,9 @@ const html = await ctx.http.get(url, { session: s.id });
 - **cookie 不出内核**:适配器只拿会话 id;每次请求内核实取 cookie 罐里的值再发。
 - UA 也从窗口里取(`cf_clearance` 绑 UA),取不到才退回默认值。
 - 用户点「完成」时把 cookie **快照**进会话,子 WebView 随即销毁 —— 会话不依赖窗口活着。
-- 入口在 **设置 → 校验**(用户自己也能手动过一次)。
+- 入口有两个:**设置 → 校验**(手动过一次),以及**源编辑里的「需要人工校验」开关** ——
+  打开后运行时第一次取数据会自动弹页,适配器不用改一行代码。
+- 校验页地址单独一个字段:适配器/配置类源的 `url` 不是站点本身,推不出域名。
 
 证据见 [ARCHITECTURE-EVIDENCE.md](ARCHITECTURE-EVIDENCE.md) 的「人工校验会话」一节。
 

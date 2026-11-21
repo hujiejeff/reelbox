@@ -216,7 +216,7 @@ async function handleHttp(d) {
   const reply = { kind: "rpc.result", id: id, ok: false, error: "" };
   try {
     // 带会话的请求:宿主现取 window 里的 cookie,插件永远看不到它
-    const res = d.session
+    const res = (d.session)
       ? await invokeFn("session_fetch", {
           id: d.session,
           url: d.url,
@@ -247,7 +247,7 @@ function timeoutFor(hook) {
  * @param {string} hook filters / list / search / detail / play
  * @param {object|string} arg 钩子参数
  */
-export async function callPlugin(path, hook, arg) {
+export async function callPlugin(path, hook, arg, session) {
   if (!frame) throw new Error("插件宿主还没初始化");
   await readyPromise;
   let source = sourceCache.get(path);
@@ -262,7 +262,15 @@ export async function callPlugin(path, hook, arg) {
       reject(new Error("插件 " + hook + " 超时"));
     }, timeoutFor(hook));
     calls.set(id, { resolve: resolve, reject: reject, timer: timer });
-    postToSandbox({ kind: "run", id: id, path: path, source: source, hook: hook, arg: arg || {} });
+    postToSandbox({
+      kind: "run",
+      id: id,
+      path: path,
+      source: source,
+      hook: hook,
+      arg: arg || {},
+      session: session || "",
+    });
   });
 }
 

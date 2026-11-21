@@ -44,6 +44,8 @@ struct Sess {
     url: String,
     reason: String,
     opened_at: u64,
+    /// 哪个源开的(手动开的为 None)
+    source: Option<String>,
     state: State,
     /// 点「完成」时的快照:窗口关掉也还能用
     cookies: Vec<(String, String)>,
@@ -58,11 +60,18 @@ pub struct SessionInfo {
     pub url: String,
     pub reason: String,
     pub opened_at: u64,
+    pub source: String,
     pub done: bool,
     pub cancelled: bool,
     /// 窗口还在(用户能继续操作)
     pub alive: bool,
     pub cookies: usize,
+}
+
+/// 开会话要串行:并发进来两次(list 和分类)不能各开一页
+fn start_lock() -> &'static Mutex<()> {
+    static L: OnceLock<Mutex<()>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(()))
 }
 
 fn store() -> &'static Mutex<HashMap<String, Sess>> {
@@ -85,6 +94,7 @@ fn info(s: &Sess) -> SessionInfo {
         url: s.url.clone(),
         reason: s.reason.clone(),
         opened_at: s.opened_at,
+        source: s.source.clone().unwrap_or_default(),
         done: s.state == State::Done,
         cancelled: s.state == State::Cancelled,
         alive: s.state == State::Open,
@@ -108,10 +118,17 @@ fn split_url(url: &str) -> (String, String) {
 }
 
 fn next_id() -> String {
-    let n = now_secs() as u32;
-    let salt = std::process::id();
+    use std::sync::atomic::{AtomicU32, Ordering};
+    // 一秒内可能连开两个会话(list 和分类会同时问),只按时间戳会撞 id —— 加个序号
+    static SEQ: AtomicU32 = AtomicU32::new(1);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let mut h: u32 = 0x811c_9dc5;
-    for b in n.to_le_bytes().iter().chain(salt.to_le_bytes().iter()) {
+    for b in now_secs()
+        .to_le_bytes()
+        .iter()
+        .chain(seq.to_le_bytes().iter())
+        .chain(std::process::id().to_le_bytes().iter())
+    {
         h ^= *b as u32;
         h = h.wrapping_mul(0x0100_0193);
     }
@@ -193,6 +210,58 @@ pub async fn verify_start(
     reason: Option<String>,
     rect: Option<Vec<f64>>,
 ) -> Result<SessionInfo, String> {
+    start_session(&app, url, reason, None, rect)
+}
+
+/// 源要校验时用:已有可用会话就直接返回,没有就开一页并等用户点完。
+#[tauri::command]
+pub async fn verify_ensure(
+    app: AppHandle,
+    source: String,
+    url: String,
+    reason: Option<String>,
+) -> Result<SessionInfo, String> {
+    let found = store().lock().ok().and_then(|m| {
+        m.values()
+            .filter(|s| s.state == State::Done)
+            .filter(|s| s.source.as_deref() == Some(source.as_str()))
+            .max_by_key(|s| s.opened_at)
+            .map(info)
+    });
+    if let Some(s) = found {
+        crate::logging::event(&format!("VERIFY reuse id={} source={source}", s.id));
+        return Ok(s);
+    }
+    // 同一个源可能同时被问两次(list 和分类):查 + 开 一起加锁,只开一页
+    let id = {
+        let _guard = start_lock().lock().map_err(|_| "会话锁坏了".to_string())?;
+        let pending = store().lock().ok().and_then(|m| {
+            m.values()
+                .filter(|s| s.state == State::Open)
+                .filter(|s| s.source.as_deref() == Some(source.as_str()))
+                .max_by_key(|s| s.opened_at)
+                .map(|s| s.id.clone())
+        });
+        match pending {
+            Some(id) => {
+                crate::logging::event(&format!("VERIFY join id={id} source={source}"));
+                id
+            }
+            None => start_session(&app, url, reason, Some(source.clone()), None)?.id,
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || wait_blocking(&id, Some(180)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn start_session(
+    app: &AppHandle,
+    url: String,
+    reason: Option<String>,
+    source: Option<String>,
+    rect: Option<Vec<f64>>,
+) -> Result<SessionInfo, String> {
     let url = url.trim().to_string();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("校验地址必须以 http(s):// 开头".into());
@@ -253,6 +322,7 @@ pub async fn verify_start(
         origin,
         url,
         reason,
+        source,
         opened_at: now_secs(),
         state: State::Open,
         cookies: Vec::new(),

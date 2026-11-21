@@ -352,7 +352,11 @@ export function sandboxMain() {
       return k.toLowerCase() === "user-agent";
     });
     if (!hasUa) headers["User-Agent"] = DEFAULT_UA;
-    const res = await rpc("http.get", { url: url, headers: headers, session: o.session || null });
+    const res = await rpc("http.get", {
+      url: url,
+      headers: headers,
+      session: o.session || activeSession || null,
+    });
     const body = res && res.body !== undefined && res.body !== null ? String(res.body) : "";
     const out = new String(body);
     out.status = res && res.status ? res.status : 0;
@@ -567,7 +571,11 @@ export function sandboxMain() {
 
   /* ---------- 钩子执行 ---------- */
 
+  // 这次 run 用的会话(源勾了「需要校验」时宿主会传)
+  let activeSession = "";
+
   async function runHook(d) {
+    activeSession = d.session || "";
     const reply = { kind: "run.result", id: d.id, ok: false, error: "" };
     try {
       const entry = pluginFor(d.path, d.source);
@@ -583,6 +591,7 @@ export function sandboxMain() {
       reply.error = describeError(e);
       note(d.hook + " 失败: " + reply.error);
     }
+    activeSession = "";
     post(reply);
   }
 

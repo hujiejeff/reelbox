@@ -649,11 +649,48 @@ function adapterOptions(src) {
   return src.options || {};
 }
 
+/**
+ * 源的「需要人工校验」开关打开时:先拿到一个可用的会话。
+ * 有现成的就复用,没有就开一页校验并等用户点完(页面由内核弹出)。
+ */
+async function ensureVerify(src) {
+  if (!src || !src.verify) return "";
+  const origin = originOfUrl(src.verifyUrl || src.url);
+  if (!origin) return "";
+  try {
+    const rows = await invoke("session_list", {});
+    const hit = (rows || []).find((s) => s.done && s.origin === origin);
+    if (hit) return hit.id;
+  } catch (e) {
+    log("SESSION LIST FAIL", errText(e));
+  }
+  const s = await invoke("verify_ensure", {
+    source: String(src.id || ""),
+    url: origin + "/",
+    reason: String(src.name || "站点校验"),
+  });
+  return s && s.id ? s.id : "";
+}
+
+function originOfUrl(url) {
+  const u = String(url || "").trim();
+  const i = u.indexOf("//");
+  if (i < 0) return "";
+  const j = u.indexOf("/", i + 2);
+  const base = j < 0 ? u : u.slice(0, j);
+  const k = base.indexOf(":");
+  if (k < 0) return "";
+  const scheme = base.slice(0, k).toLowerCase();
+  if (scheme !== "http" && scheme !== "https") return "";
+  return scheme + ":" + base.slice(k + 1);
+}
+
 /** 在这个源的适配器里跑一个钩子(沙箱侧入口只有这一个) */
 async function callAdapter(src, hook, arg) {
   const args = Object.assign({}, arg || {});
   args.options = adapterOptions(src);
-  return callPlugin(await adapterPath(src), hook, args);
+  const session = await ensureVerify(src);
+  return callPlugin(await adapterPath(src), hook, args, session);
 }
 
 /** 列表:沙箱类适配器走 ui/plugin-host.js,`vod-rs` 走 Rust */
@@ -1698,6 +1735,10 @@ function normSource(raw) {
   // 只看 adapter —— 存回去时不能弄丢(见 docs/ARCHITECTURE.md 第 2 节)
   const adapter = String(raw.adapter == null ? "" : raw.adapter).trim();
   if (adapter) src.adapter = adapter;
+  // 需要人工校验的源:这个开关要跟着源一起存(运行时靠它决定弹不弹校验页)
+  if (raw.verify) src.verify = true;
+  const vurl = String(raw.verifyUrl == null ? "" : raw.verifyUrl).trim();
+  if (vurl) src.verifyUrl = vurl;
   const probe = raw.probe;
   if (probe && typeof probe === "object" && !Array.isArray(probe)) {
     const one = {
@@ -2453,6 +2494,24 @@ async function editSource(src) {
         options: KIND_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
       },
       {
+        id: "verify",
+        label: "需要人工校验",
+        type: "select",
+        value: src.verify ? "1" : "0",
+        hint: "Cloudflare 那类站点选「是」:第一次取数据会弹校验页,过完自动继续。",
+        options: [
+          { value: "0", label: "否" },
+          { value: "1", label: "是" },
+        ],
+      },
+      {
+        id: "verifyUrl",
+        label: "校验页地址",
+        value: String(src.verifyUrl || ""),
+        placeholder: "https://站点域名/",
+        hint: "适配器/配置类源的地址不是站点本身,这里填要打开的那个站;留空按地址推断。",
+      },
+      {
         id: "adapter",
         label: "适配器",
         type: "select",
@@ -2473,6 +2532,8 @@ async function editSource(src) {
     kind: res.kind,
     options: src.options,
     adapter: res.adapter, // 表单里选的;「自动」是空串,运行时再按地址推断
+    verify: res.verify === "1",
+    verifyUrl: res.verifyUrl,
     probe: src.probe,
   });
   if (!src2) return;

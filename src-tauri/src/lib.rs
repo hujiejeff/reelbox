@@ -51,6 +51,7 @@ pub fn run() {
             commands::selftest_report,
             session::verify_start,
             session::verify_bounds,
+            session::verify_ensure,
             session::verify_finish,
             session::verify_cancel,
             session::session_wait,
