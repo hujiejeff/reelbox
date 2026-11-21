@@ -464,6 +464,7 @@ mod tests {
             kind: "vod".into(),
             url: "https://cj.ffzyapi.com/api.php/provide/vod/from/ffm3u8".into(),
             version: String::new(),
+            options: serde_json::Value::Null,
             health: None,
         });
         let p = c.page(1, "").expect("列表失败");

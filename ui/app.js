@@ -7,6 +7,7 @@ import {
   isParserSource,
   looksLikePluginSource,
   looksLikeParserSource,
+  ENGINE_KIND,
   PARSER_KIND,
   PLUGIN_KIND,
 } from "./plugin-host.js";
@@ -517,6 +518,15 @@ function rememberCategory() {
   prefSet(LS.lastChild, S.child || "");
 }
 
+/**
+ * 取列表时带给源的分类值。
+ * 一级分类下面**没有**二级分类时(引擎插件那种平铺分类就是这样),S.child 是空,
+ * 只传 S.child 会让"选了分类"等于没选 —— 这时退回一级分类自己的值。
+ */
+function categoryValue() {
+  return S.child || S.parent || "";
+}
+
 async function switchSource(src, opts) {
   if (!src) return;
   const o = opts || {};
@@ -566,6 +576,14 @@ function pluginMode() {
   return isPluginSource(S.source);
 }
 
+/**
+ * 交给插件的源配置(引擎插件靠它知道爬哪个站)。没有就是空对象:
+ * 普通插件不会因为多了个字段而变。
+ */
+function pluginOptions() {
+  return (S.source && S.source.options) || {};
+}
+
 /** 列表:插件源走沙箱(ui/plugin-host.js),内置源走 Rust */
 async function fetchPage(page, classify) {
   if (!pluginMode()) return invoke("list_items", { source: S.source, page, classify });
@@ -573,6 +591,7 @@ async function fetchPage(page, classify) {
     page: page,
     cursor: page > 1 ? String(page) : null,
     filters: { classify: classify || "" },
+    options: pluginOptions(),
   });
   return {
     items: (res && (res.items || res.list)) || [],
@@ -584,7 +603,9 @@ async function fetchSearch(keyword, page) {
   if (!pluginMode()) return invoke("search", { source: S.source, keyword, page });
   const res = await callPlugin(S.source.url, "search", {
     query: keyword,
+    keyword: keyword,
     cursor: page > 1 ? String(page) : null,
+    options: pluginOptions(),
   });
   return {
     items: (res && (res.items || res.list)) || [],
@@ -594,12 +615,12 @@ async function fetchSearch(keyword, page) {
 
 async function fetchFilters() {
   if (!pluginMode()) return invoke("filters", { source: S.source });
-  return callPlugin(S.source.url, "filters", {});
+  return callPlugin(S.source.url, "filters", { options: pluginOptions() });
 }
 
 async function fetchDetail(id) {
   if (!pluginMode()) return invoke("detail", { source: S.source, id });
-  const d = (await callPlugin(S.source.url, "detail", { id })) || {};
+  const d = (await callPlugin(S.source.url, "detail", { id, options: pluginOptions() })) || {};
   const groups = Array.isArray(d.groups) ? d.groups : [];
   return {
     id: d.id || id,
@@ -661,7 +682,7 @@ async function loadItems() {
   S.listError = null;
   showListLoading();
   try {
-    const page = await fetchPage(1, S.child);
+    const page = await fetchPage(1, categoryValue());
     if (seq !== S.reqSeq) {
       log("list dropped", "seq=" + seq + " now=" + S.reqSeq);
       return;
@@ -693,7 +714,7 @@ async function loadMore() {
   const seq = S.reqSeq;
   S.loading = true;
   try {
-    const page = await fetchPage(more, S.child);
+    const page = await fetchPage(more, categoryValue());
     if (seq !== S.reqSeq) return; // 翻页途中切了源/分类:这页不要了
     const before = S.items.length;
     S.items = S.items.concat(page.items || []);
@@ -1608,6 +1629,12 @@ function normSource(raw) {
   // 版本只有解析器用(源页那块要显示「v1」);空的时候不占字段
   const version = String(raw.version == null ? "" : raw.version).trim();
   if (version) src.version = version;
+  // 引擎插件的站点配置(见 docs/ENGINE-PLUGINS.md):原样搬过来,
+  // 缺了就当作没有 —— 不写空对象,免得给旧数据添一个没用的字段
+  const options = raw.options;
+  if (options && typeof options === "object" && !Array.isArray(options) && Object.keys(options).length) {
+    src.options = options;
+  }
   return src;
 }
 
@@ -2193,7 +2220,12 @@ async function probeSource(src) {
   const spent = () => Math.round(performance.now() - t0);
   try {
     if (isPluginSource(src)) {
-      await callPlugin(src.url, "list", { page: 1, cursor: null, filters: { classify: "" } });
+      await callPlugin(src.url, "list", {
+        page: 1,
+        cursor: null,
+        filters: { classify: "" },
+        options: src.options || {},
+      });
     } else {
       await invoke("list_items", { source: src, page: 1, classify: "" });
     }
@@ -2306,7 +2338,8 @@ async function editSource(src) {
     onOpen: (d) => wireKindGuess(d),
   });
   if (!res) return;
-  const src2 = normSource({ name: res.name, url: res.url, kind: res.kind });
+  // options 不在编辑表单里(它是导入时填的站点配置),但要跟着搬,不能编辑一下就丢
+  const src2 = normSource({ name: res.name, url: res.url, kind: res.kind, options: src.options });
   if (!src2) return;
   const list = S.sources.slice();
   // 按对象找位置(不是按 id):同 id 的两条源不会互相误伤
@@ -2672,6 +2705,33 @@ async function runBatchImport(preset) {
 }
 
 /**
+ * 引擎插件专用的那一步:问「站点配置地址」。
+ * 引擎插件是通用的(一份代码爬所有同类站),站点全在这份配置里,
+ * 所以它不是一个新概念 —— 就是源的一个字段(见 docs/ENGINE-PLUGINS.md)。
+ * 返回 "" 表示没填(只装插件、不建源)。
+ */
+async function askEngineConfig(pluginName) {
+  const res = await formDialog({
+    icon: "dns",
+    headline: "站点配置地址",
+    okText: "生成源",
+    fields: [
+      {
+        id: "config",
+        label: "站点配置地址",
+        placeholder: "https://raw.githubusercontent.com/…/iplayr/dbk.json",
+        hint: "引擎插件 + 一份站点配置 = 一条源。",
+        required: false,
+      },
+    ],
+    note:
+      "「" + (pluginName || "这个引擎插件") + "」只是爬取规则,爬哪个站看这份配置。" +
+      "留空直接确定 = 只装插件、不建源。",
+  });
+  return res ? String(res.config || "").trim() : "";
+}
+
+/**
  * 按判型结果落地:插件存进插件目录,集合源逐个加入,单源加进列表并设为当前。
  * ctx = { target, text, fileName, name }
  */
@@ -2682,29 +2742,64 @@ async function applyImport(type, hit, ctx) {
     try {
       const res = await invoke("save_plugin", { fileName: ctx.fileName || "plugin.js", text: ctx.text });
       const path = String((res && res.path) || "");
-      // 后端按源码/suffix 判出来的类型:parser 的插件不是源,单独登记
-      const isParser = String((res && res.kind) || "") === PARSER_KIND;
+      // 后端按源码/suffix 判出来的类型:parser 的插件不是源,engine 还差一份站点配置
+      const pluginKind = String((res && res.kind) || "");
+      const isParser = pluginKind === PARSER_KIND;
+      const isEngine = pluginKind === ENGINE_KIND;
+      const name = given || String((res && res.name) || "");
       const known = (S.sources || []).find((x) => x.url === path || x.id === (res && res.id));
+
+      // 解析器不是源:不设为当前源,也不进源下拉;提示送到它自己那一块
+      if (isParser) {
+        if (!known) {
+          const row = { id: res.id, name: name, type: PARSER_KIND, url: path };
+          if (res.version) row.version = String(res.version);
+          await applySources(S.sources.concat([row]));
+        }
+        log("parser imported", String(res && res.id));
+        toast("已导入解析器:" + name);
+        return;
+      }
+
+      // 引擎插件:文件本身只有"怎么爬",站点在配置地址里 —— 问到了才建得出源
+      if (isEngine) {
+        const config = await askEngineConfig(name);
+        if (!config) {
+          log("engine imported without config", path);
+          await alertDialog(
+            "引擎插件已装好,还差站点配置",
+            "引擎插件只是一套爬取规则,站点信息在配置里,所以这次没有建源。" +
+              "再用「导入源」选一次这个插件,填上站点配置地址就会生成一条能用的源。"
+          );
+          return;
+        }
+        // 同一个插件文件再导一次 = 补/换配置地址,不重复建源
+        const options = Object.assign({}, (known && known.options) || {}, { config: config });
+        if (known) {
+          await applySources(
+            (S.sources || []).map((x) => (x === known ? Object.assign({}, x, { options: options }) : x))
+          );
+        } else {
+          await applySources(
+            (S.sources || []).concat([{ id: res.id, name: name, type: PLUGIN_KIND, url: path, options: options }])
+          );
+        }
+        const src = (S.sources || []).find((x) => x.url === path);
+        log("engine imported", String(res && res.id), shortUrl(config, 100));
+        if (src) await setCurrentSource(src, { stay: true });
+        else toast("已导入引擎插件:" + name);
+        return;
+      }
+
       if (!known) {
-        const row = {
-          id: res.id,
-          name: given || res.name,
-          type: isParser ? PARSER_KIND : PLUGIN_KIND,
-          url: path,
-        };
-        if (isParser && res.version) row.version = String(res.version);
-        await applySources(S.sources.concat([row]));
+        await applySources(
+          (S.sources || []).concat([{ id: res.id, name: name, type: PLUGIN_KIND, url: path }])
+        );
       }
       const src = (S.sources || []).find((x) => x.url === path) || known;
-      log(isParser ? "parser imported" : "plugin imported", String(res && res.id));
-      if (isParser) {
-        // 解析器不是源:不设为当前源,也不进源下拉;提示送到它自己那一块
-        toast("已导入解析器:" + (given || (res && res.name) || ""));
-      } else if (src) {
-        await setCurrentSource(src, { stay: true });
-      } else {
-        toast("已导入插件:" + (given || (res && res.name) || ""));
-      }
+      log("plugin imported", String(res && res.id));
+      if (src) await setCurrentSource(src, { stay: true });
+      else toast("已导入插件:" + name);
     } catch (e) {
       log("PLUGIN IMPORT FAIL", errText(e));
       alertDialog("导入失败", errText(e));
@@ -3970,7 +4065,10 @@ async function pluginStream(groupId, episodeId) {
     contentId: S.detailId || "",
     groupId: groupId || "",
     episodeId: episodeId,
+    // 契约里的名字是 id(见 docs/PLUGIN.md):两个都喂,插件写哪个都能拿到
+    id: episodeId,
     purpose: "playback",
+    options: pluginOptions(),
   });
   // play 允许直接返回数组(多档清晰度),别只认 {sources}/{streams}/单对象
   const list = Array.isArray(res)

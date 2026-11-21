@@ -14,6 +14,9 @@ use std::collections::BTreeMap;
 pub const KIND_VOD: &str = "vod";
 /// 插件类型:解析器(把分享页变成可播地址,见 docs/PARSERS.md)
 pub const KIND_PARSER: &str = "parser";
+/// 插件类型:引擎(插件只管"怎么爬",站点在 `Source.options.config` 里,见 docs/ENGINE-PLUGINS.md)。
+/// 引擎插件导入时会多问一句配置地址,没配置就不建源。
+pub const KIND_ENGINE: &str = "engine";
 
 /// 解析器的入口前缀(`reelbox.parser({...})`)
 const PARSER_ENTRY: &str = "reelbox.parser(";
@@ -302,6 +305,30 @@ reelbox.parser({
         assert_eq!(m.version, "1");
         // 不传后缀提示也得靠源码入口认出来
         assert_eq!(parse_meta_hinted(js, Some("x.js")).unwrap().kind, KIND_PARSER);
+    }
+
+    /// 引擎插件:显式写 kind: "engine",元信息要原样带出来(导入流程靠它多问一句配置地址)
+    #[test]
+    fn engine_kind_from_declared_field() {
+        let js = r#"reelbox.define({ id: "iplayr.engine", name: "iplayr 引擎", version: "1", api: 1, kind: "engine", caps: ["http", "html"] });"#;
+        let m = parse_meta(js).expect("引擎插件元信息");
+        assert_eq!(m.kind, KIND_ENGINE);
+        assert_eq!(m.name, "iplayr 引擎");
+        // 文件名是普通插件后缀,不影响 kind
+        assert_eq!(
+            parse_meta_hinted(js, Some("iplayr-engine.reelbox.js")).unwrap().kind,
+            KIND_ENGINE
+        );
+    }
+
+    /// 仓库里的示例引擎插件必须真能被认出来,不然导入时会当成普通插件
+    #[test]
+    fn reads_example_engine_file() {
+        let js = include_str!("../../../examples/iplayr.reelbox.js");
+        let m = parse_meta(js).expect("示例引擎插件应能读出元信息");
+        assert_eq!(m.kind, KIND_ENGINE);
+        assert_eq!(m.id, "iplayr.engine");
+        assert_eq!(m.name, "iplayr 引擎");
     }
 
     /// 判据 3:文件名 `.parser.js` —— 只有调用方传了 hint 才判得到

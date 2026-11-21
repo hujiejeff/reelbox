@@ -19,6 +19,10 @@ pub struct Source {
     /// 空的时候不写进配置文件,老配置读进来也不受影响。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,
+    /// 引擎插件要的站点配置(见 docs/ENGINE-PLUGINS.md):同一份插件 + 不同配置
+    /// = 不同站点。空对象 / Null 都算「没有配置」,不落盘;老配置读进来是 Null。
+    #[serde(default, skip_serializing_if = "options_is_empty")]
+    pub options: serde_json::Value,
     /// 最近一次「测试连接」的结果;None = 从没测过(界面上是空心圆)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,
@@ -101,6 +105,15 @@ impl Source {
     }
 }
 
+/// `options` 算不算「没有配置」:Null(老配置 / 没填)和空对象都算。
+fn options_is_empty(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Null => true,
+        serde_json::Value::Object(map) => map.is_empty(),
+        _ => false,
+    }
+}
+
 /// 这个"源"其实是 HTML 爬取配置,不是接口地址吗?
 ///
 /// iplayr 那类索引把爬虫配置也写成了 `{"type":"json","url":"...iplayr/xx.json"}`。
@@ -176,6 +189,38 @@ mod tests {
         assert!(!is_crawl_config("xml", "https://example.com/feed.xml"));
         assert!(!is_crawl_config("webox", "https://example.com/p.json"));
         assert!(!is_crawl_config("vod", "C:/Users/x/AppData/Roaming/reelbox/plugins/demo.webox.js"));
+    }
+
+    /// `options` 是引擎插件加的字段:老配置没有它要能读,没有配置时不落盘,
+    /// 有配置时原样存回去(界面把整条 Source 交回后端)。
+    #[test]
+    fn source_options_round_trip() {
+        let old: Source = serde_json::from_str(
+            r#"{"id":"e1","name":"引擎源","type":"webox","url":"D:/x/iplayr.reelbox.js"}"#,
+        )
+        .expect("老配置解析失败");
+        assert!(old.options.is_null());
+        let text = serde_json::to_string(&old).expect("序列化失败");
+        assert!(!text.contains("options"), "没有配置时不该落盘: {text}");
+
+        // 空对象同样算「没有配置」
+        let empty: Source = serde_json::from_str(
+            r#"{"id":"e2","name":"E","type":"webox","url":"D:/x.js","options":{}}"#,
+        )
+        .expect("空 options 解析失败");
+        assert!(!serde_json::to_string(&empty).unwrap().contains("options"));
+
+        // 有配置:存回去还是同一份
+        let with: Source = serde_json::from_str(
+            r#"{"id":"e3","name":"E","type":"webox","url":"D:/x.js","options":{"config":"https://a/b.json"}}"#,
+        )
+        .expect("options 解析失败");
+        assert_eq!(
+            with.options.get("config").and_then(|v| v.as_str()),
+            Some("https://a/b.json")
+        );
+        let text = serde_json::to_string(&with).unwrap();
+        assert!(text.contains(r#""options":{"config":"https://a/b.json"}"#), "实际: {text}");
     }
 
     #[test]
