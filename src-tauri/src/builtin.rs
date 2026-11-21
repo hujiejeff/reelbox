@@ -5,7 +5,8 @@
 //!
 //! * **文件已经存在就不覆盖** —— 用户想改规则,直接改这个文件就行,下次启动不会被打回去;
 //! * **不进 `sources.json`**,也不出现在源列表里 —— 它不是"一个源",只是引擎。
-//!   一条 iplayr 源是「内置引擎 + 一份站点配置(`Source.url`)」,见 `Source::adapter`。
+//!   一条 iplayr 源是「内置引擎 + 一份站点配置(`Source.url`)」,见 `Source::adapter`;
+//!   一条 `vod` 源是「内置 CMS 适配器 + 一个接口地址(`Source.url`)」,同理。
 //!
 //! 前端的 `builtin_adapters()` 拿到的就是这里的绝对路径。
 
@@ -18,11 +19,18 @@ use std::path::PathBuf;
 /// 打包时原样编进二进制,不再有多份副本要同步。
 const IPLAYR: &str = include_str!("../../examples/iplayr.reelbox.js");
 
+/// 苹果 CMS(JSON / XML)适配器。
+///
+/// 原来是 Rust 的 `core/src/source/cms.rs`,P3 迁到 JS(见架构文档的迁移计划):
+/// 站点一改只要换这一份文件,不用编译发版。源码在 `examples/vod.reelbox.js`,
+/// 打完包它和 Rust 那份实现应该给出逐字段一致的结果。
+const VOD: &str = include_str!("../../examples/vod.reelbox.js");
+
 /// 内置适配器落地的子目录(`plugins/builtin/`),和用户导入的插件分开
 const SUBDIR: &str = "builtin";
 
 /// 内置适配器的清单:`名字 → 源码`。前端不用它,只给 [`install`] 用。
-const ALL: [(&str, &str); 1] = [("iplayr", IPLAYR)];
+const ALL: [(&str, &str); 2] = [("iplayr", IPLAYR), ("vod", VOD)];
 
 /// 一个内置适配器的落地路径(`<数据目录>/plugins/builtin/<名字>.adapter.js`)。
 fn path_of(name: &str) -> PathBuf {
@@ -65,7 +73,7 @@ pub fn install() {
     }
 }
 
-/// 已经落地的内置适配器清单:`{"iplayr": "绝对路径"}`。
+/// 已经落地的内置适配器清单:`{"iplayr": "绝对路径", "vod": "绝对路径"}`。
 ///
 /// 只返回**文件确实在**的那几个:返回一个读不到的路径,前端会得到一句
 /// 「读插件失败」,而不说「内置引擎没装上」。
