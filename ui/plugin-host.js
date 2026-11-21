@@ -41,6 +41,13 @@ export const PLUGIN_KIND = "webox";
  */
 export const PARSER_KIND = "parser";
 
+/**
+ * 引擎插件的 kind:插件本身只是一套爬取规则("怎么爬"),站点在源配置的
+ * `options.config` 里("爬哪个站")。导入时没填配置地址就不建源,
+ * 见 docs/ENGINE-PLUGINS.md。
+ */
+export const ENGINE_KIND = "engine";
+
 /** 插件源码的入口:原生是 reelbox.define;老插件写的是另一个前缀,一并认 */
 const DEFINE_RE = /(?:WeBox|reelbox)\.define\s*\(/;
 

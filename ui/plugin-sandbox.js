@@ -90,6 +90,56 @@ export function sandboxMain() {
     return String(s).replace(/^[\s\u00a0]+|[\s\u00a0]+$/g, "");
   }
 
+  /* ---------- XPath(浏览器原生 document.evaluate) ---------- */
+
+  // 属性节点在 XPath 里也是节点("//a/@href"),但插件要的是它的值:
+  // 统一换成字符串,于是属性表达式给出字符串数组,节点集还是节点数组。
+  function xpathItem(item) {
+    if (item && item.nodeType === 2) {
+      return String(item.nodeValue == null ? "" : item.nodeValue);
+    }
+    return item;
+  }
+
+  /**
+   * 求一条 XPath,返回数组:
+   *   节点集 → DOM 节点数组(属性节点换成它的字符串值)
+   *   字符串 / 数字 / 布尔 → 单元素数组
+   *
+   * 求值失败(表达式写错、上下文节点不对)抛一个带表达式的错误 ——
+   * 插件作者看到的第一句话就是哪条 XPath 坏了。
+   */
+  function xpathEval(expr, contextNode) {
+    const text = String(expr == null ? "" : expr).trim();
+    if (!text) return [];
+    const node = contextNode && contextNode.nodeType ? contextNode : document;
+    // document.evaluate 是 Document 上的方法;节点来自 DOMParser 的那份文档时
+    // 要用那份文档的 evaluate(上下文节点必须属于求值器所在的文档)
+    const owner = node.ownerDocument || node;
+    const evaluator = owner && typeof owner.evaluate === "function" ? owner : document;
+    let result;
+    try {
+      result = evaluator.evaluate(
+        text,
+        node,
+        null,
+        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+        null
+      );
+    } catch (e) {
+      const err = new Error('xpath 求值失败("' + text + '"): ' + ((e && e.message) || e));
+      err.expr = text;
+      throw err;
+    }
+    if (result.resultType === XPathResult.STRING_TYPE) return [String(result.stringValue)];
+    if (result.resultType === XPathResult.NUMBER_TYPE) return [result.numberValue];
+    if (result.resultType === XPathResult.BOOLEAN_TYPE) return [result.booleanValue];
+    const out = [];
+    const n = typeof result.snapshotLength === "number" ? result.snapshotLength : 0;
+    for (let i = 0; i < n; i += 1) out.push(xpathItem(result.snapshotItem(i)));
+    return out;
+  }
+
   function wrapAll(list, doc) {
     const api = {
       length: list.length,
@@ -236,6 +286,17 @@ export function sandboxMain() {
         const v = list[0].getAttribute("data-" + name);
         return v === null ? undefined : v;
       },
+      // 相对求值:每个节点各求一次,结果按顺序拼起来。
+      // 注意 XPath 的 "//x" 是"从文档根开始",按节点求值要用 ".//x",
+      // 插件里那层转换见 examples/…/relativeXPath;这里只认表达式。
+      xpath: function (expr) {
+        const out = [];
+        for (let i = 0; i < list.length; i += 1) {
+          const hits = xpathEval(expr, list[i]);
+          for (let k = 0; k < hits.length; k += 1) out.push(hits[k]);
+        }
+        return out;
+      },
     };
     api[0] = list[0];
     return api;
@@ -261,6 +322,10 @@ export function sandboxMain() {
     q.url = url || "";
     q.html = text;
     q.doc = doc;
+    // 整篇文档求值:"//ul//li" 这种从根开始的写法直接可用
+    q.xpath = function (expr) {
+      return xpathEval(expr, doc);
+    };
     return q;
   }
 
