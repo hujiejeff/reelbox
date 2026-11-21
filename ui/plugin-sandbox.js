@@ -484,17 +484,27 @@ export function sandboxMain() {
   const plugins = new Map(); // path -> { def, ctx }
 
   function compile(source) {
-    // 插件的 define() 把对象写到 host.captured 上,函数体最后一行把它交出来。
-    // parser() 是解析器插件的入口,交出的是同一形状的对象(match / parse 钩子)。
+    // 三个入口交出的是同一形状的对象,走同一条注册路径:把对象写到 host.captured 上,
+    // 函数体最后一行把它交出来。区别只是"从哪个门进来"的 ——
+    //   define()  源插件(老写法,也仍然是内置 vod 的写法)
+    //   parser()  解析器插件(match / parse 钩子)
+    //   adapter() 适配器(kind 记为 "adapter",见 docs/ARCHITECTURE.md 第 4 节)
     const host = {
       captured: null,
-      define: function (o) {
+      kind: "",
+      register: function (o, kind) {
         host.captured = o;
+        host.kind = kind;
         return o;
       },
+      define: function (o) {
+        return host.register(o, "vod");
+      },
       parser: function (o) {
-        host.captured = o;
-        return o;
+        return host.register(o, "parser");
+      },
+      adapter: function (o) {
+        return host.register(o, "adapter");
       },
     };
     const quiet = { log: function () {}, warn: function () {}, error: function () {}, info: function () {}, debug: function () {} };
@@ -511,7 +521,7 @@ export function sandboxMain() {
     );
     const def = factory(host, host, host, quiet);
     if (!def || typeof def !== "object") {
-      throw new Error("插件没有调用 reelbox.define({...}) 或 reelbox.parser({...})");
+      throw new Error("插件没有调用 reelbox.define({...})、reelbox.parser({...}) 或 reelbox.adapter({...})");
     }
     return def;
   }

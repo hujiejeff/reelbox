@@ -38,6 +38,8 @@ pub fn run() {
             commands::open_log,
             commands::app_info,
             commands::builtin_adapters,
+            commands::list_adapters,
+            commands::delete_adapter,
             commands::save_plugin,
             commands::read_text_file,
             commands::plugin_read,

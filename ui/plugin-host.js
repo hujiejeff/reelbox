@@ -48,21 +48,36 @@ export const PARSER_KIND = "parser";
  */
 export const ENGINE_KIND = "engine";
 
+/**
+ * 适配器的 kind:一个 js 文件,把「某种源格式」翻译成列表 / 详情 / 播放
+ * (契约见 docs/ARCHITECTURE.md 第 4 节)。**适配器不是源** —— 装的是文件,
+ * 加源还得要一份配置地址,所以导入时只落盘、不建源、不设当前源。
+ */
+export const ADAPTER_KIND = "adapter";
+
 /** 插件源码的入口:原生是 reelbox.define;老插件写的是另一个前缀,一并认 */
 const DEFINE_RE = /(?:WeBox|reelbox)\.define\s*\(/;
 
 /** 解析器源码的入口:reelbox.parser({...}) */
 const PARSER_RE = /reelbox\.parser\s*\(/;
 
-/** 这段文本是不是插件源码(源插件或解析器都算) */
+/** 适配器源码的入口:reelbox.adapter({...})(形状与 define 相同,只是 kind 不同) */
+const ADAPTER_RE = /reelbox\.adapter\s*\(/;
+
+/** 这段文本是不是插件源码(源插件 / 解析器 / 适配器都算) */
 export function looksLikePluginSource(text) {
   const s = String(text == null ? "" : text);
-  return DEFINE_RE.test(s) || PARSER_RE.test(s);
+  return DEFINE_RE.test(s) || PARSER_RE.test(s) || ADAPTER_RE.test(s);
 }
 
 /** 这段文本是不是解析器源码 */
 export function looksLikeParserSource(text) {
   return PARSER_RE.test(String(text == null ? "" : text));
+}
+
+/** 这段文本是不是适配器源码(入口是 reelbox.adapter) */
+export function looksLikeAdapterSource(text) {
+  return ADAPTER_RE.test(String(text == null ? "" : text));
 }
 
 /** 类型值是不是插件(历史值 / 新写法 plugin / js) */

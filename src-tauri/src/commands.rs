@@ -726,6 +726,122 @@ pub fn builtin_adapters() -> HashMap<String, String> {
     crate::builtin::adapters()
 }
 
+/// 「设置 → 源 → 适配器」里的一行。
+///
+/// 内置的:`{ id, name, builtin: true, hint }`(没有 `path`:文件在 `plugins/builtin/`,
+/// 用户不用管它在哪儿,也不该删)。
+/// 导入的:`{ id, name, builtin: false, path }`(`hint` 缺省,界面上显示 `adapter` id)。
+#[derive(Debug, serde::Serialize)]
+pub struct AdapterEntry {
+    pub id: String,
+    pub name: String,
+    pub builtin: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// 内置适配器:名字固定在这张表里(顺序即界面顺序)。
+/// `hint` 只说"它的 `config` 该填什么",界面上一行说明。
+const BUILTIN_ADAPTER_LIST: [(&str, &str, &str); 4] = [
+    ("vod", "苹果 CMS", "接口地址"),
+    ("iplayr", "iplayr 配置", "XPath 配置"),
+    ("webox", "WeBox 插件", "老插件文件"),
+    ("reelbox", "Reelbox 插件", "插件文件"),
+];
+
+/// 当前可用的适配器:内置四个在前,用户导入的(`plugins/*.adapter.js`)在后,按文件名排。
+///
+/// 用户导入的必须**读得出来**才列:元信息读不出来的文件在这里跳过 ——
+/// 列出来一个点了就报错的适配器,比不列更糟。
+#[tauri::command]
+pub fn list_adapters() -> Vec<AdapterEntry> {
+    let mut out: Vec<AdapterEntry> = BUILTIN_ADAPTER_LIST
+        .iter()
+        .map(|(id, name, hint)| AdapterEntry {
+            id: (*id).to_string(),
+            name: (*name).to_string(),
+            builtin: true,
+            hint: Some((*hint).to_string()),
+            path: None,
+        })
+        .collect();
+    out.extend(user_adapters(&crate::paths::plugins_dir()));
+    out
+}
+
+/// 插件目录下用户自己导入的适配器(`<数据目录>/plugins/*.adapter.js`)。
+///
+/// 只看这一层:内置的那些在 `plugins/builtin/` 子目录里,它们已经在
+/// [`BUILTIN_ADAPTER_LIST`] 里了,再从这儿捞一遍会出重影。
+fn user_adapters(dir: &std::path::Path) -> Vec<AdapterEntry> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    // 按文件名排:界面顺序要稳定,不然每次启动都换一个样子
+    let mut files: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().to_ascii_lowercase().ends_with(".adapter.js"))
+                .unwrap_or(false)
+        })
+        .collect();
+    files.sort();
+    let mut out = Vec::new();
+    for path in files {
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        // 后缀当提示传进去:文件是 `.adapter.js`,源码里写 define 也照样认成适配器
+        let Ok(meta) = plugin::parse_meta_hinted(&text, Some(&file_name)) else {
+            continue;
+        };
+        out.push(AdapterEntry {
+            id: meta.id,
+            name: meta.name,
+            builtin: false,
+            hint: None,
+            path: Some(path.to_string_lossy().to_string()),
+        });
+    }
+    out
+}
+
+/// 删掉一个用户导入的适配器:只删 `plugins/` 这一层里的 `*.adapter.js`。
+///
+/// 路径是界面给的,但删文件不可撤销,所以这里再核一遍:必须直接躺在插件目录下
+/// (内置的在 `plugins/builtin/`,不给删 —— 那是随包安装的那一份)。
+#[tauri::command]
+pub fn delete_adapter(path: String) -> Result<(), String> {
+    let target = std::path::PathBuf::from(&path);
+    let is_adapter_file = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase().ends_with(".adapter.js"))
+        .unwrap_or(false);
+    if !is_adapter_file {
+        return Err(format!("不是适配器文件: {path}"));
+    }
+    let base = crate::paths::plugins_dir()
+        .canonicalize()
+        .map_err(|e| format!("插件目录不可用: {e}"))?;
+    let full = target
+        .canonicalize()
+        .map_err(|e| format!("找不到这个适配器: {e}"))?;
+    if full.parent() != Some(base.as_path()) {
+        return Err(format!("不是插件目录下的适配器: {path}"));
+    }
+    std::fs::remove_file(&full).map_err(|e| format!("删除失败: {e}"))?;
+    // 日志里写调用方给的路径:canonicalize 出来的 `\\?\C:\…` 对排查没帮助
+    crate::logging::event(&format!("ADAPTER removed {path}"));
+    Ok(())
+}
+
 /// 自检摘要落盘:`docs/selftest-report.json`(找不到就退回 %APPDATA%/reelbox/)。
 /// 返回实际写入的路径,前端会把它写进日志。
 #[tauri::command]
@@ -759,9 +875,10 @@ pub fn selftest_report(json: String) -> Result<String, String> {
 
 /// 保存一个导入的插件文件,返回 (路径, 名称, id, 类型)
 ///
-/// `kind` 是 `vod`(源插件)或 `parser`(解析器):前端按它决定是进源下拉还是进
-/// 「设置 → 源」的解析器块。判据见 `plugin::parse_meta_hinted` —— 用户选文件时的
-/// 文件名后缀 `.parser.js` 也参与判断,所以这里把 `file_name` 当提示传进去。
+/// `kind` 是 `vod`(源插件)、`parser`(解析器)或 `adapter`(适配器):前端按它决定
+/// 是进源下拉、「设置 → 源」的解析器块,还是只装文件不建源(适配器)。判据见
+/// `plugin::parse_meta_hinted` —— 用户选文件时的文件名后缀(`.adapter.js` /
+/// `.parser.js`)也参与判断,所以这里把 `file_name` 当提示传进去。
 #[tauri::command]
 pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value, String> {
     let meta = plugin::parse_meta_hinted(&text, Some(&file_name))?;
@@ -775,11 +892,12 @@ pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value,
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect();
     // 新导入的插件写原生后缀;老的 `.webox.js` 文件照样认(plugin_read / `derive_adapter`)。
-    // 解析器单独一个后缀,重新导入时不用再读源码也能认出来。
-    let suffix = if meta.kind == plugin::KIND_PARSER {
-        ".reelbox.parser.js"
-    } else {
-        ".reelbox.js"
+    // 解析器和适配器各自一个后缀,重新导入时不用再读源码也能认出来 ——
+    // 适配器落在 `plugins/*.adapter.js`,和内置的 `plugins/builtin/*.adapter.js` 同一套命名。
+    let suffix = match meta.kind.as_str() {
+        plugin::KIND_PARSER => ".reelbox.parser.js",
+        plugin::KIND_ADAPTER => ".adapter.js",
+        _ => ".reelbox.js",
     };
     let path = dir.join(format!("{safe}{suffix}"));
     std::fs::write(&path, &text).map_err(|e| format!("写插件失败: {e}"))?;
