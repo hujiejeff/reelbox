@@ -116,17 +116,21 @@ reelbox.adapter({
 ### 4.1 必须人工过的站点
 
 有的源站挂了 Cloudflare,API 和页面都要先过一次人机校验;网盘那类还要扫码登录。
-沙箱 iframe 的 origin 是 `null`,既没有 cookie 也过不了校验 —— 所以这件事只能由**内核**做:
+沙箱 iframe 的 origin 是 `null`,既没有 cookie 也过不了校验 —— 所以这件事只能由**内核**做:开一个
+真实的子 WebView,外面包 app 自己的壳(顶栏/底栏),看起来就是我们的一层页面:
 
 ```js
 const s = await ctx.human.verify({ url, reason });   // 内核开真实窗口,用户点完才 resolve
 const html = await ctx.http.get(url, { session: s.id });
 ```
 
-- 窗口是顶层 WebView2,和主窗口同一个数据目录、同一套浏览器参数(参数不同会建不出来)。
+- 校验页是主窗口里的**子 WebView**(Tauri `add_child`),不是独立窗口:顶栏/底栏归我们,
+  中间那块原生 WebView 由前端把内容区矩形算好透传给内核(物理像素,见 `verify_bounds`)。
+- 子 WebView 沿用主窗口的浏览器参数(参数不同 WebView2 会报 0x8007139F)。
 - **cookie 不出内核**:适配器只拿会话 id;每次请求内核实取 cookie 罐里的值再发。
 - UA 也从窗口里取(`cf_clearance` 绑 UA),取不到才退回默认值。
-- 窗口关掉 = 会话失效;入口在 **设置 → 校验**(用户自己也能手动过一次)。
+- 用户点「完成」时把 cookie **快照**进会话,子 WebView 随即销毁 —— 会话不依赖窗口活着。
+- 入口在 **设置 → 校验**(用户自己也能手动过一次)。
 
 证据见 [ARCHITECTURE-EVIDENCE.md](ARCHITECTURE-EVIDENCE.md) 的「人工校验会话」一节。
 

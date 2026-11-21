@@ -58,13 +58,15 @@ OK    npm run test:ui             19 passed
 
 ## 人工校验会话(Cloudflare)
 
+形态:app 内的一层页面 —— 顶栏(返回 + 域名)、内容区(子 WebView)、底栏(取消 / 我已完成)。
+
 目标站:`https://nopecha.com/demo/cloudflare`(不带你自己的 cookies 时返回 403「Just a moment」)。
 
 | 步骤 | 结果 |
 | --- | --- |
-| `session_open` | 真实顶层窗口打开,页面里注入「我已完成」工具条 |
+| `verify_start` | 主窗口里挂一个子 WebView,壳由 app 自己画 |
 | 挑战页自身 | 窗口里几秒内自动过掉,标题变成 `NopeCHA - CAPTCHA Demo` |
-| 点「我已完成」 | 记录 `done=true`,窗口隐藏(不销毁,cookie 罐留着) |
+| 点「我已完成」 | cookie 快照进会话(`cookies=4`),子 WebView 销毁 |
 | `session_fetch` | `HTTP 200 / 142880 字`,正文是真实页面,不是挑战页 |
 
 日志里的证据:

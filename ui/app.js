@@ -123,6 +123,7 @@ async function init() {
   renderFavs();
   log("init start");
   initPluginHost({ invoke: invoke, log: log });
+  initVerifyPage();
   {
     const d = document.getElementById("dbg");
     if (d) d.hidden = true;
@@ -3337,10 +3338,144 @@ function bindDebugToggle() {
   syncDebugButtons();
 }
 
-// 人工校验:调试页里手动开一个会话,过完 Cloudflare 用这套 cookie 取一次。
-// 产品里的用法是适配器 `await ctx.human.verify({url})`,这里只是同一套命令的手动入口。
+// 站点校验:app 里的一层页面(顶栏/底栏是我们画的,中间是原生子 WebView)。
+// cookie 留在宿主,插件只拿会话 id。桌面和以后移动端共用这一套壳。
 let verifySession = null;
+let verifyPageId = null;
 
+/** 会话列表:给设置页用,其他地方改完也调一下 */
+async function refreshVerifySessions() {
+  const box = $("verifySessions");
+  if (!box) return;
+  let rows = [];
+  try {
+    rows = await invoke("session_list", {});
+  } catch (e) {
+    box.textContent = "读取失败:" + errText(e);
+    return;
+  }
+  if (!rows || !rows.length) {
+    box.textContent = "还没有会话";
+    return;
+  }
+  box.textContent = "";
+  rows.forEach((s) => {
+    const line = document.createElement("div");
+    line.style.cssText = "display:flex;align-items:center;gap:10px;padding:5px 0;flex-wrap:wrap";
+    const label = document.createElement("span");
+    const when = new Date(s.opened_at * 1000).toLocaleTimeString();
+    label.textContent =
+      s.host + " · " + (s.done ? "已通过" : s.cancelled ? "已取消" : "进行中") +
+      " · " + s.cookies + " cookie · " + when;
+    label.style.flex = "1 1 auto";
+    const kill = document.createElement("button");
+    kill.type = "button";
+    kill.className = "m3e-button m3e-button--text";
+    kill.textContent = "撤销";
+    kill.onclick = async () => {
+      try {
+        await invoke("session_close", { id: s.id });
+        if (verifySession && verifySession.id === s.id) verifySession = null;
+      } catch (e) {
+        log("SESSION CLOSE FAIL", errText(e));
+      }
+      refreshVerifySessions();
+    };
+    line.append(label, kill);
+    box.appendChild(line);
+  });
+}
+
+/** 校验页:顶栏/底栏归我们,中间那块让宿主的子 WebView 摆进来 */
+function initVerifyPage() {
+  const page = $("verifyPage");
+  const body = $("verifyBody");
+  if (!page || !body) return;
+  const hostEl = $("verifyHost");
+  const reasonEl = $("verifyReason");
+
+  const sync = () => {
+    if (!verifyPageId) return;
+    const r = body.getBoundingClientRect();
+    // 传物理像素:子 WebView 在 Windows 上是独立 HWND,按物理像素摆最稳
+    const dpr = window.devicePixelRatio || 1;
+    invoke("verify_bounds", {
+      id: verifyPageId,
+      rect: [r.left * dpr, r.top * dpr, r.width * dpr, r.height * dpr],
+    }).catch(() => {});
+  };
+
+  const show = (d) => {
+    verifyPageId = d.id;
+    if (hostEl) hostEl.textContent = d.host || "站点校验";
+    if (reasonEl) reasonEl.textContent = d.reason || "完成校验后点「我已完成」";
+    page.hidden = false;
+    const load = $("verifyLoading");
+    if (load) load.hidden = true;
+    // 等一帧再量,否则拿到的是隐藏时的矩形
+    requestAnimationFrame(() => {
+      sync();
+      setTimeout(sync, 120);
+    });
+  };
+
+  const hide = () => {
+    page.hidden = true;
+    verifyPageId = null;
+  };
+
+  const back = async () => {
+    if (!verifyPageId) {
+      hide();
+      return;
+    }
+    const id = verifyPageId;
+    try {
+      await invoke("verify_cancel", { id });
+    } catch (e) {
+      log("VERIFY CANCEL FAIL", errText(e));
+    }
+    hide();
+    refreshVerifySessions();
+  };
+
+  window.__TAURI__.event.listen("verify:open", (e) => show(e.payload || {}));
+  window.__TAURI__.event.listen("verify:close", () => hide());
+
+  new ResizeObserver(() => sync()).observe(body);
+  window.addEventListener("resize", sync);
+
+  const btnBack = $("verifyBack");
+  const btnCancel = $("verifyCancel");
+  const btnDone = $("verifyDone");
+  if (btnBack) btnBack.onclick = back;
+  if (btnCancel) btnCancel.onclick = back;
+  if (btnDone) {
+    btnDone.onclick = async () => {
+      if (!verifyPageId) return;
+      const id = verifyPageId;
+      btnDone.disabled = true;
+      try {
+        const s = await invoke("verify_finish", { id });
+        verifySession = s;
+        const say = $("verifyOut");
+        if (say) {
+          say.textContent =
+            "会话 " + s.id + " · " + s.host + NL + "✅ 已通过(" + s.cookies + " 个 cookie),可以取数据了";
+        }
+        toast("校验完成:" + s.host);
+      } catch (e) {
+        alertDialog("校验失败", errText(e));
+      } finally {
+        btnDone.disabled = false;
+      }
+      hide();
+      refreshVerifySessions();
+    };
+  }
+}
+
+/** 设置 → 校验:手动开一个会话 */
 function bindVerifyPanel() {
   const input = $("verifyUrl");
   const out = $("verifyOut");
@@ -3353,84 +3488,20 @@ function bindVerifyPanel() {
   };
   const target = () => input.value.trim();
 
-  const refresh = async () => {
-    const box = $("verifySessions");
-    if (!box) return;
-    let rows = [];
-    try {
-      rows = await invoke("session_list", {});
-    } catch (e) {
-      box.textContent = "读取失败:" + errText(e);
-      return;
-    }
-    if (!rows || !rows.length) {
-      box.textContent = "还没有会话";
-      return;
-    }
-    box.textContent = "";
-    rows.forEach((s) => {
-      const line = document.createElement("div");
-      line.style.cssText = "display:flex;align-items:center;gap:10px;padding:5px 0;flex-wrap:wrap";
-      const label = document.createElement("span");
-      const when = new Date(s.opened_at * 1000).toLocaleTimeString();
-      label.textContent =
-        s.host + " · " + (s.done ? "已通过" : s.cancelled ? "已取消" : "进行中") + " · " + when;
-      label.style.flex = "1 1 auto";
-      const show = document.createElement("button");
-      show.type = "button";
-      show.className = "m3e-button m3e-button--text";
-      show.textContent = "显示窗口";
-      show.onclick = async () => {
-        try {
-          await invoke("session_show", { id: s.id });
-        } catch (e) {
-          say("窗口已经没了:" + errText(e));
-          refresh();
-        }
-      };
-      const kill = document.createElement("button");
-      kill.type = "button";
-      kill.className = "m3e-button m3e-button--text";
-      kill.textContent = "撤销";
-      kill.onclick = async () => {
-        try {
-          await invoke("session_close", { id: s.id });
-          if (verifySession && verifySession.id === s.id) verifySession = null;
-        } catch (e) {
-          say("撤销失败:" + errText(e));
-        }
-        refresh();
-      };
-      line.append(label, show, kill);
-      box.appendChild(line);
-    });
-  };
-
-  refresh();
+  refreshVerifySessions();
 
   btnOpen.onclick = async () => {
     const url = target();
-    if (!/^https?:\/\//i.test(url)) {
+    if (!/^https?:/i.test(url)) {
       say("地址要以 http(s):// 开头");
       return;
     }
     btnOpen.disabled = true;
-    say("正在打开校验窗口…");
+    say("正在打开…");
     try {
-      const s = await invoke("session_open", { url: url, reason: "调试页手动校验" });
-      verifySession = s;
-      say(
-        "会话 " + s.id + " · " + s.host + NL +
-          "窗口已打开:过完校验后点窗口底部的「我已完成」"
-      );
-      refresh();
-      invoke("session_wait", { id: s.id, timeoutSec: 300 })
-        .then((d) => {
-          verifySession = d;
-          say("会话 " + d.id + " · " + d.host + NL + "✅ 已通过,点「用会话取一次」试抓");
-          refresh();
-        })
-        .catch((e) => say("会话 " + s.id + " · " + s.host + NL + "⌛ " + errText(e)));
+      const s = await invoke("verify_start", { url: url, reason: "手动校验" });
+      verifySession = null;
+      say("会话 " + s.id + " · " + s.host + NL + "页面已打开:完成后点底部「我已完成」");
     } catch (e) {
       say("打开失败:" + errText(e));
     } finally {
@@ -3440,7 +3511,7 @@ function bindVerifyPanel() {
 
   btnFetch.onclick = async () => {
     if (!verifySession) {
-      say("先开一个会话");
+      say("先完成一次校验");
       return;
     }
     btnFetch.disabled = true;
@@ -3455,8 +3526,9 @@ function bindVerifyPanel() {
       say(
         "会话 " + verifySession.id + " · HTTP " + res.status + " · " + body.length + " 字" + NL +
           (challenge ? "⚠️ 还是挑战页" : "✅ 不是挑战页") + NL + NL +
-          body.slice(0, 160).replace(/\s+/g, " ")
+          body.slice(0, 160).replace(/s+/g, " ")
       );
+      refreshVerifySessions();
     } catch (e) {
       say("取数据失败:" + errText(e));
     } finally {

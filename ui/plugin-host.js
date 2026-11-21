@@ -189,17 +189,17 @@ function postToSandbox(msg) {
 }
 
 /**
- * 人工校验:开一个真实窗口让用户点,宿主留 cookie,插件只拿会话 id。
- * `ctx.human.verify()` 会一直等到用户点完"我已完成"(或超时)。
+ * 人工校验:在 app 里铺一层校验页(中间是原生子 WebView),宿主留 cookie,
+ * 插件只拿会话 id。`ctx.human.verify()` 等用户点完「我已完成」才返回。
  */
 async function handleVerify(d) {
   const reply = { kind: "rpc.result", id: d.id, ok: false, error: "" };
   try {
-    const s = await invokeFn("session_open", {
+    const s = await invokeFn("verify_start", {
       url: d.url,
       reason: d.reason || "",
     });
-    logFn("已打开校验窗口 " + s.host);
+    logFn("已打开校验页 " + s.host);
     const done = await invokeFn("session_wait", { id: s.id, timeoutSec: 180 });
     logFn("校验通过 " + done.host);
     reply.ok = true;

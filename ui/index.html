@@ -1736,6 +1736,92 @@
     </div>
   </div>
 
+  <!-- 站点校验:app 内的一层页面;中间那块是原生子 WebView,由宿主摆位 -->
+  <section id="verifyPage" class="verify-page" hidden>
+    <header class="verify-bar">
+      <button type="button" class="verify-back" id="verifyBack" aria-label="返回">
+        <span class="m3e-icon" aria-hidden="true">arrow_back</span>
+      </button>
+      <div class="verify-title">
+        <b id="verifyHost">站点校验</b>
+        <span id="verifyReason">完成校验后点「我已完成」</span>
+      </div>
+    </header>
+    <div class="verify-body" id="verifyBody">
+      <div class="verify-loading" id="verifyLoading" hidden>
+        <span class="m3e-icon" aria-hidden="true">travel_explore</span>
+        <p>正在打开页面…</p>
+      </div>
+    </div>
+    <footer class="verify-foot">
+      <button type="button" class="m3e-button m3e-button--text" id="verifyCancel">取消</button>
+      <button type="button" class="m3e-button" id="verifyDone">我已完成</button>
+    </footer>
+  </section>
+
+  <style>
+    .verify-page {
+      position: fixed;
+      inset: 0;
+      z-index: 400;
+      display: flex;
+      flex-direction: column;
+      background: var(--md-sys-color-surface, #1b1b1f);
+      color: var(--md-sys-color-on-surface, #e6e1e6);
+    }
+    .verify-page[hidden] { display: none; }
+    .verify-bar {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--md-sys-color-outline-variant, #3a3a40);
+    }
+    .verify-back {
+      flex: none;
+      width: 40px;
+      height: 40px;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: inherit;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .verify-back:hover { background: var(--md-sys-color-surface-container-high, #2a2a30); }
+    .verify-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .verify-title b { font-size: 15px; font-weight: 600; }
+    .verify-title span { font-size: 12px; opacity: .62; }
+    .verify-body {
+      flex: 1 1 auto;
+      position: relative;
+      min-height: 0;
+      background: var(--md-sys-color-surface-container-lowest, #111114);
+    }
+    .verify-loading {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-content: center;
+      justify-items: center;
+      gap: 10px;
+      opacity: .5;
+      pointer-events: none;
+    }
+    .verify-loading .m3e-icon { font-size: 40px; }
+    .verify-loading p { margin: 0; font-size: 13px; }
+    .verify-foot {
+      flex: none;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--md-sys-color-outline-variant, #3a3a40);
+    }
+  </style>
+
   <script src="vendor/hls.min.js"></script>
 <script type="module" src="app.js" onerror="window.__err('module app.js 加载失败')"></script>
 </body>

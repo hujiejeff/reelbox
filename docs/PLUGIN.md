@@ -60,8 +60,8 @@ reelbox.define({
 
 ## 需要人工过的站点(Cloudflare / 登录)
 
-沙箱 iframe 的 origin 是 `null`,既没有 cookie 也过不了人机校验。所以这类站点要
-先让用户在一个**真实的顶层窗口**里点一次,之后用会话去取数据:
+沙箱 iframe 的 origin 是 `null`,既没有 cookie 也过不了人机校验。所以这类站点要先
+让用户在 **app 里的校验页**(真实子 WebView,外面是我们自己的壳)点一次,之后用会话去取数据:
 
 ```js
 const s = await ctx.human.verify({
@@ -77,7 +77,7 @@ const html = await ctx.http.get("https://某个站点/list", { session: s.id });
   每次请求是宿主现从窗口的 cookie 罐里取。
 - **请求用的 UA / Referer 跟窗口一致**:Cloudflare 的 `cf_clearance` 绑 UA,
   换了就白过。
-- 会话按窗口隔离,关掉窗口即失效;宿主不跨站复用。
+- 会话按 origin 隔离,不跨站复用;用户点「完成」时 cookie 快照进会话,窗口关掉也不影响。
 
 用户也可以在 **设置 → 校验** 里自己开一个会话先试通(不写代码也能验证站点能不能过),
 会话列表里能看状态、把窗口叫回来、或者撤销。
