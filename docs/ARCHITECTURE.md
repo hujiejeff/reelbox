@@ -111,6 +111,54 @@ reelbox.adapter({
 - 错误只能用四类码:`network` / `parse` / `auth` / `unsupported`。
 - 适配器**不持有全局状态**;同一份 config 的缓存可以放在 `ctx.cache`(内核提供,按 config 键)。
 
+## 4.5 实施状态(2026-11-21)
+
+| 阶段 | 状态 | 提交 | 证据 |
+| --- | --- | --- | --- |
+| P1 adapter/probe 字段 + 迁移 + 分发 | ✅ | `c18b8ac` | 119 条测试;本机 9 个源自动标注(见下) |
+| P2 内置 iplayr + 导入即探测 | ✅ | `a8d8463` `fb8b43f` | 粘 dbk.json → 自动建源,列表 48 条,点播 `PROXY m3u8 status=200` |
+| P3 vod 迁 JS,保留 vod-rs | ✅ | `18ed741` `49cf054` | 3 个真实源逐字段一致;沙箱列表 20 张卡片 |
+| P4 webox 抽成独立文件 | ⏳ 未做 | — | 现在等于"reelbox 运行时 + WeBox.define 兼容入口",行为已正确,只是没有独立适配器文件 |
+| P5 hghub / tvbox | ⏳ 未做 | — | 见第 7 节非目标与路线图 |
+
+### 迁移后的源标注(本机实测)
+
+```
+ffzy         vod      非凡资源
+8ff6abfa     vod      电影天堂
+dcf82188     vod      量子资源
+b56fc3c4     vod      无水印资源
+b79656ad     iplayr   libvio
+587b652a     iplayr   独播库
+c83a88ce     iplayr   厂长资源
+5bf55660     iplayr   欧乐影视
+user-4kvm    reelbox  4k影视
+```
+
+### 性能实测(决定 P3 能不能做的依据)
+
+沙箱内对 `cj.lziapi.com` 的 165 KB XML:
+
+| 步骤 | 耗时 |
+| --- | --- |
+| 网络取回 | 1031 ms |
+| DOMParser 解析 | **6 ms** |
+| 抽取 20 条 | 0 ms |
+| XPath 取 20 个节点 | 8 ms |
+
+结论:解析不是瓶颈,网络才是。所以 vod 可以放心放在沙箱里;只有当响应体到几 MB 级别时才需要考虑内核原语。
+
+### 一致性验证(P3 验收)
+
+`非凡资源`(JSON)、`量子资源`(XML)、`电影天堂`(JSON)三个源,JS 与 Rust 实现的输出:
+
+- 列表:条数、`next`、前 3 条 `{id,title,kind,poster,subtitle}` 完全一致
+- 详情:`title`、线路数、每组集数、前 3 集 `{id,name}` 完全一致
+- 分类:数量一致
+- 播放:地址、`page` 标记、`Referer` 一致
+
+采集站返回顺序会轮换,比对必须按 `id` 对齐,不能按数组下标。
+
 ## 5. 迁移计划
 
 | 阶段 | 内容 | 风险 | 验收 |
