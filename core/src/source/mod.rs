@@ -174,8 +174,14 @@ pub fn derive_adapter(kind: &str, url: &str) -> &'static str {
         "webox" => {
             if bare.ends_with(".parser.js") {
                 "parser"
-            } else {
+            } else if bare.ends_with(".reelbox.js") {
+                // 新格式:入口是 reelbox.define
                 "reelbox"
+            } else {
+                // `.webox.js` 与没有后缀区分的老文件,都走 WeBox 那套入口。
+                // 两者运行时是同一个沙箱,但**名字要如实**:否则数据里看不出这插件
+                // 到底是哪种格式,排查时得靠读文件。
+                "webox"
             }
         }
         "xml" => "vod",
@@ -227,6 +233,14 @@ pub fn fill_adapters(list: &mut [Source]) -> usize {
     for src in list.iter_mut() {
         if src.adapter.is_empty() {
             src.adapter = derive_adapter(&src.kind, &src.url).to_string();
+            filled += 1;
+        } else if src.adapter == "reelbox"
+            && src.kind.eq_ignore_ascii_case("webox")
+            && src.url.to_ascii_lowercase().split(|c| c == '?' || c == '#').next().unwrap_or("").ends_with(".webox.js")
+        {
+            // 早期迁移把 `.webox.js` 一律写成了 reelbox(那时两者还没分开)。
+            // 这里只纠正这一种明确的情况,别的 adapter 一律不碰。
+            src.adapter = "webox".to_string();
             filled += 1;
         }
     }
@@ -377,8 +391,10 @@ mod tests {
         // 现有插件源都是 type=webox
         assert_eq!(
             derive_adapter("webox", "C:/Users/x/AppData/Roaming/reelbox/plugins/4k.webox.js"),
-            "reelbox"
+            "webox"
         );
+        // 老插件没有后缀区分:仍按 WeBox 入口,但名字就是 webox
+        assert_eq!(derive_adapter("webox", "D:/x/legacy.js"), "webox");
         assert_eq!(derive_adapter("webox", "D:/x/iplayr.reelbox.js"), "reelbox");
         // 解析器:type 说了算,`.parser.js` 的后缀也算
         assert_eq!(derive_adapter("parser", "D:/x/share.reelbox.parser.js"), "parser");
@@ -501,7 +517,7 @@ mod tests {
         // `type` 原样保留(界面还在用),adapter 各自按规则补上
         assert_eq!(old[0].kind, "xml");
         assert_eq!(old[0].adapter(), "vod");
-        assert_eq!(old[1].adapter(), "reelbox");
+        assert_eq!(old[1].adapter(), "webox");
         assert_eq!(old[2].adapter(), "iplayr");
         assert!(old.iter().all(|s| s.adapter.is_empty() && s.probe.is_none()));
         // 迁移后写回去:只多出 adapter,`type` 没被动过
@@ -533,13 +549,28 @@ mod tests {
         assert_eq!(super::fill_adapters(&mut list), 2, "只有两条缺 adapter");
         assert_eq!(list[0].adapter, "vod");
         assert_eq!(list[1].adapter, "iplayr", "已有值的不能被改");
-        assert_eq!(list[2].adapter, "reelbox");
+        assert_eq!(list[2].adapter, "webox", "`.webox.js` 就是 WeBox 入口");
         // `type` 不动
         assert_eq!(list[0].kind, "xml");
         assert_eq!(list[2].kind, "webox");
 
         // 再跑一遍:没什么可补的 → 调用方不该再写文件
         assert_eq!(super::fill_adapters(&mut list), 0);
+
+        // 早期迁移把 `.webox.js` 写成了 reelbox:这一条要纠正回来,别的 adapter 不碰
+        let mut legacy: Vec<Source> = serde_json::from_str(
+            r#"[
+              {"id":"a","name":"老插件","type":"webox","url":"D:/x/a.webox.js","adapter":"reelbox"},
+              {"id":"b","name":"新插件","type":"webox","url":"D:/x/b.reelbox.js","adapter":"reelbox"},
+              {"id":"c","name":"CMS","type":"vod","url":"https://x/api.php/provide/vod","adapter":"vod"}
+            ]"#,
+        )
+        .expect("解析失败");
+        assert_eq!(super::fill_adapters(&mut legacy), 1, "只纠正那条 .webox.js");
+        assert_eq!(legacy[0].adapter, "webox");
+        assert_eq!(legacy[1].adapter, "reelbox");
+        assert_eq!(legacy[2].adapter, "vod");
+        assert_eq!(super::fill_adapters(&mut legacy), 0, "纠正后不再写文件");
         assert_eq!(list[0].adapter, "vod");
 
         // 已经迁移过的数据(空列表也算)同样返回 0
