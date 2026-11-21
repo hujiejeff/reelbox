@@ -3580,6 +3580,9 @@ function setSummary(key) {
     const mode = dark ? (themeState.pureBlack ? "纯黑" : "深色") : "浅色";
     return mode + " · " + themeSeedLabel() + " · " + (VARIANT_LABEL[themeState.variant] || "标准");
   }
+  if (key === "sites") {
+    return "人机验证 · 登录页";
+  }
   if (key === "debug") {
     return "日志" + (debugOn() ? "开" : "关");
   }
