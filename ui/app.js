@@ -572,13 +572,17 @@ async function switchSource(src, opts) {
 
 /* ---------- 适配器:导入时判定,运行时只读 ---------- */
 // 一条源走哪条路只看 `adapter`(见 docs/ARCHITECTURE.md 第 2 节):
-//   vod            → Rust 的 CMS 客户端(苹果 CMS 的 JSON / XML)
+//   vod            → 沙箱,插件是**随包安装的内置适配器**,源的 url 是接口地址
+//   vod-rs         → Rust 的 CMS 客户端(苹果 CMS 的 JSON / XML),回滚开关
 //   reelbox/webox  → 沙箱,源的 url 就是插件文件
 //   iplayr         → 沙箱,但插件是**随包安装的内置引擎**,源的 url 是站点配置
 // 判定只做一次(导入时写进 adapter + probe),运行时不再重新猜格式。
 
-/** 钩子跑在沙箱里的三种适配器(其余的交给 Rust) */
-const SANDBOX_ADAPTERS = ["reelbox", "webox", "iplayr"];
+/** 钩子跑在沙箱里的适配器(其余的交给 Rust:现在只剩 `vod-rs` 那条回滚路径) */
+const SANDBOX_ADAPTERS = ["reelbox", "webox", "iplayr", "vod"];
+
+/** 插件文件随包安装的适配器(名字 → `builtin_adapters()` 里的键) */
+const BUILTIN_ADAPTERS = ["iplayr", "vod"];
 
 /**
  * 这条源用哪个适配器。
@@ -593,7 +597,7 @@ function sourceAdapter(src) {
   return "vod";
 }
 
-/** 钩子跑在沙箱 iframe 里吗(vod 走 Rust,解析器不是源) */
+/** 钩子跑在沙箱 iframe 里吗(`vod` 是,`vod-rs` 不是;解析器不是源) */
 function pluginMode(src) {
   return SANDBOX_ADAPTERS.indexOf(sourceAdapter(src || S.source)) >= 0;
 }
@@ -617,24 +621,33 @@ function builtinAdapter(name) {
 
 /**
  * 这个源的插件文件在哪儿。
- * reelbox / webox 的地址就是插件文件;iplayr 的地址是站点配置,插件是内置引擎。
+ * reelbox / webox 的地址就是插件文件;iplayr / vod 的地址是站点配置 / 接口地址,
+ * 插件是随包安装的内置适配器。
  */
 async function adapterPath(src) {
-  if (sourceAdapter(src) === "iplayr") {
-    const path = await builtinAdapter("iplayr");
-    if (!path) throw new Error("内置 iplayr 引擎没装上(插件目录里找不到 builtin/iplayr.adapter.js)");
+  const name = sourceAdapter(src);
+  if (BUILTIN_ADAPTERS.indexOf(name) >= 0) {
+    const path = await builtinAdapter(name);
+    if (!path) {
+      throw new Error("内置 " + name + " 适配器没装上(插件目录里找不到 builtin/" + name + ".adapter.js)");
+    }
     return path;
   }
   return String((src && src.url) || "");
 }
 
 /**
- * 交给插件的 options。引擎类适配器从 `url` 里拿站点配置(它不知道别的);
+ * 交给插件的 options。内置适配器从 `url` 里拿站点配置 / 接口地址(它不知道别的);
  * 其余源用自己存的 options —— 普通插件不会因为多了个字段而变。
+ *
+ * `format: "auto"` 是给 vod 的口径:JSON / XML 由适配器按地址自己判,
+ * 和 Rust 那份 `Source::format()` 同一个规则。
  */
 function adapterOptions(src) {
   if (!src) return {};
-  if (sourceAdapter(src) === "iplayr") return { config: String(src.url || "") };
+  const name = sourceAdapter(src);
+  if (name === "iplayr") return { config: String(src.url || "") };
+  if (name === "vod") return { config: String(src.url || ""), format: "auto" };
   return src.options || {};
 }
 
@@ -645,7 +658,7 @@ async function callAdapter(src, hook, arg) {
   return callPlugin(await adapterPath(src), hook, args);
 }
 
-/** 列表:沙箱类适配器走 ui/plugin-host.js,vod 走 Rust */
+/** 列表:沙箱类适配器走 ui/plugin-host.js,`vod-rs` 走 Rust */
 async function fetchPage(page, classify) {
   if (!pluginMode()) return invoke("list_items", { source: S.source, page, classify });
   const res = await callAdapter(S.source, "list", {
@@ -2294,7 +2307,7 @@ function syncTestAllBtn() {
   b.textContent = testingAll ? "测速中…" : "全部测速";
 }
 
-/** 单源测速:点播/XML 走 Rust 的 list_items,沙箱类适配器走沙箱(和首页同一个请求) */
+/** 单源测速:适配器走沙箱(和首页同一个请求),`vod-rs` 走 Rust 的 list_items */
 async function checkSourceHealth(src) {
   const t0 = performance.now();
   const spent = () => Math.round(performance.now() - t0);
@@ -2703,29 +2716,30 @@ function probeErrorKind(raw) {
 
 /** 试跑一次 list(page=1),出条目就算过 */
 async function probeRunList(adapter, target, name) {
-  if (adapter === "vod") {
-    // 苹果 CMS:和正常取列表同一条路(Rust 的接口客户端)
+  if (adapter === "vod-rs") {
+    // 苹果 CMS 的 Rust 实现(回滚路径):和正常取列表同一条路
     const page = await invoke("list_items", {
       source: {
         id: shortHash(target),
         name: name || nameFromTarget(target),
         type: /\bac=xml\b|\.xml$/i.test(String(target).split(/[?#]/)[0]) ? "xml" : "vod",
         url: target,
-        adapter: "vod",
+        adapter: "vod-rs",
       },
       page: 1,
       classify: "",
     });
     return (page && page.items) || [];
   }
-  // reelbox / webox:地址就是插件文件;iplayr:内置引擎 + 地址当站点配置
-  const path = adapter === "iplayr" ? await builtinAdapter("iplayr") : target;
+  // reelbox / webox:地址就是插件文件;iplayr / vod:内置适配器 + 地址当站点配置
+  const path = BUILTIN_ADAPTERS.indexOf(adapter) >= 0 ? await builtinAdapter(adapter) : target;
   if (!path) throw new Error("unsupported: 内置 " + adapter + " 引擎没装上");
+  // options 和运行时同口径:iplayr/vod 的站点地址就是 `url`(见 adapterOptions)
   const res = await callPlugin(path, "list", {
     page: 1,
     cursor: null,
     filters: { classify: "" },
-    options: adapter === "iplayr" ? { config: target } : {},
+    options: adapterOptions({ url: target, adapter: adapter }),
   });
   return (res && (res.items || res.list)) || [];
 }

@@ -79,19 +79,22 @@ fn boa_fetch() -> Box<dyn Fn(&str) -> Option<String>> {
 /// 另一个适配器」这种查不出来的鬼故事。
 #[derive(Debug, Clone, Copy)]
 enum Route {
-    /// `vod`:苹果 CMS 接口(JSON / XML),现在还是 Rust 的 `cms::Client`
+    /// `vod-rs`:苹果 CMS 接口(JSON / XML)的 **Rust 实现**,只留着回滚用。
+    /// 默认的 `vod` 已经迁成内置 JS 适配器(见 docs/ARCHITECTURE.md P3)。
     Cms,
-    /// `reelbox` / `webox` / `iplayr`:都是插件文件,交前端沙箱(ui/plugin-host.js);
+    /// `vod` / `reelbox` / `webox` / `iplayr`:都是 js 适配器,交前端沙箱(ui/plugin-host.js);
     /// 显式要求回退时才走 boa
     Plugin,
 }
 
 fn route(src: &Source) -> Result<Route, String> {
     match src.adapter() {
-        "vod" => Ok(Route::Cms),
+        // 回滚开关:把源的 adapter 改成 `vod-rs` 就回到原来那套 Rust 实现,
+        // 代码先留着(迁移期两边都跑得动,见 P3 的验收)。
+        "vod-rs" => Ok(Route::Cms),
         // 解析器不是源:它只把一张网页变成播放地址,没有列表 / 详情
         "parser" => Err(PARSER_IS_NOT_SOURCE.into()),
-        // iplayr / reelbox / webox 都是 js 适配器,交给沙箱;认不出的适配器也按插件试。
+        // vod / iplayr / reelbox / webox 都是 js 适配器,交给沙箱;认不出的适配器也按插件试。
         // 它们的区别只在「插件文件从哪儿来」,见 plugin_path / plugin_options_json。
         _ => Ok(Route::Plugin),
     }
@@ -100,29 +103,38 @@ fn route(src: &Source) -> Result<Route, String> {
 /// 一条源要跑的插件文件。
 ///
 /// `reelbox` / `webox`:源的地址就是插件文件本身(规则全在里面)。
-/// `iplayr`:插件是**随包安装的引擎**,同一个引擎配不同站点 —— 所以 `url` 是
-/// 站点配置地址,插件文件得从 [`crate::builtin`] 拿(见 `docs/ARCHITECTURE.md` 第 2 节)。
+/// `iplayr` / `vod`:插件是**随包安装的适配器**,同一个适配器配不同站点 —— 所以
+/// `url` 是站点配置 / 接口地址,插件文件得从 [`crate::builtin`] 拿
+/// (见 `docs/ARCHITECTURE.md` 第 2 节)。
 fn plugin_path(src: &Source) -> Result<std::path::PathBuf, String> {
-    if src.adapter() == "iplayr" {
-        return crate::builtin::adapter_path("iplayr").ok_or_else(|| {
+    match src.adapter() {
+        "iplayr" => crate::builtin::adapter_path("iplayr").ok_or_else(|| {
             "内置 iplayr 引擎没装上(插件目录里找不到 builtin/iplayr.adapter.js):重装或重编应用即可".to_string()
-        });
+        }),
+        "vod" => crate::builtin::adapter_path("vod").ok_or_else(|| {
+            "内置 vod 适配器没装上(插件目录里找不到 builtin/vod.adapter.js):重装或重编应用即可".to_string()
+        }),
+        _ => Ok(std::path::PathBuf::from(&src.url)),
     }
-    Ok(std::path::PathBuf::from(&src.url))
 }
 
 /// 交给插件的 `options`。
 ///
-/// 引擎类适配器的「解析哪个站」在 `url` 里(iplayr 的站点配置),插件从
-/// `options.config` 读;其余源的 `options` 是用户自己填的(见 docs/ENGINE-PLUGINS.md)。
+/// 引擎类适配器的「解析哪个站」在 `url` 里(iplayr 的站点配置、vod 的接口地址),
+/// 插件从 `options.config` 读;其余源的 `options` 是用户自己填的
+/// (见 docs/ENGINE-PLUGINS.md)。`format` 交给适配器自己按地址判(`"auto"`)。
 fn plugin_options_json(src: &Source) -> String {
-    if src.adapter() == "iplayr" {
-        return serde_json::json!({ "config": src.url }).to_string();
+    match src.adapter() {
+        "iplayr" => serde_json::json!({ "config": src.url }).to_string(),
+        "vod" => serde_json::json!({ "config": src.url, "format": "auto" }).to_string(),
+        _ => {
+            if src.options.is_null() {
+                "{}".into()
+            } else {
+                serde_json::to_string(&src.options).unwrap_or_else(|_| "{}".into())
+            }
+        }
     }
-    if src.options.is_null() {
-        return "{}".into();
-    }
-    serde_json::to_string(&src.options).unwrap_or_else(|_| "{}".into())
 }
 
 const PARSER_IS_NOT_SOURCE: &str =

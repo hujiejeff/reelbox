@@ -1,4 +1,8 @@
-//! 源:把站点翻译成 model。现在只有声明式的苹果 CMS(vod / xml)。
+//! 源:把站点翻译成 model。
+//!
+//! 苹果 CMS(vod / xml)的运行时默认走随包的 JS 适配器(`examples/vod.reelbox.js`,
+//! `adapter="vod"`);这里留下的 [`cms`] 是同一套逻辑的 Rust 实现,由 `adapter="vod-rs"`
+//! 选中,只作回滚路径(见 `docs/ARCHITECTURE.md` P3)。
 
 pub mod cms;
 
@@ -18,7 +22,10 @@ pub struct Source {
     #[serde(default, rename = "type")]
     pub kind: String,
     pub url: String,
-    /// 用哪个适配器解析:`vod` | `iplayr` | `webox` | `reelbox` | `parser`。
+    /// 用哪个适配器解析:`vod` | `vod-rs` | `iplayr` | `webox` | `reelbox` | `parser`。
+    ///
+    /// `vod` 是随包安装的 JS 适配器(P3 从 Rust 迁过去的);`vod-rs` 是同一套逻辑的
+    /// **Rust 实现**,只留作回滚 —— 两者输出应当逐字段一致(见 `docs/ARCHITECTURE.md` P3)。
     ///
     /// 导入时探测决定、落盘后运行时不改(见 `docs/ARCHITECTURE.md` 第 2 节)。
     /// 老配置没有这个字段:读到空串时用 [`Source::adapter`] 现推一个、由
@@ -137,7 +144,7 @@ impl Source {
         }
     }
 
-    /// 运行时用哪个适配器(`vod` / `iplayr` / `webox` / `reelbox` / `parser`)。
+    /// 运行时用哪个适配器(`vod` / `vod-rs` / `iplayr` / `webox` / `reelbox` / `parser`)。
     ///
     /// 落过盘的源直接用自己的 `adapter` —— 判定只做一次,不每次加载重新猜;
     /// 老数据(没这个字段)现推一个,好让运行时不必关心迁移有没有跑过。
