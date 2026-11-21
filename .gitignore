@@ -10,3 +10,4 @@ docs/dev/
 .reelbox-scratch/
 *.tmp
 .cargo/config.toml
+docs/selftest-report.json

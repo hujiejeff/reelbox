@@ -206,8 +206,9 @@ pub async fn plugin_fetch(
 
 fn fetch_guarded(url: &str, headers: Option<&HashMap<String, String>>) -> Result<PluginResponse, String> {
     use std::io::Read as _;
-    // 自己跟重定向:每一跳都要重新做一次"是不是内网"的检查
-    let client = reelbox_core::net::http::client_no_redirect();
+    // 自己跟重定向:每一跳都要重新做一次"是不是内网"的检查。
+    // **每一跳也都要重新选路**(get_no_redirect),否则系统代理开关一关,
+    // 插件/适配器的请求就只会直连,整页全挂。
     let mut target = url.to_string();
     for _ in 0..6 {
         if reelbox_core::plugin::net::is_private_url(&target) {
@@ -223,7 +224,8 @@ fn fetch_guarded(url: &str, headers: Option<&HashMap<String, String>>) -> Result
                 }
             }
         }
-        let resp = reelbox_core::net::http::get_once(&client, &target, &list)
+        let resp = reelbox_core::net::http::get_no_redirect(&target, &list)
+            .map(|u| u.resp)
             .map_err(|e| format!("请求失败: {e}"))?;
         let status = resp.status().as_u16();
         if (300..400).contains(&status) {
@@ -745,10 +747,12 @@ pub struct AdapterEntry {
 /// 内置适配器:名字固定在这张表里(顺序即界面顺序)。
 /// `hint` 只说"它的 `config` 该填什么",界面上一行说明。
 const BUILTIN_ADAPTER_LIST: [(&str, &str, &str); 4] = [
-    ("vod", "苹果 CMS", "接口地址"),
-    ("iplayr", "iplayr 配置", "XPath 配置"),
-    ("webox", "WeBox 插件", "老插件文件"),
-    ("reelbox", "Reelbox 插件", "插件文件"),
+    ("vod", "苹果 CMS", "接口地址 → 我们的接口"),
+    ("iplayr", "iplayr 配置", "XPath 规则 → 我们的接口"),
+    ("webox", "WeBox 插件", "老插件格式 → 我们的接口"),
+    // 原生插件不是"适配":它直接实现 list/detail/play,中间没有翻译层。
+    // 列在这里只是为了让清单完整 —— 文案上必须说清楚,否则会误导成"插件也是一种适配器"。
+    ("reelbox", "原生插件(无需适配)", "直接实现接口"),
 ];
 
 /// 当前可用的适配器:内置四个在前,用户导入的(`plugins/*.adapter.js`)在后,按文件名排。

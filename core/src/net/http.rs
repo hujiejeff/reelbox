@@ -115,6 +115,8 @@ static NO_FOLLOW: Mutex<Option<Cached>> = Mutex::new(None);
 static STREAM: Mutex<Option<Cached>> = Mutex::new(None);
 static DIRECT: Mutex<Option<Cached>> = Mutex::new(None);
 static DIRECT_STREAM: Mutex<Option<Cached>> = Mutex::new(None);
+/// 直连且不跟重定向(插件抓取自己跳,每一跳都要过 SSRF 检查)
+static DIRECT_NO_FOLLOW: Mutex<Option<Cached>> = Mutex::new(None);
 
 fn pick(
     slot: &Mutex<Option<Cached>>,
@@ -163,6 +165,15 @@ pub fn client_via(via: &Via, stream: bool) -> Client {
         (Via::Direct, true) => pick(&DIRECT_STREAM, true, None, &direct_route()),
         (_, false) => pick(&FOLLOW, true, Some(REQUEST_TIMEOUT), &route_of(via)),
         (_, true) => pick(&STREAM, true, None, &route_of(via)),
+    }
+}
+
+/// 按路线取"不跟重定向"的客户端。插件抓取要自己控制跳数,
+/// 但**仍然要选路**:否则系统代理一关,插件请求就只会直连。
+pub fn client_via_no_redirect(via: &Via) -> Client {
+    match via {
+        Via::Direct => pick(&DIRECT_NO_FOLLOW, false, Some(REQUEST_TIMEOUT), &direct_route()),
+        Via::Proxy(_) => pick(&NO_FOLLOW, false, Some(REQUEST_TIMEOUT), &route_of(via)),
     }
 }
 
@@ -430,6 +441,20 @@ pub fn get_stream(url: &str, headers: &[(&str, String)]) -> Result<Upstream, Str
 /// 反代拿清单:整体仍受 20s 约束(清单很短,不该无限等),同样按域名选路。
 pub fn get_upstream(url: &str, headers: &[(&str, String)]) -> Result<Upstream, String> {
     fetch(url, headers, false, false)
+}
+
+/// 走一次"单跳"请求:不跟重定向,但按域名选路(与 get 同一套记忆)。
+///
+/// 插件抓取用它:每一跳都重新做 SSRF 检查,同时不会因为"没开系统代理"就只能直连。
+pub fn get_no_redirect(url: &str, headers: &[(&str, String)]) -> Result<Upstream, String> {
+    let host = host_of(url);
+    let now = route::now_secs();
+    let cands = route::candidates(&host);
+    let won = race(route::store(), &host, now, url, &cands, |via, _more| {
+        let client = client_via_no_redirect(via);
+        send(&client, url, headers).map(|resp| (resp.status().as_u16(), resp))
+    })?;
+    Ok(Upstream { resp: won.payload, via: won.via, fallback: won.lost })
 }
 
 /// GET 一次,不重试(插件抓取要自己控制跳数)
