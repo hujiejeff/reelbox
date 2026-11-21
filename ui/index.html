@@ -1499,24 +1499,24 @@
               </header>
               <div class="set-page__scroll">
                 <div class="set-page__body">
-                  <p class="set-page__sub">有些站点要先过一次人机验证(Cloudflare)或登录。这里开一个真实的浏览器窗口过一遍,之后用这套 cookie 取页面 —— cookie 留在本机,不给插件。</p>
+                  <p class="set-page__sub">有些站点要先过一次人机验证(Cloudflare)或登录。这里打开一个真实页面过一遍,之后用这套 cookie 取数据 —— cookie 留在本机,不给插件。</p>
 
                   <div class="set-block">
                     <div class="set-block__head"><span class="set-block__title">新建会话</span></div>
-                    <input id="verifyUrl" spellcheck="false" autocomplete="off"
-                      placeholder="https://要校验的站点"
-                      value=""
-                      style="width:100%;box-sizing:border-box;padding:11px 13px;border-radius:12px;border:1px solid var(--md-sys-color-outline-variant,#4a4a52);background:var(--md-sys-color-surface-container-high,#26262b);color:inherit;font:13px/1.4 var(--rb-font-mono,monospace)">
-                    <div class="set-acts">
-                      <button type="button" class="m3e-button" id="btnVerifyOpen">打开校验窗口</button>
-                      <button type="button" class="m3e-button m3e-button--text" id="btnVerifyFetch">用会话取一次</button>
+                    <div class="verify-form">
+                      <input id="verifyUrl" class="set-input" spellcheck="false" autocomplete="off"
+                        placeholder="https://要校验的站点" value="">
+                      <div class="set-acts">
+                        <button type="button" class="m3e-button" id="btnVerifyOpen">打开校验页</button>
+                        <button type="button" class="m3e-button m3e-button--text" id="btnVerifyFetch">用会话取一次</button>
+                      </div>
                     </div>
                     <p class="set-mono" id="verifyOut">还没开会话</p>
                   </div>
 
                   <div class="set-block">
                     <div class="set-block__head"><span class="set-block__title">会话</span></div>
-                    <p class="set-page__sub">关掉窗口会话就失效;「撤销」会把窗口一起销毁。</p>
+                    <p class="set-page__sub">会话按站点隔离,不会跨站复用;「撤销」会把它删掉,下次要重新校验。</p>
                     <div class="set-mono" id="verifySessions">—</div>
                   </div>
                 </div>
@@ -1760,14 +1760,32 @@
   </section>
 
   <style>
+    /* 设置页里的地址框:和对话框里的 .dlg-input 一个节奏 */
+    .set-input {
+      height: 46px;
+      padding: 0 14px;
+      border-radius: 12px;
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--m3e-sys-color-outline-variant);
+      background: var(--m3e-sys-color-surface-container-low);
+      color: var(--m3e-sys-color-on-surface);
+      outline: none;
+      font: 500 13.5px/1 system-ui, "PingFang SC", sans-serif;
+    }
+    .set-input:focus { border-color: var(--m3e-sys-color-primary); }
+    .set-input::placeholder { color: var(--m3e-sys-color-on-surface-variant); opacity: .7; }
+    /* 输入框 + 按钮行:块内统一 10px 节奏,别贴着 */
+    .verify-form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+
     .verify-page {
       position: fixed;
       inset: 0;
       z-index: 400;
       display: flex;
       flex-direction: column;
-      background: var(--md-sys-color-surface, #1b1b1f);
-      color: var(--md-sys-color-on-surface, #e6e1e6);
+      background: var(--m3e-sys-color-surface);
+      color: var(--m3e-sys-color-on-surface);
     }
     .verify-page[hidden] { display: none; }
     .verify-bar {
@@ -1776,7 +1794,7 @@
       align-items: center;
       gap: 6px;
       padding: 10px 12px;
-      border-bottom: 1px solid var(--md-sys-color-outline-variant, #3a3a40);
+      border-bottom: 1px solid var(--m3e-sys-color-outline-variant);
     }
     .verify-back {
       flex: none;
@@ -1790,7 +1808,7 @@
       place-items: center;
       cursor: pointer;
     }
-    .verify-back:hover { background: var(--md-sys-color-surface-container-high, #2a2a30); }
+    .verify-back:hover { background: var(--m3e-sys-color-surface-container-high); }
     .verify-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .verify-title b { font-size: 15px; font-weight: 600; }
     .verify-title span { font-size: 12px; opacity: .62; }
@@ -1798,7 +1816,7 @@
       flex: 1 1 auto;
       position: relative;
       min-height: 0;
-      background: var(--md-sys-color-surface-container-lowest, #111114);
+      background: var(--m3e-sys-color-surface-container-low);
     }
     .verify-loading {
       position: absolute;
@@ -1818,7 +1836,7 @@
       justify-content: flex-end;
       gap: 8px;
       padding: 10px 14px;
-      border-top: 1px solid var(--md-sys-color-outline-variant, #3a3a40);
+      border-top: 1px solid var(--m3e-sys-color-outline-variant);
     }
   </style>
 
