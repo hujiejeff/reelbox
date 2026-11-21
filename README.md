@@ -55,6 +55,7 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 | [docs/PLUGIN-QUICKSTART.md](docs/PLUGIN-QUICKSTART.md) | 三分钟写一个插件 |
 | [docs/PLUGIN-RUNTIME.md](docs/PLUGIN-RUNTIME.md) | 插件运行时与两套引擎 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 内核 / 适配器 / 解析器三层与迁移计划 |
+| [docs/ARCHITECTURE-EVIDENCE.md](docs/ARCHITECTURE-EVIDENCE.md) | 三层架构的验收快照(可复现) |
 | [docs/PARSERS.md](docs/PARSERS.md) | 解析器插件(从网页取播放地址) |
 | [docs/ENGINE-PLUGINS.md](docs/ENGINE-PLUGINS.md) | 引擎插件 + 站点配置(一个插件爬一类站) |
 | [docs/SOURCES.md](docs/SOURCES.md) | 源与插件的区别、存放位置、回落规则 |
