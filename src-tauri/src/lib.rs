@@ -1,5 +1,6 @@
 // Reelbox 的 Tauri 外壳:窗口 + 命令注册。
 
+mod builtin;
 mod commands;
 mod logging;
 mod paths;
@@ -16,6 +17,8 @@ pub fn run() {
             // 数据目录必须在这里解析:Android/iOS 上只有 Tauri 起来之后才知道应用私有目录在哪。
             // 桌面解析结果仍然是 %APPDATA%/reelbox,老用户数据不受影响(见 paths.rs)。
             paths::init(app.handle());
+            // 内置适配器随包安装:只在文件不存在时写一次,用户改过的不会被覆盖
+            builtin::install();
             wire_network();
             boot_log();
             Ok(())
@@ -34,6 +37,7 @@ pub fn run() {
             commands::append_log,
             commands::open_log,
             commands::app_info,
+            commands::builtin_adapters,
             commands::save_plugin,
             commands::read_text_file,
             commands::plugin_read,

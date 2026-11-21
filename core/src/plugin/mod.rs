@@ -366,12 +366,22 @@ pub fn run_file(
     host.call(hook, arg_json)
 }
 
-/// 插件里声明的分类(没有就返回空)
+/// 插件里声明的分类(没有就返回空)。不带任何参数:普通插件的分类写死在代码里。
 pub fn plugin_filters(
     path: &std::path::Path,
     fetch: Box<dyn Fn(&str) -> Option<String>>,
 ) -> Vec<crate::model::Filter> {
-    let out = match run_file(path, "filters", "{}", fetch) {
+    plugin_filters_with(path, "{}", fetch)
+}
+
+/// 同上,但把 `options` 之类的参数喂进去:引擎类插件(iplayr)的分类来自站点配置,
+/// 不给它 `{"options":{"config":"…"}}` 它一个分类也说不出来。
+pub fn plugin_filters_with(
+    path: &std::path::Path,
+    arg_json: &str,
+    fetch: Box<dyn Fn(&str) -> Option<String>>,
+) -> Vec<crate::model::Filter> {
+    let out = match run_file(path, "filters", arg_json, fetch) {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };

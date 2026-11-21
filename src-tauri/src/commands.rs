@@ -91,9 +91,38 @@ fn route(src: &Source) -> Result<Route, String> {
         "vod" => Ok(Route::Cms),
         // 解析器不是源:它只把一张网页变成播放地址,没有列表 / 详情
         "parser" => Err(PARSER_IS_NOT_SOURCE.into()),
-        // iplayr 眼下只是个插件文件,和 reelbox 同路;认不出的适配器也按插件试
+        // iplayr / reelbox / webox 都是 js 适配器,交给沙箱;认不出的适配器也按插件试。
+        // 它们的区别只在「插件文件从哪儿来」,见 plugin_path / plugin_options_json。
         _ => Ok(Route::Plugin),
     }
+}
+
+/// 一条源要跑的插件文件。
+///
+/// `reelbox` / `webox`:源的地址就是插件文件本身(规则全在里面)。
+/// `iplayr`:插件是**随包安装的引擎**,同一个引擎配不同站点 —— 所以 `url` 是
+/// 站点配置地址,插件文件得从 [`crate::builtin`] 拿(见 `docs/ARCHITECTURE.md` 第 2 节)。
+fn plugin_path(src: &Source) -> Result<std::path::PathBuf, String> {
+    if src.adapter() == "iplayr" {
+        return crate::builtin::adapter_path("iplayr").ok_or_else(|| {
+            "内置 iplayr 引擎没装上(插件目录里找不到 builtin/iplayr.adapter.js):重装或重编应用即可".to_string()
+        });
+    }
+    Ok(std::path::PathBuf::from(&src.url))
+}
+
+/// 交给插件的 `options`。
+///
+/// 引擎类适配器的「解析哪个站」在 `url` 里(iplayr 的站点配置),插件从
+/// `options.config` 读;其余源的 `options` 是用户自己填的(见 docs/ENGINE-PLUGINS.md)。
+fn plugin_options_json(src: &Source) -> String {
+    if src.adapter() == "iplayr" {
+        return serde_json::json!({ "config": src.url }).to_string();
+    }
+    if src.options.is_null() {
+        return "{}".into();
+    }
+    serde_json::to_string(&src.options).unwrap_or_else(|_| "{}".into())
 }
 
 const PARSER_IS_NOT_SOURCE: &str =
@@ -314,13 +343,13 @@ pub async fn list_items(source: Source, page: u32, classify: String) -> Result<P
         return Err(NO_BOA.into());
     }
     blocking(move || {
-        let path = std::path::PathBuf::from(&source.url);
-        // 两种契约都喂:page(WeBox) + cursor(filters 版本插件) + filters
+        let path = plugin_path(&source)?;
+        // 两种契约都喂:page(WeBox) + cursor(filters 版本插件) + filters + options
         let c = classify.replace('"', "");
         let cursor = if page <= 1 { "null".to_string() } else { format!("\"{}\"", page) };
         let arg = format!(
-            "{{\"page\":{},\"classify\":\"{}\",\"cursor\":{},\"filters\":{{\"classify\":\"{}\"}}}}",
-            page, c, cursor, c
+            "{{\"page\":{},\"classify\":\"{}\",\"cursor\":{},\"filters\":{{\"classify\":\"{}\"}},\"options\":{}}}",
+            page, c, cursor, c, plugin_options_json(&source)
         );
         let out = plugin::run_file(&path, "list", &arg, boa_fetch())?;
         plugin::adapt::page_from_json(&out)
@@ -344,9 +373,13 @@ pub async fn detail(source: Source, id: String) -> Result<Detail, String> {
     }
     blocking(move || {
         use reelbox_core::model::{Detail, Episode, Group};
-        let path = std::path::PathBuf::from(&source.url);
+        let path = plugin_path(&source)?;
         let did = id.clone();
-        let arg = format!("{{\"id\":\"{}\"}}", id.replace('"', ""));
+        let arg = format!(
+            "{{\"id\":\"{}\",\"options\":{}}}",
+            id.replace('"', ""),
+            plugin_options_json(&source)
+        );
         let out = plugin::run_file(&path, "detail", &arg, boa_fetch())?;
         let v: serde_json::Value =
             serde_json::from_str(&out).map_err(|e| format!("detail 返回值不是 JSON: {e}"))?;
@@ -397,8 +430,12 @@ pub async fn play(source: Source, episode_id: String) -> Result<Stream, String> 
         return Err(NO_BOA.into());
     }
     blocking(move || {
-        let path = std::path::PathBuf::from(&source.url);
-        let arg = format!("{{\"id\":\"{}\"}}", episode_id.replace('"', ""));
+        let path = plugin_path(&source)?;
+        let arg = format!(
+            "{{\"id\":\"{}\",\"options\":{}}}",
+            episode_id.replace('"', ""),
+            plugin_options_json(&source)
+        );
         let out = plugin::run_file(&path, "play", &arg, boa_fetch())?;
         let mut v: serde_json::Value =
             serde_json::from_str(&out).map_err(|e| format!("play 返回值不是 JSON: {e}"))?;
@@ -461,8 +498,12 @@ pub async fn filters(source: Source) -> Result<Vec<Filter>, String> {
         return Err(NO_BOA.into());
     }
     Ok(tauri::async_runtime::spawn_blocking(move || {
-        let path = std::path::PathBuf::from(&source.url);
-        plugin::plugin_filters(&path, boa_fetch())
+        let path = match plugin_path(&source) {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+        let arg = format!("{{\"options\":{}}}", plugin_options_json(&source));
+        plugin::plugin_filters_with(&path, &arg, boa_fetch())
     })
     .await
     .unwrap_or_default())
@@ -662,6 +703,15 @@ pub fn app_info() -> AppInfo {
         sources_path: sources_path().to_string_lossy().to_string(),
         plugin_engine: if boa_engine() { "Boa(Rust)".to_string() } else { "WebView 沙箱".to_string() },
     }
+}
+
+/// 内置适配器清单:`{"iplayr": "…/plugins/builtin/iplayr.adapter.js"}`。
+///
+/// 前端拿它做两件事:导入时探测 iplayr 格式要跑这个文件;建出来的源(`adapter=iplayr`)
+/// 运行时也调它 —— 源的 `url` 是站点配置,插件文件不进 `url`(见 docs/ARCHITECTURE.md 第 2 节)。
+#[tauri::command]
+pub fn builtin_adapters() -> HashMap<String, String> {
+    crate::builtin::adapters()
 }
 
 /// 自检摘要落盘:`docs/selftest-report.json`(找不到就退回 %APPDATA%/reelbox/)。
