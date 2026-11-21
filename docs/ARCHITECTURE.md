@@ -120,7 +120,7 @@ reelbox.adapter({
 | P3 vod 迁 JS,保留 vod-rs | ✅ | `18ed741` `49cf054` | 3 个真实源逐字段一致;沙箱列表 20 张卡片 |
 | P4 webox 独立成适配器名 | ✅ | `adapter:分家` | `.webox.js` 现在标 `webox`、`.reelbox.js` 标 `reelbox`;运行时同一沙箱,但数据里能看出格式。早期误标成 reelbox 的行会自动纠正一次 |
 | P5 tvbox 集合筛选 | ✅ | `adapter:批量导入` | 索引里 `type 0/1` 且有 http 地址的转成 vod 源;`type 3` 的 jar 爬虫跳过并说明原因(6 条 node 测试) |
-| P5 hghub | ⏳ 未做 | — | 契约差异大(能力命名空间 vs 钩子),要写映射层;见第 7 节 |
+| P5 hghub | ❌ 决定不做 | — | 理由见第 7 节:契约形状差得远(能力命名空间 vs 我们的钩子),而且手上没有任何真实 HGhub 插件可验证——写了也只能是「应该能用」 |
 
 ### 迁移后的源标注(本机实测)
 
@@ -191,6 +191,7 @@ user-4kvm    reelbox  4k影视
 ## 7. 非目标
 
 - 执行外部生态的二进制插件(TVBox `spider.jar`、Python spider)——没有 JVM/解释器,不做。
+- **HGhub 插件适配**——它的契约是「返回一组能力命名空间」(media/search/live/comments…),我们是「实现几个钩子」,中间要写一整层映射;而且手上没有真实插件样本,做完无法验证。要做的前提是先拿到 2–3 个能跑的 HGhub 插件,否则就是在写「应该能用」的代码。
 - 需要浏览器渲染/过 Cloudflare 的站点——除非将来加 `ctx.browser` 能力,否则明确报 `unsupported`。
 - 把匹配规则做成可视化编辑器——配置是文本,够用。
 
