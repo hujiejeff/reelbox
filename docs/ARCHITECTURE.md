@@ -199,3 +199,31 @@ user-4kvm    reelbox  4k影视
 - **配置会腐烂**:站点改版 → XPath 失效。这是配置驱动模式的固有成本,缓解手段是"报错指向具体哪一步"和"改配置不发版"。
 - **JS 适配器慢于 Rust**:同一份 500 KB XML,Rust 几十毫秒,沙箱里可能几百毫秒。列表本身要等网络 4–6 秒,所以通常无感;大文档场景走内核原语。
 - **探测要发网络**:导入变慢(多一次 8 秒上限的请求)。可接受——总比导进来才发现不能用好。
+
+## 9. 怎么验
+
+一条命令:
+
+```
+npm run verify:arch
+```
+
+输出形如:
+
+```
+OK    adapter vod                 examples/vod.reelbox.js hooks=list/detail/play
+OK    adapter iplayr              examples/iplayr.reelbox.js hooks=list/detail/play
+OK    内核                          src-tauri/src/proxy.rs
+OK    适配器运行时                      ui/plugin-sandbox.js
+OK    解析器链                        ui/parser-chain.js
+OK    适配器注册(内置)                   src-tauri/src/builtin.rs
+OK    Source.adapter
+OK    Source.probe
+OK    derive_adapter
+OK    cargo test -p reelbox-core  119 passed
+OK    npm run test:ui             19 passed
+
+11/11 通过
+```
+
+它只做静态检查与跑测试,不启动应用。实机验证(粘一句配置、列表、播放)见 4.5 节。
