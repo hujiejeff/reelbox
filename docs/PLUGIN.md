@@ -50,11 +50,34 @@ reelbox.define({
 | `ctx.html.load(url)` | 取页面并返回 `page.$(sel)`;`$` 支持 `tag`、`.cls`、`#id`、`tag.cls`、`a[href]`、后代组合 |
 | `ctx.html.load(html)` | 直接吃一段 HTML 文本(不再发请求),同样返回 `page` |
 | `page.xpath(expr)` | 用 XPath 取节点/属性:`//li` → 节点数组,`//a/@href` → 字符串数组;详见 [ENGINE-PLUGINS.md](ENGINE-PLUGINS.md) |
+| `ctx.human.verify({url, reason})` | 开一个真实窗口让用户过 Cloudflare / 登录 / 扫码;返回 `{id, host, origin}`。**cookie 留在宿主,插件只拿到会话 id** |
+| `ctx.http.get(url, {session})` | 带上那次人工校验攒下的 cookie 再请求(cookie 不出宿主) |
 | `ctx.fail(code, msg)` | 抛出分类错误,code ∈ `network` / `parse` / `auth` / `unsupported` |
 | `ctx.log(...)` | 写进调试日志 |
 
 选择器对象的方法:`length`、`each(i, el)`、`text()`、`attr(name)`、`html()`、`eq(i)`、
 `xpath(expr)`(相对**该批节点**求值,`p(node).xpath(".//a/@href")`)。
+
+## 需要人工过的站点(Cloudflare / 登录)
+
+沙箱 iframe 的 origin 是 `null`,既没有 cookie 也过不了人机校验。所以这类站点要
+先让用户在一个**真实的顶层窗口**里点一次,之后用会话去取数据:
+
+```js
+const s = await ctx.human.verify({
+  url: "https://某个站点/",
+  reason: "站点要求人机验证",
+});                                  // 用户点「我已完成」之后才 resolve
+const html = await ctx.http.get("https://某个站点/list", { session: s.id });
+```
+
+几条硬规则:
+
+- **cookie 永远不出宿主**:插件只拿到会话 id,拿不到 `cf_clearance` 这类东西;
+  每次请求是宿主现从窗口的 cookie 罐里取。
+- **请求用的 UA / Referer 跟窗口一致**:Cloudflare 的 `cf_clearance` 绑 UA,
+  换了就白过。
+- 会话按窗口隔离,关掉窗口即失效;宿主不跨站复用。
 
 ## 引擎插件:一份代码 + 一份站点配置
 

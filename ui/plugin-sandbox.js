@@ -352,7 +352,7 @@ export function sandboxMain() {
       return k.toLowerCase() === "user-agent";
     });
     if (!hasUa) headers["User-Agent"] = DEFAULT_UA;
-    const res = await rpc("http.get", { url: url, headers: headers });
+    const res = await rpc("http.get", { url: url, headers: headers, session: o.session || null });
     const body = res && res.body !== undefined && res.body !== null ? String(res.body) : "";
     const out = new String(body);
     out.status = res && res.status ? res.status : 0;
@@ -361,6 +361,23 @@ export function sandboxMain() {
     out.headers = (res && res.headers) || {};
     out.mime = (res && res.mime) || "";
     return out;
+  }
+
+  /* ---------- 人工校验 ---------- */
+
+  /**
+   * 让用户在一个真实的顶层窗口里过 Cloudflare / 登录 / 扫码。
+   * 宿主办完才 resolve,cookie 留在宿主,这里只拿到会话 id。
+   *   const s = await ctx.human.verify({ url, reason })
+   *   const html = await ctx.http.get(url, { session: s.id })
+   */
+  function humanVerify(opts) {
+    const o = opts || {};
+    const url = String(o.url || "");
+    if (!/^https?:\/\//i.test(url)) {
+      return Promise.reject(new Error("verify 需要一个 http(s) 地址"));
+    }
+    return rpc("human.verify", { url: url, reason: String(o.reason || "") });
   }
 
   /* ---------- wasm 计算 ---------- */
@@ -431,6 +448,7 @@ export function sandboxMain() {
   function makeCtx(def) {
     const ctx = {
       http: { get: httpGet, post: httpGet },
+      human: { verify: humanVerify },
       html: {
         // 传 HTML 文本 → 直接返回可调用的 $;传 URL → 返回 Promise(用 await 接)
         load: function (input) {

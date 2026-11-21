@@ -56,12 +56,35 @@ OK    npm run test:ui             19 passed
 
 注意:采集站返回顺序会轮换,比对必须按 `id` 对齐。
 
+## 人工校验会话(Cloudflare)
+
+目标站:`https://nopecha.com/demo/cloudflare`(不带你自己的 cookies 时返回 403「Just a moment」)。
+
+| 步骤 | 结果 |
+| --- | --- |
+| `session_open` | 真实顶层窗口打开,页面里注入「我已完成」工具条 |
+| 挑战页自身 | 窗口里几秒内自动过掉,标题变成 `NopeCHA - CAPTCHA Demo` |
+| 点「我已完成」 | 记录 `done=true`,窗口隐藏(不销毁,cookie 罐留着) |
+| `session_fetch` | `HTTP 200 / 142880 字`,正文是真实页面,不是挑战页 |
+
+日志里的证据:
+
+```
+VERIFY open id=8193457d host=nopecha.com
+VERIFY id=8193457d host_label=verify-8193457d result=done
+VERIFY fetch host=nopecha.com cookies=1 ua=browser
+```
+
+同一个目标站用 curl 直连/走代理都是 403,说明 200 是**会话 cookie 起了作用**,
+而不是站点放行。适配器侧(沙箱 → `ctx.human.verify` → `ctx.http.get({session})`)
+跑同一条链路,返回 `HTTP 200 / 142880 字`。
+
 ## 怎么复现
 
 ```bash
 npm run verify:arch          # 静态结构 + 两套测试
 cargo test -p reelbox-core   # 119 条
-npm run test:ui              # 19 条
+npm run test:ui              # 6 条
 ```
 
 实机部分需要 debug 构建 + 调试端口,步骤见 [ARCHITECTURE.md](ARCHITECTURE.md) 第 9 节。

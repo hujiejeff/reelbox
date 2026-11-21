@@ -186,9 +186,9 @@ pub struct PluginResponse {
     pub body: String,
 }
 
-const FETCH_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+pub(crate) const FETCH_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-const FETCH_MAX_BYTES: u64 = 32 << 20;
+pub(crate) const FETCH_MAX_BYTES: u64 = 32 << 20;
 
 /// 插件里 `ctx.http.get` 的真正出口:挡内网、跟重定向时每一跳都重新挡。
 #[tauri::command]
@@ -254,7 +254,7 @@ fn fetch_guarded(url: &str, headers: Option<&HashMap<String, String>>) -> Result
 }
 
 /// 相对 Location 补成绝对地址(只处理 http/https,其余原样返回留给下一跳拒绝)
-fn absolute_url(base: &str, loc: &str) -> String {
+pub(crate) fn absolute_url(base: &str, loc: &str) -> String {
     let lower = loc.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
         return loc.to_string();

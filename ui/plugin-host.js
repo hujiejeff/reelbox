@@ -160,6 +160,10 @@ function onMessage(ev) {
     handleHttp(d);
     return;
   }
+  if (d.kind === "human.verify") {
+    handleVerify(d);
+    return;
+  }
   if (d.kind === "run.result") {
     const job = calls.get(d.id);
     if (!job) return;
@@ -184,14 +188,44 @@ function postToSandbox(msg) {
   if (frame && frame.contentWindow) frame.contentWindow.postMessage(msg, "*");
 }
 
+/**
+ * 人工校验:开一个真实窗口让用户点,宿主留 cookie,插件只拿会话 id。
+ * `ctx.human.verify()` 会一直等到用户点完"我已完成"(或超时)。
+ */
+async function handleVerify(d) {
+  const reply = { kind: "rpc.result", id: d.id, ok: false, error: "" };
+  try {
+    const s = await invokeFn("session_open", {
+      url: d.url,
+      reason: d.reason || "",
+    });
+    logFn("已打开校验窗口 " + s.host);
+    const done = await invokeFn("session_wait", { id: s.id, timeoutSec: 180 });
+    logFn("校验通过 " + done.host);
+    reply.ok = true;
+    reply.data = { id: done.id, host: done.host, origin: done.origin, url: done.url };
+  } catch (e) {
+    reply.error = String(e && e.message ? e.message : e);
+    logFn("校验失败 " + reply.error);
+  }
+  postToSandbox(reply);
+}
+
 async function handleHttp(d) {
   const id = d.id;
   const reply = { kind: "rpc.result", id: id, ok: false, error: "" };
   try {
-    const res = await invokeFn("plugin_fetch", {
-      url: d.url,
-      headers: d.headers || null,
-    });
+    // 带会话的请求:宿主现取 window 里的 cookie,插件永远看不到它
+    const res = d.session
+      ? await invokeFn("session_fetch", {
+          id: d.session,
+          url: d.url,
+          headers: d.headers || null,
+        })
+      : await invokeFn("plugin_fetch", {
+          url: d.url,
+          headers: d.headers || null,
+        });
     reply.ok = true;
     reply.data = res;
   } catch (e) {

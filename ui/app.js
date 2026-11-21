@@ -3337,6 +3337,77 @@ function bindDebugToggle() {
   syncDebugButtons();
 }
 
+// 人工校验:调试页里手动开一个会话,过完 Cloudflare 用这套 cookie 取一次。
+// 产品里的用法是适配器 `await ctx.human.verify({url})`,这里只是同一套命令的手动入口。
+let verifySession = null;
+
+function bindVerifyPanel() {
+  const input = $("verifyUrl");
+  const out = $("verifyOut");
+  const btnOpen = $("btnVerifyOpen");
+  const btnFetch = $("btnVerifyFetch");
+  if (!input || !btnOpen || !btnFetch) return;
+
+  const say = (t) => {
+    if (out) out.textContent = t;
+  };
+  const target = () => input.value.trim();
+
+  btnOpen.onclick = async () => {
+    const url = target();
+    if (!/^https?:\/\//i.test(url)) {
+      say("地址要以 http(s):// 开头");
+      return;
+    }
+    btnOpen.disabled = true;
+    say("正在打开校验窗口…");
+    try {
+      const s = await invoke("session_open", { url: url, reason: "调试页手动校验" });
+      verifySession = s;
+      say(
+        "会话 " + s.id + " · " + s.host + NL +
+          "窗口已打开:过完校验后点窗口底部的「我已完成」"
+      );
+      invoke("session_wait", { id: s.id, timeoutSec: 300 })
+        .then((d) => {
+          verifySession = d;
+          say("会话 " + d.id + " · " + d.host + NL + "✅ 已通过,点「用会话取一次」试抓");
+        })
+        .catch((e) => say("会话 " + s.id + " · " + s.host + NL + "⌛ " + errText(e)));
+    } catch (e) {
+      say("打开失败:" + errText(e));
+    } finally {
+      btnOpen.disabled = false;
+    }
+  };
+
+  btnFetch.onclick = async () => {
+    if (!verifySession) {
+      say("先开一个会话");
+      return;
+    }
+    btnFetch.disabled = true;
+    try {
+      const res = await invoke("session_fetch", {
+        id: verifySession.id,
+        url: target(),
+        headers: null,
+      });
+      const body = String(res && res.body ? res.body : "");
+      const challenge = /just a moment|_cf_chl_opt|cf-challenge|challenge-platform/i.test(body);
+      say(
+        "会话 " + verifySession.id + " · HTTP " + res.status + " · " + body.length + " 字" + NL +
+          (challenge ? "⚠️ 还是挑战页" : "✅ 不是挑战页") + NL + NL +
+          body.slice(0, 160).replace(/\s+/g, " ")
+      );
+    } catch (e) {
+      say("取数据失败:" + errText(e));
+    } finally {
+      btnFetch.disabled = false;
+    }
+  };
+}
+
 function showDebugPanel(on) {
   if (!isDevBuild()) return; // 发布版不暴露实时日志(日志照旧写文件)
   const box = document.getElementById("dbg");
@@ -3768,6 +3839,9 @@ function bindSettings() {
       }
     };
   }
+
+  // 人工校验会话:开窗口 → 用户点「我已完成」→ 用会话取一次
+  bindVerifyPanel();
 
   // 外观改了(主题/种子色/风格)之后摘要要跟着变
   ["segMode", "segBlack", "segVariant", "swatches"].forEach((id) => {

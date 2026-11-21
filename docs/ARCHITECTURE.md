@@ -113,6 +113,23 @@ reelbox.adapter({
 要建源还得再给一份配置地址(`config`)。清单(`list_adapters`)和删除入口在
 **设置 → 源 → 适配器**,内置的四个写在 Rust 里,导入的是扫插件目录扫出来的。
 
+### 4.1 必须人工过的站点
+
+有的源站挂了 Cloudflare,API 和页面都要先过一次人机校验;网盘那类还要扫码登录。
+沙箱 iframe 的 origin 是 `null`,既没有 cookie 也过不了校验 —— 所以这件事只能由**内核**做:
+
+```js
+const s = await ctx.human.verify({ url, reason });   // 内核开真实窗口,用户点完才 resolve
+const html = await ctx.http.get(url, { session: s.id });
+```
+
+- 窗口是顶层 WebView2,和主窗口同一个数据目录、同一套浏览器参数(参数不同会建不出来)。
+- **cookie 不出内核**:适配器只拿会话 id;每次请求内核实取 cookie 罐里的值再发。
+- UA 也从窗口里取(`cf_clearance` 绑 UA),取不到才退回默认值。
+- 窗口关掉 = 会话失效。
+
+证据见 [ARCHITECTURE-EVIDENCE.md](ARCHITECTURE-EVIDENCE.md) 的「人工校验会话」一节。
+
 ## 4.5 实施状态(2026-11-21)
 
 | 阶段 | 状态 | 提交 | 证据 |

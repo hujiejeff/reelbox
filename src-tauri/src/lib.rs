@@ -5,6 +5,7 @@ mod commands;
 mod logging;
 mod paths;
 mod proxy;
+mod session;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -48,6 +49,13 @@ pub fn run() {
             commands::selftest_mode,
             commands::selftest_title,
             commands::selftest_report,
+            session::session_open,
+            session::session_wait,
+            session::session_list,
+            session::session_done,
+            session::session_show,
+            session::session_close,
+            session::session_fetch,
         ])
         .run(tauri::generate_context!())
         .expect("reelbox: 启动失败");
