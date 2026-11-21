@@ -126,7 +126,7 @@ const html = await ctx.http.get(url, { session: s.id });
 - 窗口是顶层 WebView2,和主窗口同一个数据目录、同一套浏览器参数(参数不同会建不出来)。
 - **cookie 不出内核**:适配器只拿会话 id;每次请求内核实取 cookie 罐里的值再发。
 - UA 也从窗口里取(`cf_clearance` 绑 UA),取不到才退回默认值。
-- 窗口关掉 = 会话失效。
+- 窗口关掉 = 会话失效;入口在 **设置 → 校验**(用户自己也能手动过一次)。
 
 证据见 [ARCHITECTURE-EVIDENCE.md](ARCHITECTURE-EVIDENCE.md) 的「人工校验会话」一节。
 

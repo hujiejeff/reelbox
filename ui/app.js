@@ -3353,6 +3353,61 @@ function bindVerifyPanel() {
   };
   const target = () => input.value.trim();
 
+  const refresh = async () => {
+    const box = $("verifySessions");
+    if (!box) return;
+    let rows = [];
+    try {
+      rows = await invoke("session_list", {});
+    } catch (e) {
+      box.textContent = "读取失败:" + errText(e);
+      return;
+    }
+    if (!rows || !rows.length) {
+      box.textContent = "还没有会话";
+      return;
+    }
+    box.textContent = "";
+    rows.forEach((s) => {
+      const line = document.createElement("div");
+      line.style.cssText = "display:flex;align-items:center;gap:10px;padding:5px 0;flex-wrap:wrap";
+      const label = document.createElement("span");
+      const when = new Date(s.opened_at * 1000).toLocaleTimeString();
+      label.textContent =
+        s.host + " · " + (s.done ? "已通过" : s.cancelled ? "已取消" : "进行中") + " · " + when;
+      label.style.flex = "1 1 auto";
+      const show = document.createElement("button");
+      show.type = "button";
+      show.className = "m3e-button m3e-button--text";
+      show.textContent = "显示窗口";
+      show.onclick = async () => {
+        try {
+          await invoke("session_show", { id: s.id });
+        } catch (e) {
+          say("窗口已经没了:" + errText(e));
+          refresh();
+        }
+      };
+      const kill = document.createElement("button");
+      kill.type = "button";
+      kill.className = "m3e-button m3e-button--text";
+      kill.textContent = "撤销";
+      kill.onclick = async () => {
+        try {
+          await invoke("session_close", { id: s.id });
+          if (verifySession && verifySession.id === s.id) verifySession = null;
+        } catch (e) {
+          say("撤销失败:" + errText(e));
+        }
+        refresh();
+      };
+      line.append(label, show, kill);
+      box.appendChild(line);
+    });
+  };
+
+  refresh();
+
   btnOpen.onclick = async () => {
     const url = target();
     if (!/^https?:\/\//i.test(url)) {
@@ -3368,10 +3423,12 @@ function bindVerifyPanel() {
         "会话 " + s.id + " · " + s.host + NL +
           "窗口已打开:过完校验后点窗口底部的「我已完成」"
       );
+      refresh();
       invoke("session_wait", { id: s.id, timeoutSec: 300 })
         .then((d) => {
           verifySession = d;
           say("会话 " + d.id + " · " + d.host + NL + "✅ 已通过,点「用会话取一次」试抓");
+          refresh();
         })
         .catch((e) => say("会话 " + s.id + " · " + s.host + NL + "⌛ " + errText(e)));
     } catch (e) {
@@ -3472,6 +3529,8 @@ const SET_PAGES = [
   { key: "play", icon: "play_circle", title: "播放", group: 0 },
   // 没有「网络」页:代理不开放给用户选,出口一律跟着系统走(见 docs/NETWORK.md)
   { key: "look", icon: "palette", title: "外观", group: 0 },
+  // 站点校验:Cloudflare / 登录这类必须人工过的站点,用户自己也能用(不是调试工具)
+  { key: "sites", icon: "verified_user", title: "校验", group: 0 },
   { key: "debug", icon: "terminal", title: "调试", group: 1 },
   { key: "about", icon: "info", title: "关于", group: 1 },
 ];

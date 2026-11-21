@@ -1485,17 +1485,39 @@
                     </div>
                   </div>
 
+                </div>
+              </div>
+            </section>
+
+            <!-- 站点校验:Cloudflare / 登录这类必须人工过的站点 -->
+            <section class="set-page" data-page="sites">
+              <header class="set-page__bar">
+                <button type="button" class="set-page__back" data-back aria-label="返回">
+                  <span class="m3e-icon" aria-hidden="true">arrow_back</span>
+                </button>
+                <h2 class="set-page__title">站点校验</h2>
+              </header>
+              <div class="set-page__scroll">
+                <div class="set-page__body">
+                  <p class="set-page__sub">有些站点要先过一次人机验证(Cloudflare)或登录。这里开一个真实的浏览器窗口过一遍,之后用这套 cookie 取页面 —— cookie 留在本机,不给插件。</p>
+
                   <div class="set-block">
-                    <div class="set-block__head"><span class="set-block__title">人工校验会话</span></div>
-                    <p class="set-page__sub">给 Cloudflare / 登录页这类必须人工过的站点用:开一个真实窗口,过完点「我已完成」。cookie 留在宿主,适配器只拿会话 id。</p>
+                    <div class="set-block__head"><span class="set-block__title">新建会话</span></div>
                     <input id="verifyUrl" spellcheck="false" autocomplete="off"
-                      value="https://nopecha.com/demo/cloudflare"
+                      placeholder="https://要校验的站点"
+                      value=""
                       style="width:100%;box-sizing:border-box;padding:11px 13px;border-radius:12px;border:1px solid var(--md-sys-color-outline-variant,#4a4a52);background:var(--md-sys-color-surface-container-high,#26262b);color:inherit;font:13px/1.4 var(--rb-font-mono,monospace)">
                     <div class="set-acts">
                       <button type="button" class="m3e-button" id="btnVerifyOpen">打开校验窗口</button>
                       <button type="button" class="m3e-button m3e-button--text" id="btnVerifyFetch">用会话取一次</button>
                     </div>
                     <p class="set-mono" id="verifyOut">还没开会话</p>
+                  </div>
+
+                  <div class="set-block">
+                    <div class="set-block__head"><span class="set-block__title">会话</span></div>
+                    <p class="set-page__sub">关掉窗口会话就失效;「撤销」会把窗口一起销毁。</p>
+                    <div class="set-mono" id="verifySessions">—</div>
                   </div>
                 </div>
               </div>
