@@ -119,7 +119,8 @@ reelbox.adapter({
 | P2 内置 iplayr + 导入即探测 | ✅ | `a8d8463` `fb8b43f` | 粘 dbk.json → 自动建源,列表 48 条,点播 `PROXY m3u8 status=200` |
 | P3 vod 迁 JS,保留 vod-rs | ✅ | `18ed741` `49cf054` | 3 个真实源逐字段一致;沙箱列表 20 张卡片 |
 | P4 webox 独立成适配器名 | ✅ | `adapter:分家` | `.webox.js` 现在标 `webox`、`.reelbox.js` 标 `reelbox`;运行时同一沙箱,但数据里能看出格式。早期误标成 reelbox 的行会自动纠正一次 |
-| P5 hghub / tvbox | ⏳ 未做 | — | 见第 7 节非目标与路线图 |
+| P5 tvbox 集合筛选 | ✅ | `adapter:批量导入` | 索引里 `type 0/1` 且有 http 地址的转成 vod 源;`type 3` 的 jar 爬虫跳过并说明原因(6 条 node 测试) |
+| P5 hghub | ⏳ 未做 | — | 契约差异大(能力命名空间 vs 钩子),要写映射层;见第 7 节 |
 
 ### 迁移后的源标注(本机实测)
 

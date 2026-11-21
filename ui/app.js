@@ -13,6 +13,7 @@ import {
 } from "./plugin-host.js";
 // 解析器链路是纯逻辑(不碰 DOM / tauri),抽出去才能 node --test
 import { runParserChain } from "./parser-chain.js";
+import { splitCollection } from "./import-shape.js";
 import { buildSrcPanel } from "./src-panel.js";
 import { openSheet } from "./sheet.js";
 import { closeMenu, menuOpen, openMenu } from "./menu.js";
@@ -3070,7 +3071,10 @@ async function applyImport(type, hit, ctx) {
 
   if (type === "collection") {
     const raw = hit.list || collectionOf(tryJson(ctx.text));
-    const items = (raw || []).map(normSource).filter(Boolean);
+    // TVBox 的索引里混着 jar 爬虫(type:3,`api` 是类名):那种跑不了,
+    // 在这里筛掉,别让它变成一条点开就报错的源。
+    const split = splitCollection(raw || []);
+    const items = split.sources.map(normSource).filter(Boolean);
     if (!items.length) {
       alertDialog("导入失败", "这份集合里没有认出可用的源(每条要有名字和地址)。");
       return;
@@ -3082,8 +3086,12 @@ async function applyImport(type, hit, ctx) {
     const added = Math.max(0, merged.length - before);
     const skipped = Math.max(0, items.length - added);
     log("sources imported", "new=" + added, "skip=" + skipped, "n=" + merged.length);
+    const unfit = split.skipped.length;
+    log("tvbox skipped", unfit, split.skipped.slice(0, 3).map((x) => x.name + ":" + x.reason).join(","));
     toast(
-      "新增 " + added + " 个,跳过 " + skipped + " 个,当前共 " + merged.length + " 个源"
+      "新增 " + added + " 个,跳过 " + skipped + " 个" +
+        (unfit ? "(其中 " + unfit + " 条不是接口)" : "") +
+        ",当前共 " + merged.length + " 个源"
     );
     return;
   }

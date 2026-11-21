@@ -7,7 +7,7 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "tauri": "tauri",
-    "test:ui": "node --test ui/parser-chain.test.mjs"
+    "test:ui": "node --test ui/parser-chain.test.mjs ui/import-shape.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0"
