@@ -48,10 +48,18 @@ reelbox.define({
 | --- | --- |
 | `ctx.http.get(url, {headers})` | 返回响应文本;真实请求在 Rust 里发 |
 | `ctx.html.load(url)` | 取页面并返回 `page.$(sel)`;`$` 支持 `tag`、`.cls`、`#id`、`tag.cls`、`a[href]`、后代组合 |
+| `ctx.html.load(html)` | 直接吃一段 HTML 文本(不再发请求),同样返回 `page` |
+| `page.xpath(expr)` | 用 XPath 取节点/属性:`//li` → 节点数组,`//a/@href` → 字符串数组;详见 [ENGINE-PLUGINS.md](ENGINE-PLUGINS.md) |
 | `ctx.fail(code, msg)` | 抛出分类错误,code ∈ `network` / `parse` / `auth` / `unsupported` |
 | `ctx.log(...)` | 写进调试日志 |
 
-选择器对象的方法:`length`、`each(i, el)`、`text()`、`attr(name)`、`html()`、`eq(i)`。
+选择器对象的方法:`length`、`each(i, el)`、`text()`、`attr(name)`、`html()`、`eq(i)`、
+`xpath(expr)`(相对**该批节点**求值,`p(node).xpath(".//a/@href")`)。
+
+## 引擎插件:一份代码 + 一份站点配置
+
+把「怎么爬」和「爬哪个站」拆开的插件写法(`kind: "engine"`,站点配置放源里的
+`options.config`),见 [ENGINE-PLUGINS.md](ENGINE-PLUGINS.md)。
 
 ## 兼容模式:`.webox.js`
 

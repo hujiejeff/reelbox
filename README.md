@@ -55,6 +55,7 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 | [docs/PLUGIN-QUICKSTART.md](docs/PLUGIN-QUICKSTART.md) | 三分钟写一个插件 |
 | [docs/PLUGIN-RUNTIME.md](docs/PLUGIN-RUNTIME.md) | 插件运行时与两套引擎 |
 | [docs/PARSERS.md](docs/PARSERS.md) | 解析器插件(从网页取播放地址) |
+| [docs/ENGINE-PLUGINS.md](docs/ENGINE-PLUGINS.md) | 引擎插件 + 站点配置(一个插件爬一类站) |
 | [docs/SOURCES.md](docs/SOURCES.md) | 源与插件的区别、存放位置、回落规则 |
 | [docs/PLAYBACK.md](docs/PLAYBACK.md) | 播放架构、反代设计、已知限制 |
 | [docs/NETWORK.md](docs/NETWORK.md) | 网络出口:系统代理、FakeIP、超时与重试 |
