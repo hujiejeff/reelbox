@@ -2,7 +2,7 @@
 
 Reelbox 自己的插件格式。与 `.webox.js` 不冲突:那种文件走兼容模式,见文末。
 
-> 若你的目标是「把网页地址变成播放地址」(分享页 / 需要从 HTML 里捞流),那是另一类插件:见 [PARSERS.md](PARSERS.md)。
+> 若你的目标是「吃某种现成配置格式」(iplayr 那类 XPath 规则),看 [ENGINE-PLUGINS.md](ENGINE-PLUGINS.md)。
 
 ## 一个插件长什么样
 

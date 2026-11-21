@@ -42,7 +42,7 @@ pub fn load_sources() -> Vec<Source> {
 /// 补到了才写回文件。
 ///
 /// 幂等:第二次读到已经填好的就一条也不补,文件不动。`type` 一个字都不动 ——
-/// 界面还在用它(徽标、解析器分块);运行时只看 `adapter`。写回失败不影响这次加载:
+/// 界面还在用它(徽标、源页分段);运行时只看 `adapter`。写回失败不影响这次加载:
 /// 内存里已经补好了,下次启动再补。
 fn migrate_adapters(path: &std::path::Path, mut list: Vec<Source>) -> Vec<Source> {
     if fill_adapters(&mut list) == 0 {
@@ -92,8 +92,6 @@ fn route(src: &Source) -> Result<Route, String> {
         // 回滚开关:把源的 adapter 改成 `vod-rs` 就回到原来那套 Rust 实现,
         // 代码先留着(迁移期两边都跑得动,见 P3 的验收)。
         "vod-rs" => Ok(Route::Cms),
-        // 解析器不是源:它只把一张网页变成播放地址,没有列表 / 详情
-        "parser" => Err(PARSER_IS_NOT_SOURCE.into()),
         // vod / iplayr / reelbox / webox 都是 js 适配器,交给沙箱;认不出的适配器也按插件试。
         // 它们的区别只在「插件文件从哪儿来」,见 plugin_path / plugin_options_json。
         _ => Ok(Route::Plugin),
@@ -136,9 +134,6 @@ fn plugin_options_json(src: &Source) -> String {
         }
     }
 }
-
-const PARSER_IS_NOT_SOURCE: &str =
-    "解析器不是源:它只把网页变成播放地址,不能取列表 / 详情 / 播放。请换一个源,或在「设置 → 源」里用它的站点";
 
 /* ---------- 插件运行时:两套引擎 ---------- */
 
@@ -879,10 +874,11 @@ pub fn selftest_report(json: String) -> Result<String, String> {
 
 /// 保存一个导入的插件文件,返回 (路径, 名称, id, 类型)
 ///
-/// `kind` 是 `vod`(源插件)、`parser`(解析器)或 `adapter`(适配器):前端按它决定
-/// 是进源下拉、「设置 → 源」的解析器块,还是只装文件不建源(适配器)。判据见
-/// `plugin::parse_meta_hinted` —— 用户选文件时的文件名后缀(`.adapter.js` /
-/// `.parser.js`)也参与判断,所以这里把 `file_name` 当提示传进去。
+/// `kind` 是 `vod`(源插件)或 `adapter`(适配器):前端按它决定是进源下拉,
+/// 还是只装文件不建源(适配器)。判据见 `plugin::parse_meta_hinted` ——
+/// 用户选文件时的文件名后缀(`.adapter.js`)也参与判断,所以这里把 `file_name`
+/// 当提示传进去。以前那种解析器文件在这里会被拒掉(入口已经移除),
+/// 报错话术见 `plugin::PARSER_REMOVED`。
 #[tauri::command]
 pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value, String> {
     let meta = plugin::parse_meta_hinted(&text, Some(&file_name))?;
@@ -896,10 +892,9 @@ pub fn save_plugin(file_name: String, text: String) -> Result<serde_json::Value,
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
         .collect();
     // 新导入的插件写原生后缀;老的 `.webox.js` 文件照样认(plugin_read / `derive_adapter`)。
-    // 解析器和适配器各自一个后缀,重新导入时不用再读源码也能认出来 ——
+    // 适配器单独一个后缀,重新导入时不用再读源码也能认出来 ——
     // 适配器落在 `plugins/*.adapter.js`,和内置的 `plugins/builtin/*.adapter.js` 同一套命名。
     let suffix = match meta.kind.as_str() {
-        plugin::KIND_PARSER => ".reelbox.parser.js",
         plugin::KIND_ADAPTER => ".adapter.js",
         _ => ".reelbox.js",
     };

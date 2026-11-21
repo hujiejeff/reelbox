@@ -151,12 +151,15 @@ XPath 1.0 里 `//x` 是「从**文档根**开始找」,给它一个上下文节�
 
 ## 和别的东西的关系
 
-| | 源插件 | 引擎插件 | 解析器插件 |
+| | 源插件 | 引擎插件 | 适配器 `reelbox.adapter` |
 | --- | --- | --- | --- |
-| 入口 | `reelbox.define` | `reelbox.define` + `kind: "engine"` | `reelbox.parser` |
-| 身份 | 一个源 | 一个源(站点由 `options.config` 决定) | 一个工具,不是源 |
-| 导入时 | 直接建源 | 还要填配置地址,填了才建源 | 单独登记 |
-| 钩子 | 全部 | 全部 | `match` / `parse` |
+| 入口 | `reelbox.define` | `reelbox.define` + `kind: "engine"` | `reelbox.adapter` |
+| 身份 | 一个源 | 一个源(站点由 `options.config` 决定) | 一种格式的翻译器,不是源 |
+| 导入时 | 直接建源 | 还要填配置地址,填了才建源 | 只装文件,不建源 |
+| 钩子 | 全部 | 全部 | `accepts` / `list` / `detail` / `play` |
+
+> 早先还有一个 `reelbox.parser`(用"解析器"单独做取流),这个概念已经移除:
+> 取流逻辑归到源自己的适配器里。见到旧文件会明确提示「解析器已移除」。
 
 引擎插件同样是不可信代码:跑在 `sandbox="allow-scripts"` 的 iframe 里,
 只能通过 `plugin_fetch` 发请求(挡内网),读不到 localStorage / Cookie,

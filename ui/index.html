@@ -495,7 +495,7 @@
   }
   .set-block { display: flex; flex-direction: column; }
   .set-block__head { display: flex; align-items: center; min-height: 24px; }
-  /* 块头右侧带一个动作(源页的「导入解析器」):标题左、按钮右,间距 12 */
+  /* 块头右侧带一个动作(源页的「导入适配器」):标题左、按钮右,间距 12 */
   .set-block__head--acts { justify-content: space-between; gap: 12px; }
   .set-block__head--acts .m3e-button { height: 36px; padding-inline: 14px; gap: 6px; }
   .set-block__title {
@@ -1056,11 +1056,6 @@
     background: var(--m3e-sys-color-error-container);
     color: var(--m3e-sys-color-on-error-container);
   }
-  /* 解析器不是源:用 primary-container 区别于三类源,一眼看出"它是工具" */
-  .srcmgr .m3e-list-item[data-type="parser"] .m3e-list-item__leading {
-    background: var(--m3e-sys-color-primary-container);
-    color: var(--m3e-sys-color-on-primary-container);
-  }
   /* 当前源:容器换成 primary + 名称 600,行底不铺色(§2.4) */
   .srcmgr .m3e-list-item[aria-current="true"] .m3e-list-item__leading {
     background: var(--m3e-sys-color-primary);
@@ -1322,31 +1317,6 @@
                   <div class="seg--count" id="srcSeg" role="tablist" aria-label="按类型筛选源"></div>
                   <div class="srcmgr" id="srcmgr"></div>
 
-                  <!-- 解析器:不是源,只把"分享页 HTML"解成可播地址(契约见 docs/PARSERS.md)。
-                       数量为 0 时这块也照常显示 —— 否则用户永远不知道有这功能。 -->
-                  <div class="set-block" id="parserBlock">
-                    <div class="set-block__head set-block__head--acts">
-                      <span class="set-block__title">解析器</span>
-                      <button type="button" class="m3e-button m3e-button--outlined" id="parserImport">
-                        <span class="m3e-icon" aria-hidden="true">troubleshoot</span>导入解析器
-                      </button>
-                    </div>
-                    <p class="set-note" id="parserHint"></p>
-                    <div class="srcmgr" id="parsermgr"></div>
-                  </div>
-
-                  <!-- 适配器:把「某种源格式」翻译成 列表 / 详情 / 播放 的那部分 js
-                       (内置 vod / iplayr / webox / reelbox,也可以自己写一个导入进来)。
-                       适配器不是源:装好之后还得有一条配置地址(契约见 docs/ARCHITECTURE.md 第 4 节)。 -->
-                  <div class="set-block" id="adapterBlock">
-                    <div class="set-block__head set-block__head--acts">
-                      <span class="set-block__title">适配器</span>
-                      <button type="button" class="m3e-button m3e-button--outlined" id="adapterImport">
-                        <span class="m3e-icon" aria-hidden="true">extension</span>导入适配器
-                      </button>
-                    </div>
-                    <div class="srcmgr" id="adaptermgr"></div>
-                  </div>
                 </div>
               </div>
               <!-- 底栏两个键,共用一套表单(地址框 / 名称框 / 选择文件),判型用同一套函数:
@@ -1364,6 +1334,28 @@
                 <input type="file" id="importFile"
                   accept=".json,.xml,.js,application/json,application/xml,text/xml,text/javascript" hidden>
               </footer>
+            </section>
+
+            <!-- 1.5 适配器:把某种源格式翻译成 列表/详情/播放 的那部分 js -->
+
+            <section class="set-page" data-page="adapters">
+              <header class="set-page__bar">
+                <button type="button" class="set-page__back" data-back aria-label="返回">
+                  <span class="m3e-icon" aria-hidden="true">arrow_back</span>
+                </button>
+                <h2 class="set-page__title">适配器</h2>
+                <div class="set-page__acts">
+                  <button type="button" class="m3e-button m3e-button--outlined" id="adapterImport">
+                    <span class="m3e-icon" aria-hidden="true">extension</span>导入
+                  </button>
+                </div>
+              </header>
+              <div class="set-page__scroll">
+                <div class="set-page__body">
+                  <p class="set-page__sub">适配器把某种源格式翻译成应用的接口。内置的直接可用,也可以导入自己的;原生插件本身就是接口,不需要适配。</p>
+                  <div class="srcmgr" id="adaptermgr"></div>
+                </div>
+              </div>
             </section>
 
             <!-- 2. 播放 -->
@@ -1665,8 +1657,6 @@
       <div class="p-fail__acts">
         <button class="m3e-button m3e-button--text" id="pRetry" type="button">重试</button>
         <button class="m3e-button m3e-button--text" id="pSwitch" type="button">换线路</button>
-        <!-- 只有"这个源只给了解析页"时才出现:去「设置 → 源」装解析器 -->
-        <button class="m3e-button m3e-button--text" id="pSettings" type="button" hidden>去设置</button>
       </div>
       <details class="p-fail__raw">
         <summary>原始错误</summary>

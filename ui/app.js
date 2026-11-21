@@ -4,17 +4,15 @@ import {
   callPlugin,
   isPluginSource,
   isPluginKind,
-  isParserSource,
   looksLikePluginSource,
-  looksLikeParserSource,
   looksLikeAdapterSource,
+  looksLikeRemovedParser,
+  isRemovedParserPath,
+  PARSER_REMOVED_HINT,
   ADAPTER_KIND,
   ENGINE_KIND,
-  PARSER_KIND,
   PLUGIN_KIND,
 } from "./plugin-host.js";
-// 解析器链路是纯逻辑(不碰 DOM / tauri),抽出去才能 node --test
-import { runParserChain } from "./parser-chain.js";
 import { splitCollection } from "./import-shape.js";
 import { buildSrcPanel } from "./src-panel.js";
 import { openSheet } from "./sheet.js";
@@ -168,7 +166,6 @@ async function init() {
   // 先修 id 再往下走,收藏与进度里「源id|片名」的键会同步搬过去。
   if (migrateSourceIds()) renderFavs();
   // 默认没有源(见 src-tauri 的 load_sources):先给首页空态,不自动切任何源。
-  // 只有解析器也算"没有源" —— 解析器播不了任何东西,首页该是空态。
   if (!listableSources().length) {
     bindNav();
     bindSourceMenu();
@@ -495,8 +492,7 @@ const LS = {
 /** 启动时用哪个源:上次用的那个,找不到就第一个 */
 function startSource(list) {
   const want = prefGet(LS.currentSource, "");
-  // 解析器不是源:不能落在"当前源"上(只有解析器时返回 undefined,首页走空态)
-  const pool = (list || []).filter((s) => sourceType(s) !== "parser");
+  const pool = list || [];
   return (want && pool.find((s) => s.id === want)) || pool[0];
 }
 
@@ -594,13 +590,11 @@ const BUILTIN_ADAPTERS = ["iplayr", "vod"];
 function sourceAdapter(src) {
   const a = String((src && src.adapter) || "").trim().toLowerCase();
   if (a) return a;
-  const t = sourceType(src);
-  if (t === "parser") return PARSER_KIND;
-  if (t === "plugin") return "reelbox";
+  if (sourceType(src) === "plugin") return "reelbox";
   return "vod";
 }
 
-/** 钩子跑在沙箱 iframe 里吗(`vod` 是,`vod-rs` 不是;解析器不是源) */
+/** 钩子跑在沙箱 iframe 里吗(`vod` 是,`vod-rs` 不是) */
 function pluginMode(src) {
   return SANDBOX_ADAPTERS.indexOf(sourceAdapter(src || S.source)) >= 0;
 }
@@ -1025,7 +1019,6 @@ function shortNote(text) {
 
 function srcTypeIcon(s) {
   const t = sourceType(s);
-  if (t === "parser") return "troubleshoot";
   if (t === "plugin") return "extension";
   if (t === "live") return "live_tv";
   return "ondemand_video";
@@ -1663,7 +1656,6 @@ function kindTitle(kind) {
 /**
  * 地址 → 类型。认不出来的返回 ""(只有这时才让用户手选)。
  *   .m3u8 / .m3u                            → live
- *   .parser.js(解析器插件)                → 解析器(后缀要在 .js 之前认)
  *   .js(插件就是 js 文件)                → 插件
  *   provide/vod、api.php、ac=list/detail   → vod
  *   /at/xml、ac=xml、.xml                  → xml
@@ -1673,7 +1665,6 @@ function guessSourceKind(url) {
   if (!raw) return "";
   const path = raw.split(/[?#]/)[0];
   if (/\.m3u8?$/.test(path)) return "live";
-  if (/\.parser\.js$/.test(path)) return PARSER_KIND;
   if (path.endsWith(".js")) return PLUGIN_KIND;
   if (/\/at\/xml$/.test(path) || /[?&]ac=xml\b/.test(raw) || path.endsWith(".xml")) return "xml";
   if (/provide\/vod/.test(path) || /\/api\.php/.test(path) || /[?&]ac=(list|detail)\b/.test(raw)) {
@@ -1682,14 +1673,12 @@ function guessSourceKind(url) {
   return "";
 }
 
-/** 把各种历史写法归一到 vod / xml / live / 插件 / 解析器 */
+/** 把各种历史写法归一到 vod / xml / live / 插件 */
 function normKind(kindRaw, url) {
   const k = String(kindRaw == null ? "" : kindRaw).toLowerCase();
   if (k === "1" || k === "xml") return "xml";
   if (k === "json" || k === "vod") return "vod";
   if (k === "live" || k === "m3u" || k === "m3u8") return "live";
-  // 解析器要在插件之前认:解析器文件同样是 .js,被判成插件就跑到源列表里去了
-  if (k === PARSER_KIND) return PARSER_KIND;
   if (isPluginKind(k)) return PLUGIN_KIND;
   return guessSourceKind(url) || "vod";
 }
@@ -1720,7 +1709,7 @@ function normSource(raw) {
     if (probe.error) one.error = String(probe.error);
     src.probe = one;
   }
-  // 版本只有解析器用(源页那块要显示「v1」);空的时候不占字段
+  // 版本:插件自己声明的版本号;空的时候不占字段
   const version = String(raw.version == null ? "" : raw.version).trim();
   if (version) src.version = version;
   // 引擎插件的站点配置(见 docs/ENGINE-PLUGINS.md):原样搬过来,
@@ -1919,28 +1908,19 @@ function srcKind(s) {
   return String((s && (s.type || s.kind)) || "").toLowerCase();
 }
 
-/**
- * 源的类别:vod / plugin / live,以及不在源列表里的 parser。
- * 解析器不是源(它只把分享页解成可播地址),所以排在最前面单独认。
- */
+/** 源的类别:vod / plugin / live */
 function sourceType(s) {
   if (!s) return "vod";
   const kind = srcKind(s);
   const url = String(s.url || "");
-  if (isParserSource(s)) return "parser";
   if (isPluginSource(s)) return "plugin";
   if (kind === "live" || /\.m3u8?$/i.test(url.split(/[?#]/)[0])) return "live";
   return "vod";
 }
 
-/** 只列"能当源用"的(解析器另开一块) */
+/** 源列表用的那份清单(切源面板、源页、测速都按它算) */
 function listableSources() {
-  return (S.sources || []).filter((s) => sourceType(s) !== "parser");
-}
-
-/** 解析器插件:`type="parser"` 的那些 */
-function parserSources() {
-  return (S.sources || []).filter((s) => sourceType(s) === "parser");
+  return S.sources || [];
 }
 
 /** 徽标文案只说"这源怎么播":点播 / 插件 / 直播 */
@@ -2012,89 +1992,6 @@ function showSrcEmpty(box) {
   if (bt) bt.onclick = () => runBatchImport();
 }
 
-/* ---------- 设置 → 源 → 解析器块 ---------- */
-// 解析器不是源:它把"分享页 HTML"解成可播地址,由播放链路按需调用
-// (契约见 docs/PARSERS.md)。所以它不进源列表、不进切源面板、不设为当前源,
-// 只在源页下面这块里登记 —— 数量为 0 时这块也照常显示,否则用户永远不知道有这功能。
-
-/** 块尾那句说明:有解析器时说清楚有几个,没有时解释解析器是干嘛的 */
-const PARSER_EMPTY =
-  "有些源只给网页地址,需要解析器从中取出播放地址。导入后点播时会自动用它。";
-
-function renderParserManager() {
-  const box = $("parsermgr");
-  if (!box) return;
-  const list = parserSources();
-  const hint = $("parserHint");
-  if (hint) {
-    hint.textContent = list.length
-      ? "共 " + list.length + " 个。点播时按顺序试,第一个认出页面的就用它。"
-      : PARSER_EMPTY;
-  }
-  if (!list.length) {
-    box.innerHTML = "";
-    return;
-  }
-  const all = S.sources || [];
-  box.innerHTML = list
-    .map((s, i) => {
-      const idx = all.indexOf(s);
-      const ver = String(s.version || "").trim();
-      return (
-        '<div class="m3e-list-item" data-idx="' + idx + '" data-type="parser" data-parser="' + i + '">' +
-          '<span class="m3e-list-item__leading">' +
-            '<span class="m3e-icon" aria-hidden="true">troubleshoot</span></span>' +
-          '<span class="m3e-list-item__content">' +
-            '<span class="m3e-list-item__headline">' +
-              '<span class="src-row__name">' + esc(s.name) + "</span>" +
-            "</span>" +
-            '<span class="m3e-list-item__supporting">' +
-              esc("v" + (ver || "1") + " · 解析器") + "</span>" +
-          "</span>" +
-          '<span class="m3e-list-item__trailing">' +
-            '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="parser-del" data-idx="' +
-              idx + '" aria-label="删除解析器 · ' + esc(s.name) + '">' +
-              '<span class="m3e-icon" aria-hidden="true">delete</span></button>' +
-          "</span>" +
-        "</div>"
-      );
-    })
-    .join("");
-}
-
-async function removeParser(src) {
-  if (!src) return;
-  const ok = await confirmDialog(
-    "删除解析器「" + src.name + "」?",
-    "删掉之后,需要它的源会退回「只给了解析页」的提示。可以再导入一次。",
-    "删除",
-    true
-  );
-  if (!ok) return;
-  await applySources((S.sources || []).filter((x) => x !== src));
-  log("parser removed", String(src.id));
-  toast("已删除解析器「" + src.name + "」");
-}
-
-/** 解析器块的交互:只删不改(它就是一个 js 文件,改不如重新导入) */
-function bindParserManager() {
-  const box = $("parsermgr");
-  if (box && !box.dataset.bound) {
-    box.dataset.bound = "1";
-    box.onclick = (e) => {
-      const b = e.target.closest("button[data-act]");
-      if (!b || b.getAttribute("data-act") !== "parser-del") return;
-      const src = (S.sources || [])[Number(b.getAttribute("data-idx"))];
-      removeParser(src);
-    };
-  }
-  const imp = $("parserImport");
-  if (imp && !imp.dataset.bound) {
-    imp.dataset.bound = "1";
-    imp.onclick = () => runSingleImport(undefined, { parser: true });
-  }
-}
-
 /* ---------- 设置 → 源 → 适配器块 ---------- */
 // 适配器 = 「某种源格式怎么翻译成 list/detail/play」的那部分 js
 // (契约见 docs/ARCHITECTURE.md 第 4 节)。内置四个随包安装,用户也能自己写一个导入
@@ -2124,7 +2021,9 @@ async function loadAdapters() {
 function renderAdapterManager() {
   const box = $("adaptermgr");
   if (!box) return;
+  // 原生插件直接实现接口,没有翻译层 —— 列在这里只会让人以为"插件也是一种适配器"
   box.innerHTML = (adapterList || [])
+    .filter((a) => String(a.id) !== "reelbox")
     .map((a) => {
       const builtin = !!a.builtin;
       const path = String(a.path || "");
@@ -2207,11 +2106,9 @@ function renderSourceManager() {
   const box = $("srcmgr");
   // 分段计数与列表永远同源同刷:导入/新增/删除之后不会再出现 11 vs 12(I7)
   renderSrcSeg();
-  renderParserManager();
   // 适配器块用自己那份清单(list_adapters):源列表怎么变都不影响它,重画一次只为跟上
   renderAdapterManager();
   if (!box) return;
-  // 解析器不是源:它们不进这一列(下面单开一块),但 data-idx 仍按 S.sources 算
   const all = S.sources || [];
   const sources = listableSources();
   const list = S.srcFilter === "all" ? sources : sources.filter((s) => sourceType(s) === S.srcFilter);
@@ -2447,12 +2344,12 @@ async function testAllSources() {
     toast("还没有源可测");
     return;
   }
-  // 直播源没有列表接口(要等直播播放做出来)、解析器也不是源(它没有列表),
-  // 都不谎报"连接失败",跳过并在汇总里说清楚
-  const targets = all.filter((s) => sourceType(s) !== "live" && sourceType(s) !== "parser");
+  // 直播源没有列表接口(要等直播播放做出来),不谎报"连接失败",
+  // 跳过并在汇总里说清楚
+  const targets = all.filter((s) => sourceType(s) !== "live");
   const skipped = all.length - targets.length;
   if (!targets.length) {
-    toast("没有可测的源(直播源没列表接口,解析器不是源)");
+    toast("没有可测的源(直播源没列表接口)");
     return;
   }
 
@@ -2479,7 +2376,7 @@ async function testAllSources() {
   renderSources();
   const msg =
     "测速完成:" + okCount + "/" + targets.length + " 可用" +
-    (skipped ? "(未测 " + skipped + " 个:直播源 / 解析器)" : "");
+    (skipped ? "(未测 " + skipped + " 个直播源)" : "");
   log("test all", "ok=" + okCount, "n=" + targets.length, "skip_live=" + skipped);
   toast(msg);
 }
@@ -2511,6 +2408,27 @@ function wireKindGuess(d) {
  * 编辑已有源:一个 m3e 对话框,三个字段。
  * 新增不走这里 —— 新增就是「导入源」:地址或文件进去,由内容判型(见 runSingleImport)。
  */
+/** 编辑源时的「适配器」下拉:自动 + 当前可用适配器(内置清单没加载时给一份兜底) */
+const ADAPTER_FALLBACK = [
+  { value: "", label: "自动(按地址判断)" },
+  { value: "vod", label: "苹果 CMS" },
+  { value: "iplayr", label: "iplayr 配置" },
+  { value: "webox", label: "WeBox 插件" },
+  { value: "reelbox", label: "原生插件(无需适配)" },
+];
+
+function adapterChoices() {
+  const opts = [{ value: "", label: "自动(按地址判断)" }];
+  const seen = { "": 1 };
+  for (const a of adapterList || []) {
+    const id = String(a.id || "");
+    if (!id || seen[id]) continue;
+    seen[id] = 1;
+    opts.push({ value: id, label: id === "reelbox" ? "原生插件(无需适配)" : String(a.name || id) });
+  }
+  return opts.length > 1 ? opts : ADAPTER_FALLBACK;
+}
+
 async function editSource(src) {
   if (!src) return;
   const res = await formDialog({
@@ -2533,6 +2451,14 @@ async function editSource(src) {
         hint: "地址能看出类型时会自动选好。",
         options: KIND_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
       },
+      {
+        id: "adapter",
+        label: "适配器",
+        type: "select",
+        value: String(src.adapter || ""),
+        hint: "自动 = 按地址判断;只有想强制指定时才改。",
+        options: adapterChoices(),
+      },
     ],
     note: "地址能看出类型就自动选好;认不出来时才需要手动选。",
     onOpen: (d) => wireKindGuess(d),
@@ -2545,7 +2471,7 @@ async function editSource(src) {
     url: res.url,
     kind: res.kind,
     options: src.options,
-    adapter: src.adapter,
+    adapter: res.adapter, // 表单里选的;「自动」是空串,运行时再按地址推断
     probe: src.probe,
   });
   if (!src2) return;
@@ -2749,8 +2675,6 @@ function probeCandidates(target, text) {
   const add = (a) => {
     if (out.indexOf(a) < 0) out.push(a);
   };
-  // 解析器不是源(它只把一张网页变成播放地址):走各自的流程,不进探测
-  if (/reelbox\s*\.\s*parser\s*\(/.test(body)) return { parser: true, list: [] };
   if (/reelbox\s*\.\s*define\s*\(/.test(body)) add("reelbox");
   if (/WeBox\s*\.\s*define\s*\(/.test(body)) add("webox");
   // iplayr 的站点配置是一份 JSON:同时有 category 与 vod_node 就是它
@@ -2761,7 +2685,7 @@ function probeCandidates(target, text) {
   // 苹果 CMS:接口关键字 / XML 变体
   if (/api\.php|ac=list|ac=detail/i.test(addr)) add("vod");
   if (bare.endsWith(".xml") || /ac=xml/i.test(addr)) add("vod");
-  return { parser: false, list: out.length ? out : PROBE_FALLBACK.slice() };
+  return out.length ? out : PROBE_FALLBACK.slice();
 }
 
 /** 配置自称的名字(iplayr 的配置有 title):比"从域名猜"准得多 */
@@ -2861,7 +2785,6 @@ async function probeRunList(adapter, target, name) {
  *        = "network"  网络没通 / 超时 → **判不了**,调用方仍然建源
  *        = "format"   试过的都答"不是这种格式" → 不建源
  *        = "unknown"  一个候选都没有(理论上到不了)
- *        = "parser"   这是解析器,不是源(调用方该走解析器流程)
  * onProgress(第几个, 共几个, 适配器) 给界面报进度。
  */
 async function probeSource(input, onProgress) {
@@ -2871,14 +2794,7 @@ async function probeSource(input, onProgress) {
   const at = nowIso();
   const name = probeNameOf(text) || nameFromTarget(target);
   const head = probeHeadOf(text);
-  const cand = probeCandidates(target, text);
-  if (cand.parser) {
-    return {
-      adapter: "", ok: false, items: 0, sample: "", name: name, head: head, tried: [],
-      error: "parse: 这是解析器(reelbox.parser),不是源", kind: "parser", at: at,
-    };
-  }
-  const tried = cand.list || [];
+  const tried = probeCandidates(target, text);
   if (!tried.length) {
     return {
       adapter: "", ok: false, items: 0, sample: "", name: name, head: head, tried: [],
@@ -3024,46 +2940,44 @@ async function pickImportTarget(cfg) {
  *
  * 三条路:
  *   插件(js)      → 存进插件目录就是一条源,不发网络:规则文件不用试跑
- *   解析器(js)    → 走解析器那一块(不是源,不进源列表)
- *   适配器(js)    → 只装文件(也不是源:加源还得用它的配置地址)
+ *   适配器(js)    → 只装文件(不是源:加源还得用它的配置地址)
  *   其余(地址 / 配置) → **先探测**(probeSource),判出适配器再建源 —— P2 的主路径
  *
- * opts.parser = true 是「导入解析器」,opts.adapter = true 是「导入适配器」:
- * 同一套表单与判型,只是文案和"只收哪种插件"不同;三者都只装文件,不设当前源。
+ * opts.adapter = true 是「导入适配器」:同一套表单与判型,只是文案和
+ * "只收哪种插件"不同;它只装文件,不设当前源。
  */
 async function runSingleImport(preset, opts) {
-  const asParser = !!(opts && opts.parser);
   const asAdapter = !!(opts && opts.adapter);
   const ctx = await pickImportTarget({
     preset: preset,
-    headline: asAdapter ? "导入适配器" : asParser ? "导入解析器" : "导入源",
+    headline: asAdapter ? "导入适配器" : "导入源",
     okText: "导入",
-    icon: asAdapter ? "extension" : asParser ? "troubleshoot" : "file_upload",
+    icon: asAdapter ? "extension" : "file_upload",
     placeholder: asAdapter
       ? "D:\\…\\my.adapter.js"
-      : asParser
-      ? "D:\\…\\share.reelbox.parser.js"
       : "https://…/api.php/provide/vod 或 D:\\…\\source.json",
     note: asAdapter
       ? "适配器是一个 js 文件,入口是 reelbox.adapter({...})。装好之后,用它的配置地址「导入源」才会建出源。"
-      : asParser
-      ? "解析器是一个 js 文件,写 reelbox.parser({...}):有些源只给网页地址,靠它把播放地址取出来。选本地文件或填路径都行。"
       : "一个源:接口地址、站点配置或插件文件;链接和本地文件都行。加进去之前会先试一下能不能取到片单,能用才建源。",
   });
   if (!ctx) return;
+  // 解析器这个概念已经移除:老文件(入口 `.parser.js`)不再当源收,
+  // 给它一句明确的话,指到现在的两条路上去
+  if (looksLikeRemovedParser(ctx.text) || isRemovedParserPath(ctx.fileName || ctx.target)) {
+    log("import:解析器已移除");
+    alertDialog(
+      "解析器已移除",
+      PARSER_REMOVED_HINT +
+        ":从网页里取流的逻辑现在写在源自己的适配器(list / detail / play)里," +
+        "直接实现接口的写成插件(reelbox.define)。"
+    );
+    return;
+  }
   // 集合源里有几条说不清,不该悄悄只加第一条 —— 指到「批量导入」去
   if (ctx.hit.type === "collection") {
     alertDialog(
       "这是集合源",
       "这份内容里有 " + ctx.hit.list.length + " 条源,用「批量导入」一次加进去。"
-    );
-    return;
-  }
-  // 「导入解析器」只吃解析器:普通插件/源从这里进来会被当成源,和用户点的按钮不符
-  if (asParser && !looksLikeParserSource(ctx.text)) {
-    alertDialog(
-      "这不是解析器",
-      "解析器文件的入口是 reelbox.parser({...})。源插件(reelbox.define)和 json/xml 源请用「导入源」。"
     );
     return;
   }
@@ -3076,16 +2990,12 @@ async function runSingleImport(preset, opts) {
     );
     return;
   }
-  if (!asParser && looksLikeParserSource(ctx.text)) {
-    // 从「导入源」里进来的是解析器:照解析器的规则落地(不进源列表,也不探测)
-    log("import:识别为解析器");
-  }
   if (!asAdapter && looksLikeAdapterSource(ctx.text)) {
     // 从「导入源」里进来了一个适配器:一样只装文件,提示它"这不是源"
     log("import:识别为适配器");
   }
-  // 插件 / 解析器 / 适配器都是 js 文件:文件本身就是规则,存下来即可,不需要发网络试跑
-  if (asParser || asAdapter || looksLikePluginSource(ctx.text) || ctx.hit.type === "plugin") {
+  // 插件 / 适配器都是 js 文件:文件本身就是规则,存下来即可,不需要发网络试跑
+  if (asAdapter || looksLikePluginSource(ctx.text) || ctx.hit.type === "plugin") {
     await applyImport("plugin", ctx.hit, Object.assign({}, ctx, { viaAdapter: asAdapter }));
     importPicked = null;
     return;
@@ -3141,7 +3051,7 @@ async function runBatchImport(preset) {
 }
 
 /**
- * 按判型结果落地:插件 / 解析器 / 适配器存进插件目录,集合源逐个加入,
+ * 按判型结果落地:插件 / 适配器存进插件目录,集合源逐个加入,
  * 单源(探测过)加进列表并设为当前。
  * ctx = { target, text, fileName, name, probe, probeTarget, viaAdapter }
  * —— `viaAdapter` 只影响适配器那句提示:从「导入适配器」进来和从「导入源」进来的说法不一样。
@@ -3153,10 +3063,9 @@ async function applyImport(type, hit, ctx) {
     try {
       const res = await invoke("save_plugin", { fileName: ctx.fileName || "plugin.js", text: ctx.text });
       const path = String((res && res.path) || "");
-      // 后端按源码/suffix 判出来的类型:parser / adapter 的插件都不是源,
+      // 后端按源码/suffix 判出来的类型:adapter 的插件不是源,
       // engine 还差一份站点配置
       const pluginKind = String((res && res.kind) || "");
-      const isParser = pluginKind === PARSER_KIND;
       const isEngine = pluginKind === ENGINE_KIND;
       const isAdapter = pluginKind === ADAPTER_KIND;
       const name = given || String((res && res.name) || "");
@@ -3166,24 +3075,12 @@ async function applyImport(type, hit, ctx) {
       // 要加源还得有它的配置地址,那一步走「导入源」的探测(见 docs/ARCHITECTURE.md 第 4 节)。
       if (isAdapter) {
         log("adapter imported", String(res && res.id), path);
-        await loadAdapters(); // 「设置 → 源 → 适配器」那块立刻多一条
+        await loadAdapters(); // 适配器清单立刻多一条
         toast(
           ctx.viaAdapter
             ? "已导入适配器:" + name
             : "这是适配器,已安装;要加源请用它的配置地址"
         );
-        return;
-      }
-
-      // 解析器不是源:不设为当前源,也不进源下拉;提示送到它自己那一块
-      if (isParser) {
-        if (!known) {
-          const row = { id: res.id, name: name, type: PARSER_KIND, url: path };
-          if (res.version) row.version = String(res.version);
-          await applySources(S.sources.concat([row]));
-        }
-        log("parser imported", String(res && res.id));
-        toast("已导入解析器:" + name);
         return;
       }
 
@@ -3499,6 +3396,8 @@ function syncPlaySettings() {
 
 const SET_PAGES = [
   { key: "src", icon: "dns", title: "源", group: 0 },
+  // 适配器单独一页:它既不是源,也不该埋在源的页面里(见 docs/ARCHITECTURE.md 第 4 节)
+  { key: "adapters", icon: "extension", title: "适配器", group: 0 },
   { key: "play", icon: "play_circle", title: "播放", group: 0 },
   // 没有「网络」页:代理不开放给用户选,出口一律跟着系统走(见 docs/NETWORK.md)
   { key: "look", icon: "palette", title: "外观", group: 0 },
@@ -3637,6 +3536,8 @@ function openSetPage(key) {
     renderSrcSeg();
     renderSourceManager();
   }
+  if (page === "adapters") loadAdapters();
+
   if (page === "about") fillAbout();
   if (page === "debug") fillLogPath();
   const scroll = document.querySelector('.set-page[data-page="' + page + '"] .set-page__scroll');
@@ -3735,7 +3636,6 @@ const SRC_FILTERS = [
 ];
 
 function srcCountByType(key) {
-  // 分段只数"源":解析器有自己的那一块,不进这里的计数
   const list = listableSources();
   return key === "all" ? list.length : list.filter((s) => sourceType(s) === key).length;
 }
@@ -3972,7 +3872,6 @@ function hidePlayerFail() {
 /**
  * 播放失败:状态文字之外给「重试」和「换线路」,原始错误收进小字。
  * 换线路 = 换到详情页里另一条线路的第一集;只有一条线路时退化成"换源"。
- * info.settings = true 时多一个「去设置」(解析页没解出地址 → 去装解析器)。
  */
 function playerFail(info) {
   const box = $("pFail");
@@ -3988,11 +3887,6 @@ function playerFail(info) {
   sw.onclick = alt
     ? () => playEpisode(alt.id, alt.name, alt.group)
     : () => { closePlayer(); openSourceManager(); };
-  const set = $("pSettings");
-  if (set) {
-    set.hidden = !info.settings;
-    set.onclick = info.settings ? () => { closePlayer(); openSourceManager(); } : null;
-  }
   box.hidden = false;
   $("player").classList.add("failed");
   log("PLAY FAIL", info.step, info.kind, info.raw);
@@ -4515,18 +4409,19 @@ function openPlayer(url, name, mime, kind) {
   }
 }
 
-// 解析器链路(分享页 → 可播地址)在 ui/parser-chain.js:纯逻辑,能 node --test。
-
-/** 只有解析页、又没解析出地址:播放器里给具体下一步(去设置 / 换线路) */
-function pageOnlyFail(st) {
+/**
+ * 源只给了一张网页(解析页),现在没有谁能接着把它变成可播地址:
+ * 明确报错,不拿 HTML 去喂 hls.js(那只会得到 manifestParsingError)。
+ * 页面地址放进 raw 里,方便判断到底是哪一步丢了。
+ */
+function pageWithoutStream(st) {
   pStatus("这个源只给了解析页");
   playerFail({
-    step: "parse",
+    step: "page",
     kind: "unsupported",
-    title: "这个源只给了解析页,没有可播地址",
-    hint: "可以在「设置 → 源」里导入解析器,或者换一条线路。",
+    title: "这个源只给了解析页,当前没有可用的取流方式",
+    hint: "换一条线路试试;都不行就换一个源。",
     raw: "page=" + shortUrl(String((st && st.url) || ""), 200),
-    settings: true,
   });
 }
 
@@ -4597,21 +4492,12 @@ async function playEpisode(id, name, groupId) {
       ? await pluginStream(groupId, id)
       : await invoke("play", { source: S.source, episodeId: id });
     if (gen !== playSeq) return; // 期间切集 / 关了播放器:这条链路作废
-    // 这个源只给了一张解析页:交给解析器插件链(见 ui/parser-chain.js)。
-    // 插件也可能给 page(它自己标了 text/html),这种情况同样该走解析器 ——
+    // 这个源只给了一张网页(解析页):没有取流方式就明确报错。
+    // 适配器也可能给 page(它自己标了 text/html),这种情况一样 ——
     // 否则 hls.js 只会拿着 HTML 报 manifestParsingError。
     if (st && isPageStream(st)) {
-      const parsed = await runParserChain({
-        parsers: parserSources(), pageUrl: st.url, headers: st.headers,
-        call: callPlugin, allow: (urls) => invoke("plugin_stream_allow", { urls }),
-        isAlive: () => gen === playSeq, status: pStatus, log,
-      });
-      if (gen !== playSeq) return;
-      if (!parsed) {
-        pageOnlyFail(st);
-        return;
-      }
-      st = parsed;
+      pageWithoutStream(st);
+      return;
     }
     const hookMs = Date.now() - t0;
     if (playCtx) playCtx.mime = st.mime || "";
@@ -4696,6 +4582,8 @@ function showView(key) {
   if (key === "fav") renderFavs();
   if (key === "settings") {
     bindSettings();
+    // 源编辑里的「适配器」下拉要有数据,进设置时拉一次
+    loadAdapters();
     // 进设置 = 回到入口列表(expanded 下左列常驻,默认落在「源」)
     setPage = "";
     const shell = $("setShell");

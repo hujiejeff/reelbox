@@ -464,7 +464,7 @@ function looksLikeHtml(contentType, body) {
  *   1. 地址本身就是 `.m3u8` / `.mp4` → 直接播;
  *   2. 取一次,响应是媒体类型 → 直接播;
  *   3. 页面里能抽出 `.m3u8` → 用它,页面地址留作 Referer;
- *   4. 抽不到、但响应确实是 HTML → 这是个分享页,`page = true` 交给解析器插件;
+ *   4. 抽不到、但响应确实是 HTML → 这是个分享页,`page = true` 交给播放链路报错;
  *   5. 其余(404、二进制、连不上)原样交出去,让播放阶段报出真实的失败。
  */
 async function resolveMedia(ctx, url) {
@@ -596,7 +596,8 @@ reelbox.define({
       mime: mime,
       headers: headers,
       options: [],
-      // 只拿到一张分享页:交给解析器插件链(和 cms.rs 的 page 标记同一个含义)
+      // 只拿到一张分享页:标成解析页(和 cms.rs 的 page 标记同一个含义)。
+      // 这里没有取流方式,播放链路会明确报「只给了解析页」。
       page: media.page,
     };
   },

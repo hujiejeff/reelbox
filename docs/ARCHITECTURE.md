@@ -1,9 +1,9 @@
-# 架构：内核 / 适配器 / 解析器
+# 架构：内核 / 适配器
 
 状态:2026-11-21 定稿,分批实施中。本文记录**为什么这样分层**、**迁移顺序**,以及每一步的验收口径。
-相关文档:[SOURCES.md](SOURCES.md)(源是什么)、[PLUGIN.md](PLUGIN.md)(插件契约)、[ENGINE-PLUGINS.md](ENGINE-PLUGINS.md)(iplayr 这类配置引擎)、[PARSERS.md](PARSERS.md)(解析器)。
+相关文档:[SOURCES.md](SOURCES.md)(源是什么)、[PLUGIN.md](PLUGIN.md)(插件契约)、[ENGINE-PLUGINS.md](ENGINE-PLUGINS.md)(iplayr 这类配置引擎)。
 
-## 1. 三层,别再加第四层
+## 1. 两层,别再加第三层
 
 ```
         ┌──────────── 内核(Rust)────────────┐
@@ -15,16 +15,11 @@
         ┌───────────────┴───────────────────┐
         │  适配器(JS):把某种格式翻译成这三个   │
         │  vod · iplayr · webox · reelbox    │
-        └───────────────┬───────────────────┘
-                        │ 源交出的可能是"一张网页"
-        ┌───────────────┴───────────────────┐
-        │  解析器(JS):网页 → 播放地址         │
         └───────────────────────────────────┘
 ```
 
 - **内核**:凡是"所有源都需要、而且必须一致"的东西——HTTP 出口、代理选路、超时重试、播放反代、沙箱、界面。**站点相关的逻辑一行都不许进来。**
-- **适配器**:把一种"源格式"翻译成 `list/detail/play`。数据来自 API、HTML、还是本地文件,内核不关心。
-- **解析器**:只在适配器交出的是一张网页、且内置正则抽不出地址时才被调用;它不知道"列表""剧集"是什么。
+- **适配器**:把一种"源格式"翻译成 `list/detail/play`。数据来自 API、HTML、还是本地文件,内核不关心;**从网页里取流也在这里**(以前那层"解析器"已经去掉,见第 7 节)。
 
 多一层的诱惑一直存在(比如"传输层""映射层")。**不加**。表达不了的格式就写适配器,而不是再造一层抽象。
 
@@ -71,7 +66,7 @@
 | 看到什么 | 候选 |
 | --- | --- |
 | 源码含 `reelbox.define(` | `reelbox` |
-| 源码含 `reelbox.parser(` | 不是源(解析器),单独处理 |
+| 源码含 `reelbox.adapter(` | 不是源(适配器),只装文件 |
 | 源码含 `WeBox.define(` | `webox` |
 | 源码是 `export default function (hg)` | `hghub`(未实现) |
 | JSON 同时有 `category` 与 `vod_node` | `iplayr` |
@@ -128,6 +123,7 @@ reelbox.adapter({
 | P4 webox 独立成适配器名 | ✅ | `adapter:分家` | `.webox.js` 现在标 `webox`、`.reelbox.js` 标 `reelbox`;运行时同一沙箱,但数据里能看出格式。早期误标成 reelbox 的行会自动纠正一次 |
 | P5 tvbox 集合筛选 | ✅ | `adapter:批量导入` | 索引里 `type 0/1` 且有 http 地址的转成 vod 源;`type 3` 的 jar 爬虫跳过并说明原因(6 条 node 测试) |
 | P5 hghub | ❌ 决定不做 | — | 理由见第 7 节:契约形状差得远(能力命名空间 vs 我们的钩子),而且手上没有任何真实 HGhub 插件可验证——写了也只能是「应该能用」 |
+| P6 移除解析器 | ✅ | `parser:移除` | 解析器这一层整个去掉(链 / 入口 / 文档 / 示例);只给解析页的源现在明确报错并把页面地址留在 raw 里;`.parser.js` 导入时提示「解析器已移除」 |
 
 ### 迁移后的源标注(本机实测)
 
@@ -192,8 +188,6 @@ user-4kvm    reelbox  4k影视
 **为什么不做 DSL / 万能映射**
 配置只能表达"从哪儿取",不能表达"怎么算"。越线就会长成一门半吊子编程语言:难写、难调、没人用。需要计算(签名、解密、wasm)的,一律写适配器。
 
-**为什么解析器是旁路而不是适配器的一种**
-它没有列表、没有详情,输入是一张网页,输出是一个地址。放进适配器会污染 `list/detail` 的语义。
 
 ## 7. 非目标
 
@@ -201,6 +195,7 @@ user-4kvm    reelbox  4k影视
 - **HGhub 插件适配**——它的契约是「返回一组能力命名空间」(media/search/live/comments…),我们是「实现几个钩子」,中间要写一整层映射;而且手上没有真实插件样本,做完无法验证。要做的前提是先拿到 2–3 个能跑的 HGhub 插件,否则就是在写「应该能用」的代码。
 - 需要浏览器渲染/过 Cloudflare 的站点——除非将来加 `ctx.browser` 能力,否则明确报 `unsupported`。
 - 把匹配规则做成可视化编辑器——配置是文本,够用。
+- **解析器这个概念已移除**,取流逻辑归到源自己的适配器里:源只交出一张网页、适配器又没能从中取到地址时,播放链路明确报「这个源只给了解析页,当前没有可用的取流方式」,不再有"再套一层解析器"的路。
 
 ## 8. 已知代价
 
@@ -223,7 +218,6 @@ OK    adapter vod                 examples/vod.reelbox.js hooks=list/detail/play
 OK    adapter iplayr              examples/iplayr.reelbox.js hooks=list/detail/play
 OK    内核                          src-tauri/src/proxy.rs
 OK    适配器运行时                      ui/plugin-sandbox.js
-OK    解析器链                        ui/parser-chain.js
 OK    适配器注册(内置)                   src-tauri/src/builtin.rs
 OK    Source.adapter
 OK    Source.probe
@@ -231,7 +225,7 @@ OK    derive_adapter
 OK    cargo test -p reelbox-core  119 passed
 OK    npm run test:ui             19 passed
 
-11/11 通过
+10/10 通过
 ```
 
 它只做静态检查与跑测试,不启动应用。实机验证(粘一句配置、列表、播放)见 4.5 节。

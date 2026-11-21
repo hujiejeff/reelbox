@@ -15,14 +15,14 @@ use serde::{Deserialize, Serialize};
 pub struct Source {
     pub id: String,
     pub name: String,
-    /// vod | xml | live | webox | parser
+    /// vod | xml | live | webox
     ///
-    /// **界面仍在用这个字段**(下拉里的徽标、解析器分块都按它判),所以它留着;
+    /// **界面仍在用这个字段**(下拉里的徽标、源页的分段都按它判),所以它留着;
     /// 运行时走哪条路由 `adapter`,见 [架构](../docs/ARCHITECTURE.md)。
     #[serde(default, rename = "type")]
     pub kind: String,
     pub url: String,
-    /// 用哪个适配器解析:`vod` | `vod-rs` | `iplayr` | `webox` | `reelbox` | `parser`。
+    /// 用哪个适配器解析:`vod` | `vod-rs` | `iplayr` | `webox` | `reelbox`。
     ///
     /// `vod` 是随包安装的 JS 适配器(P3 从 Rust 迁过去的);`vod-rs` 是同一套逻辑的
     /// **Rust 实现**,只留作回滚 —— 两者输出应当逐字段一致(见 `docs/ARCHITECTURE.md` P3)。
@@ -35,7 +35,7 @@ pub struct Source {
     /// 当初判定这个源能用的证据(导入探测时写入,P2 才有写入方)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<Probe>,
-    /// 插件自己声明的版本号(只有 `type="parser"` 的解析器会用到,普通源为空)。
+    /// 插件自己声明的版本号(普通源为空)。
     /// 空的时候不写进配置文件,老配置读进来也不受影响。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,
@@ -144,7 +144,7 @@ impl Source {
         }
     }
 
-    /// 运行时用哪个适配器(`vod` / `vod-rs` / `iplayr` / `webox` / `reelbox` / `parser`)。
+    /// 运行时用哪个适配器(`vod` / `vod-rs` / `iplayr` / `webox` / `reelbox`)。
     ///
     /// 落过盘的源直接用自己的 `adapter` —— 判定只做一次,不每次加载重新猜;
     /// 老数据(没这个字段)现推一个,好让运行时不必关心迁移有没有跑过。
@@ -167,14 +167,9 @@ pub fn derive_adapter(kind: &str, url: &str) -> &'static str {
     // 而 iplayr 的规则文件会(iplayr 索引里那些 `crawl.json?raw=1` 也算)。
     let bare = u.split(|c| c == '?' || c == '#').next().unwrap_or("");
     match k.as_str() {
-        // 解析器不是源:它只把一张网页变成播放地址
-        "parser" => "parser",
-        // 现有插件源都还是 `type=webox` 的老写法;`.parser.js` 同样是 `.js`,
-        // 得先认出来,否则会让解析器跑到源列表里
+        // 现有插件源都还是 `type=webox` 的老写法
         "webox" => {
-            if bare.ends_with(".parser.js") {
-                "parser"
-            } else if bare.ends_with(".reelbox.js") {
+            if bare.ends_with(".reelbox.js") {
                 // 新格式:入口是 reelbox.define
                 "reelbox"
             } else {
@@ -215,8 +210,6 @@ fn derive_adapter_from_url(u: &str, bare: &str) -> &'static str {
         || bare.ends_with(".xml")
     {
         "vod"
-    } else if bare.ends_with(".parser.js") {
-        "parser"
     } else if bare.ends_with(".json") {
         "iplayr"
     } else {
@@ -396,12 +389,8 @@ mod tests {
         // 老插件没有后缀区分:仍按 WeBox 入口,但名字就是 webox
         assert_eq!(derive_adapter("webox", "D:/x/legacy.js"), "webox");
         assert_eq!(derive_adapter("webox", "D:/x/iplayr.reelbox.js"), "reelbox");
-        // 解析器:type 说了算,`.parser.js` 的后缀也算
-        assert_eq!(derive_adapter("parser", "D:/x/share.reelbox.parser.js"), "parser");
-        assert_eq!(derive_adapter("webox", "D:/x/share.reelbox.parser.js"), "parser");
         // 大小写不该影响判断
-        assert_eq!(derive_adapter(" Parser ", "D:/x/share.reelbox.parser.js"), "parser");
-        assert_eq!(derive_adapter("xml", "https://X.com/API.PHP/provide/vod"), "vod");
+        assert_eq!(derive_adapter("XML", "https://X.com/API.PHP/provide/vod"), "vod");
         // 认不出来:给 reelbox
         assert_eq!(derive_adapter("", ""), "reelbox");
         assert_eq!(derive_adapter("", "https://example.com/list"), "reelbox");
@@ -409,7 +398,6 @@ mod tests {
         assert_eq!(derive_adapter("live", "https://example.com/a.m3u8"), "reelbox");
         // 地址说了,`type` 说了别的:先听 `type`(顺序即优先级)
         assert_eq!(derive_adapter("xml", "https://example.com/crawl.json"), "vod");
-        assert_eq!(derive_adapter("webox", "D:/x/share.reelbox.parser.js"), "parser");
     }
 
     /// 迁移只补空的 `adapter`;已经有值的一个字都不改(判定一旦落盘就不再变)
@@ -430,8 +418,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(odd.adapter(), "vod", "没填时按 type / 地址推");
-        odd.adapter = "parser".into();
-        assert_eq!(odd.adapter(), "parser", "有值时必须用它");
+        odd.adapter = "iplayr".into();
+        assert_eq!(odd.adapter(), "iplayr", "有值时必须用它");
 
         // 老配置(没有 adapter)现推一个,推出来和迁移写进去的一致
         let old: Source = serde_json::from_str(
@@ -649,18 +637,16 @@ mod tests {
         // 从没测过时不写这个字段,免得配置文件里多一堆 null
         let text = serde_json::to_string(&old).expect("序列化失败");
         assert!(!text.contains("health"), "不该序列化 None: {text}");
-        // 版本只给解析器用:普通源空着,也不写进配置文件
+        // 版本:普通源空着,也不写进配置文件;有值的时候能存能读
         assert!(old.version.is_empty());
         assert!(!text.contains("version"), "空版本不该落盘: {text}");
 
-        // 解析器源:type=parser + 版本号能存能读
-        let p: Source = serde_json::from_str(
-            r#"{"id":"d1","name":"分享页解析器","type":"parser","url":"D:/x/share.reelbox.parser.js","version":"1"}"#,
+        let ver: Source = serde_json::from_str(
+            r#"{"id":"d1","name":"带版本的源","type":"webox","url":"D:/x/demo.reelbox.js","version":"1"}"#,
         )
-        .expect("解析器源解析失败");
-        assert_eq!(p.format(), "parser");
-        assert_eq!(p.version, "1");
-        assert!(serde_json::to_string(&p).unwrap().contains("\"version\":\"1\""));
+        .expect("带版本的源解析失败");
+        assert_eq!(ver.version, "1");
+        assert!(serde_json::to_string(&ver).unwrap().contains("\"version\":\"1\""));
 
         // 失败的探测带得上原因
         let bad = Health { ok: false, ms: 5001, checked_at: now_iso(), note: "超时".into() };

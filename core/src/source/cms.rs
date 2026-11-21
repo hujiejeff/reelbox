@@ -153,7 +153,7 @@ impl Client {
     /// 从剧集标识里取出播放地址。
     ///
     /// 有的源给的是一张分享页(HTML),真正的 m3u8 藏在页面里:能抽出来就直接抽,
-    /// 抽不出来就把 `page = true` 交出去 —— 由前端找解析器插件接着解。
+    /// 抽不出来就把 `page = true` 交出去 —— 播放链路据此明确报「只给了解析页」。
     pub fn stream(&self, episode_id: &str) -> Result<Stream, String> {
         let parts: Vec<&str> = episode_id.splitn(3, ':').collect();
         if parts.len() != 3 || !parts[2].starts_with("http") {
@@ -537,7 +537,7 @@ fn resolve_media(url: &str) -> Media {
 
 /// 拿到响应之后怎么判(纯函数,单测直接喂 body):
 ///   1. 页面里能抽出 .m3u8 → 用它,原页面地址留作 Referer;
-///   2. 抽不到、且响应确实是 HTML → 这是个解析页,`page = true` 交给解析器插件;
+///   2. 抽不到、且响应确实是 HTML → 这是个解析页,`page = true` 交给播放链路报错;
 ///   3. 其余情况(404、二进制、奇怪的地址)原样交出去,别抢走播放链路。
 fn media_from_page(url: &str, status: u16, content_type: &str, body: &str) -> Media {
     if status >= 400 {
@@ -636,7 +636,7 @@ mod extract_tests {
         assert!(extract_m3u8("<html>no video here</html>", "https://a.example/").is_none());
     }
 
-    /// 分享页:页面上捞不到 m3u8,但响应确实是 HTML → 交给解析器插件
+    /// 分享页:页面上捞不到 m3u8,但响应确实是 HTML → 标成解析页(`page = true`)
     #[test]
     fn share_page_is_flagged() {
         let html = "<!doctype html><html><body><h1>电影天堂</h1><p>请下载客户端</p></body></html>";

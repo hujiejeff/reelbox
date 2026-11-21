@@ -9,7 +9,7 @@ Tauri 2 + Rust 核心 + 原生 Web UI,一套代码跑 Windows / macOS / Linux。
 - **三类源**:苹果 CMS(`vod` / `xml`)、JS 插件(`.js`)、网络索引批量导入
 - **播放**:本地 HLS 反代 + hls.js;mp4 直链按内容判型走原生 `<video>`;支持 Range 拖动
 - **插件沙箱**:JS 插件在 WebView 的 sandbox iframe 中执行(`origin: null`,读不到父页 DOM 与宿主 IPC),支持 `ctx.compute.run` 运行 wasm
-- **解析器插件**:有些源只给网页地址,要从页面里取流 —— 这类逻辑做成 `reelbox.parser` 插件,不用改程序本体
+- **适配器**:把苹果 CMS、iplayr 配置、WeBox 老插件这些不同格式翻译成同一套接口;内置三个,也能导入自己的
 - **界面**:Material 3 Expressive(m3e)+ Material You 动态取色,明 / 暗 / 纯黑 / 多配色
 - **细节**:进度记忆、自动连播、手动清晰度、收藏、源测速、列表与详情的加载 / 空 / 错误三态
 
@@ -54,9 +54,8 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 | [docs/PLUGIN.md](docs/PLUGIN.md) | 插件契约 |
 | [docs/PLUGIN-QUICKSTART.md](docs/PLUGIN-QUICKSTART.md) | 三分钟写一个插件 |
 | [docs/PLUGIN-RUNTIME.md](docs/PLUGIN-RUNTIME.md) | 插件运行时与两套引擎 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 内核 / 适配器 / 解析器三层与迁移计划 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 内核 / 适配器两层与迁移计划 |
 | [docs/ARCHITECTURE-EVIDENCE.md](docs/ARCHITECTURE-EVIDENCE.md) | 三层架构的验收快照(可复现) |
-| [docs/PARSERS.md](docs/PARSERS.md) | 解析器插件(从网页取播放地址) |
 | [docs/ENGINE-PLUGINS.md](docs/ENGINE-PLUGINS.md) | 引擎插件 + 站点配置(一个插件爬一类站) |
 | [docs/SOURCES.md](docs/SOURCES.md) | 源与插件的区别、存放位置、回落规则 |
 | [docs/PLAYBACK.md](docs/PLAYBACK.md) | 播放架构、反代设计、已知限制 |

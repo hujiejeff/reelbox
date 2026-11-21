@@ -1,4 +1,4 @@
-// 架构自检:一条命令回答"三层还在不在、适配器齐不齐、测试过不过"。
+// 架构自检:一条命令回答"两层还在不在、适配器齐不齐、测试过不过"。
 //
 //   node scripts/verify-architecture.mjs
 //
@@ -28,11 +28,10 @@ for (const a of adapters) {
   ok(`adapter ${a.id}`, has && hooks.length === 3, `${a.file} hooks=${hooks.join("/") || "无"}`);
 }
 
-// 2) 三层各自的文件在
+// 2) 两层各自的文件在
 const layers = [
   ["内核", "src-tauri/src/proxy.rs"],
   ["适配器运行时", "ui/plugin-sandbox.js"],
-  ["解析器链", "ui/parser-chain.js"],
   ["适配器注册(内置)", "src-tauri/src/builtin.rs"],
 ];
 for (const [name, rel] of layers) ok(`${name}`, existsSync(`${root}/${rel}`), rel);

@@ -12,8 +12,6 @@ use std::collections::BTreeMap;
 
 /// 插件类型:普通源插件(列 / 详情 / 播放钩子)
 pub const KIND_VOD: &str = "vod";
-/// 插件类型:解析器(把分享页变成可播地址,见 docs/PARSERS.md)
-pub const KIND_PARSER: &str = "parser";
 /// 插件类型:引擎(插件只管"怎么爬",站点在 `Source.options.config` 里,见 docs/ENGINE-PLUGINS.md)。
 /// 引擎插件导入时会多问一句配置地址,没配置就不建源。
 pub const KIND_ENGINE: &str = "engine";
@@ -25,8 +23,11 @@ pub const KIND_ADAPTER: &str = "adapter";
 
 /// 适配器的入口前缀(`reelbox.adapter({...})`,对象形状与 `reelbox.define` 相同)
 const ADAPTER_ENTRY: &str = "reelbox.adapter(";
-/// 解析器的入口前缀(`reelbox.parser({...})`)
-const PARSER_ENTRY: &str = "reelbox.parser(";
+/// 已移除的解析器入口(`reelbox.parser({...})`):老文件里还写着它,
+/// 导入时给一句明确的话,而不是含混的"找不到插件入口"。
+const LEGACY_PARSER_ENTRY: &str = "reelbox.parser(";
+/// 导入解析器老文件时给人的提示(解析器这个概念已经去掉,取流归到适配器里)
+pub const PARSER_REMOVED: &str = "解析器已移除,请改用适配器或插件";
 /// 原生源插件的入口前缀
 const NATIVE_ENTRY: &str = "reelbox.define(";
 /// 老插件(WeBox)的入口前缀,只做兼容
@@ -39,23 +40,28 @@ pub struct PluginMeta {
     pub version: String,
     /// 站点主页,没有就空
     pub api: String,
-    /// `vod`(源插件)、`parser`(解析器)、`adapter`(适配器)或 `engine`(引擎)
+    /// `vod`(源插件)、`adapter`(适配器)或 `engine`(引擎)
     pub kind: String,
 }
 
 /// 从插件源码里抽元信息。纯函数:不碰文件系统,也拿不到文件名。
 ///
-/// 后缀这条判据(`.adapter.js` / `.parser.js`)只认文件名,所以要么用 `parse_meta_hinted` 传进来,
+/// 后缀这条判据(`.adapter.js`)只认文件名,所以要么用 `parse_meta_hinted` 传进来,
 /// 要么由调用方自己再判一次 —— 别把路径塞进这个函数。
 pub fn parse_meta(js: &str) -> Result<PluginMeta, String> {
     parse_meta_hinted(js, None)
 }
 
 /// 同 `parse_meta`,但允许调用方把文件名(或路径)当提示传进来:
-/// `.adapter.js` / `.parser.js` 后缀同样算适配器 / 解析器(见 `detect_kind`)。
+/// `.adapter.js` 后缀同样算适配器(见 `detect_kind`)。
 pub fn parse_meta_hinted(js: &str, path_hint: Option<&str>) -> Result<PluginMeta, String> {
-    // 原生契约优先,其次解析器 / 适配器,最后兼容 WeBox
-    let (start, prefix_len) = [NATIVE_ENTRY, PARSER_ENTRY, ADAPTER_ENTRY, LEGACY_ENTRY]
+    // 解析器这个概念已经移除:老文件还写着 `reelbox.parser({...})`,
+    // 它的入口不再存在,直接说清楚该怎么办
+    if js.contains(LEGACY_PARSER_ENTRY) {
+        return Err(PARSER_REMOVED.into());
+    }
+    // 原生契约优先,其次适配器,最后兼容 WeBox
+    let (start, prefix_len) = [NATIVE_ENTRY, ADAPTER_ENTRY, LEGACY_ENTRY]
         .iter()
         .filter_map(|p| js.find(p).map(|i| (i, p.len())))
         .min_by_key(|(i, _)| *i)
@@ -82,26 +88,19 @@ pub fn parse_meta_hinted(js: &str, path_hint: Option<&str>) -> Result<PluginMeta
     })
 }
 
-/// 四条判据,命中任一即适配器 / 解析器;都不命中就是普通源插件(`vod`)。
-///   适配器:1. 源码里有 `reelbox.adapter(` 入口;2. 入口对象里写了 `kind: "adapter"`;
-///           3. 文件名以 `.adapter.js` 收尾(只有调用方传了 path_hint 才判得到)。
-///   解析器:同上三条,换成 `reelbox.parser(` / `"parser"` / `.parser.js`。
+/// 三条判据,命中任一即适配器;都不命中就是普通源插件(`vod`)。
+///   1. 源码里有 `reelbox.adapter(` 入口;2. 入口对象里写了 `kind: "adapter"`;
+///   3. 文件名以 `.adapter.js` 收尾(只有调用方传了 path_hint 才判得到)。
 /// 源码入口优先于后缀:文件被改了名也不至于认错格式。
 fn detect_kind(js: &str, declared: &str, path_hint: Option<&str>) -> String {
     let declared = declared.trim().to_ascii_lowercase();
     if js.contains(ADAPTER_ENTRY) || declared == KIND_ADAPTER {
         return KIND_ADAPTER.to_string();
     }
-    if js.contains(PARSER_ENTRY) || declared == KIND_PARSER {
-        return KIND_PARSER.to_string();
-    }
     if let Some(p) = path_hint {
         let p = p.trim().to_ascii_lowercase();
         if p.ends_with(".adapter.js") {
             return KIND_ADAPTER.to_string();
-        }
-        if p.ends_with(".parser.js") {
-            return KIND_PARSER.to_string();
         }
     }
     if declared.is_empty() {
@@ -269,57 +268,31 @@ WeBox.define({
         assert_eq!(parse_meta(js).unwrap().kind, KIND_VOD);
     }
 
-    /// 判据 1:源码里有 reelbox.parser( 入口
-    #[test]
-    fn parser_kind_from_entry() {
-        let js = r#"
-reelbox.parser({
-  id: "dytt-share",
-  name: "电影天堂分享页",
-  version: "1",
-  async parse(ctx, { url }) { return { quality: "自动", url: url }; }
-});
-"#;
-        let m = parse_meta(js).unwrap();
-        assert_eq!(m.kind, KIND_PARSER);
-        assert_eq!(m.id, "dytt-share");
-        assert_eq!(m.name, "电影天堂分享页");
-        assert_eq!(m.version, "1");
-    }
-
-    /// 判据 2:入口对象里写了 kind: "parser"
-    #[test]
-    fn parser_kind_from_declared_field() {
-        let js = r#"reelbox.define({ name: "声明式解析器", kind: "parser" })"#;
-        assert_eq!(parse_meta(js).unwrap().kind, KIND_PARSER);
-    }
-
     /// 钩子体里的正则会带引号(`/["']/`),浅扫描器不该因此判整个文件坏掉
     #[test]
     fn regex_with_quotes_does_not_break_meta() {
-        let js = r#"reelbox.parser({
+        let js = r#"reelbox.adapter({
   id: "quoted-re",
-  name: "带引号正则的解析器",
+  name: "带引号正则的适配器",
   version: "2",
   match(url) { return /[^"']/.test(url); }
 });"#;
         let m = parse_meta(js).expect("正则里的引号不该让元信息读不出来");
-        assert_eq!(m.name, "带引号正则的解析器");
+        assert_eq!(m.name, "带引号正则的适配器");
         assert_eq!(m.version, "2");
-        assert_eq!(m.kind, KIND_PARSER);
+        assert_eq!(m.kind, KIND_ADAPTER);
     }
 
-    /// 仓库里那个示例解析器必须真的能被认出来(它是导入后开箱可用的样例)
+    /// 解析器已移除:老文件还写着 `reelbox.parser({...})`,导入时得给一句明确的话,
+    /// 而不是含混的"找不到插件入口"。
     #[test]
-    fn reads_example_parser_file() {
-        let js = include_str!("../../../examples/share.reelbox.parser.js");
-        let m = parse_meta(js).expect("示例解析器应能读出元信息");
-        assert_eq!(m.kind, KIND_PARSER);
-        assert_eq!(m.id, "share-page");
-        assert_eq!(m.name, "分享页 m3u8");
-        assert_eq!(m.version, "1");
-        // 不传后缀提示也得靠源码入口认出来
-        assert_eq!(parse_meta_hinted(js, Some("x.js")).unwrap().kind, KIND_PARSER);
+    fn parser_entry_is_rejected() {
+        let js = r#"reelbox.parser({ id: "dytt-share", name: "电影天堂分享页" })"#;
+        let err = parse_meta(js).expect_err("解析器入口不该再被接受");
+        assert_eq!(err, PARSER_REMOVED);
+        // 后缀说了也不算:`.parser.js` 的文件名不再有特殊含义
+        let err = parse_meta_hinted(js, Some("share.reelbox.parser.js")).expect_err("同上");
+        assert_eq!(err, PARSER_REMOVED);
     }
 
     /// 引擎插件:显式写 kind: "engine",元信息要原样带出来(导入流程靠它多问一句配置地址)
@@ -368,15 +341,11 @@ reelbox.adapter({
         // 传了后缀:文件名说了算
         let m = parse_meta_hinted(js, Some("by-suffix.adapter.js")).unwrap();
         assert_eq!(m.kind, KIND_ADAPTER);
-        // 别的后缀不受影响(解析器 / 普通插件各归各)
+        // 别的后缀不受影响:普通插件还是普通插件
         assert_eq!(parse_meta_hinted(js, Some("x.reelbox.js")).unwrap().kind, KIND_VOD);
-        assert_eq!(
-            parse_meta_hinted(js, Some("x.reelbox.parser.js")).unwrap().kind,
-            KIND_PARSER
-        );
     }
 
-    /// 入口对象里写 `kind: "adapter"` 也认(和 parser / engine 同一套写法)
+    /// 入口对象里写 `kind: "adapter"` 也认(和 engine 同一套写法)
     #[test]
     fn adapter_kind_from_declared_field() {
         let js = r#"reelbox.define({ id: "declared", name: "声明式适配器", kind: "adapter" })"#;
@@ -393,27 +362,6 @@ reelbox.adapter({
         assert_eq!(m.kind, KIND_ENGINE);
         assert_eq!(m.id, "iplayr.engine");
         assert_eq!(m.name, "iplayr 引擎");
-    }
-
-    /// 判据 3:文件名 `.parser.js` —— 只有调用方传了 hint 才判得到
-    #[test]
-    fn parser_kind_from_file_suffix_hint() {
-        let js = r#"reelbox.define({ id: "no-entry-hint", name: "只靠文件名的解析器" })"#;
-        // 没传 hint:纯函数只认源码,是 vod
-        assert_eq!(parse_meta(js).unwrap().kind, KIND_VOD);
-        // 传了 hint:后缀说了算
-        let m = parse_meta_hinted(js, Some("share.reelbox.parser.js")).unwrap();
-        assert_eq!(m.kind, KIND_PARSER);
-        // 普通插件后缀不受影响
-        let m = parse_meta_hinted(js, Some("demo.reelbox.js")).unwrap();
-        assert_eq!(m.kind, KIND_VOD);
-        // 解析器入口 + 普通后缀:源码那条判据照样命中
-        let m = parse_meta_hinted(
-            r#"reelbox.parser({ name: "入口即解析器" })"#,
-            Some("x.reelbox.js"),
-        )
-        .unwrap();
-        assert_eq!(m.kind, KIND_PARSER);
     }
 }
 

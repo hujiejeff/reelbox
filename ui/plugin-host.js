@@ -36,12 +36,6 @@ const rpcs = new Map(); // 沙箱发起的宿主调用(http.get)
 export const PLUGIN_KIND = "webox";
 
 /**
- * 解析器插件的 kind。解析器不是源:它把"分享页 HTML"变成"可播地址",
- * 由播放链路按需调用(见 docs/PARSERS.md),不进源下拉、不设为当前源。
- */
-export const PARSER_KIND = "parser";
-
-/**
  * 引擎插件的 kind:插件本身只是一套爬取规则("怎么爬"),站点在源配置的
  * `options.config` 里("爬哪个站")。导入时没填配置地址就不建源,
  * 见 docs/ENGINE-PLUGINS.md。
@@ -58,21 +52,33 @@ export const ADAPTER_KIND = "adapter";
 /** 插件源码的入口:原生是 reelbox.define;老插件写的是另一个前缀,一并认 */
 const DEFINE_RE = /(?:WeBox|reelbox)\.define\s*\(/;
 
-/** 解析器源码的入口:reelbox.parser({...}) */
-const PARSER_RE = /reelbox\.parser\s*\(/;
-
 /** 适配器源码的入口:reelbox.adapter({...})(形状与 define 相同,只是 kind 不同) */
 const ADAPTER_RE = /reelbox\.adapter\s*\(/;
 
-/** 这段文本是不是插件源码(源插件 / 解析器 / 适配器都算) */
+/**
+ * 已移除的解析器入口(`reelbox.parser({...})`)。解析器这个概念已经去掉:
+ * 从网页取流归到源自己的适配器里,所以老文件导进来要明确说一句,而不是
+ * 当成源 / 插件混进列表。
+ */
+const REMOVED_PARSER_RE = /reelbox\.parser\s*\(/;
+
+/** 导入老解析器文件时给人的话 */
+export const PARSER_REMOVED_HINT = "解析器已移除,请改用适配器或插件";
+
+/** 这段文本是不是插件源码(源插件 / 适配器都算) */
 export function looksLikePluginSource(text) {
   const s = String(text == null ? "" : text);
-  return DEFINE_RE.test(s) || PARSER_RE.test(s) || ADAPTER_RE.test(s);
+  return DEFINE_RE.test(s) || ADAPTER_RE.test(s);
 }
 
-/** 这段文本是不是解析器源码 */
-export function looksLikeParserSource(text) {
-  return PARSER_RE.test(String(text == null ? "" : text));
+/** 这段文本是不是已移除的解析器源码(入口还是 reelbox.parser) */
+export function looksLikeRemovedParser(text) {
+  return REMOVED_PARSER_RE.test(String(text == null ? "" : text));
+}
+
+/** 路径 / 文件名是不是老解析器约定的 `.parser.js` */
+export function isRemovedParserPath(path) {
+  return /\.parser\.js$/i.test(String(path == null ? "" : path).split(/[?#]/)[0]);
 }
 
 /** 这段文本是不是适配器源码(入口是 reelbox.adapter) */
@@ -86,27 +92,14 @@ export function isPluginKind(kind) {
   return k === PLUGIN_KIND || k === "plugin" || k === "js";
 }
 
-/** 类型值是不是解析器 */
-export function isParserKind(kind) {
-  return String(kind == null ? "" : kind).toLowerCase() === PARSER_KIND;
-}
-
 /** 地址/路径是不是插件文件:插件就是 js 文件 */
 function isPluginPath(url) {
   return /\.js$/i.test(String(url == null ? "" : url).split(/[?#]/)[0]);
 }
 
-/** 这个源是不是解析器(kind 或文件后缀任一命中) */
-export function isParserSource(src) {
-  if (!src) return false;
-  if (isParserKind(src.kind || src.type)) return true;
-  return /\.parser\.js$/i.test(String(src.url == null ? "" : src.url).split(/[?#]/)[0]);
-}
-
-/** 这个源是不是插件源(kind 或路径任一命中;解析器不算) */
+/** 这个源是不是插件源(kind 或路径任一命中) */
 export function isPluginSource(src) {
   if (!src) return false;
-  if (isParserSource(src)) return false;
   return isPluginKind(src.kind || src.type) || isPluginPath(src.url);
 }
 
@@ -210,17 +203,15 @@ async function handleHttp(d) {
 }
 
 function timeoutFor(hook) {
-  // 解析器的两个钩子都短:整条解析链最多 20 秒(ui/parser-chain.js 里另有总预算),
-  // 单个解析器 10 秒 —— 卡住的站点不能把播放一直吊着。
-  if (hook === "parse" || hook === "match") return 10000;
+  // 取流最慢(站点多跳),列表 / 详情次之 —— 卡住的站点不能把界面一直吊着
   return hook === "play" ? 60000 : 30000;
 }
 
 /**
  * 在沙箱里跑一个插件钩子。
  * @param {string} path 插件文件路径(同时做插件实例的缓存键)
- * @param {string} hook filters / list / search / detail / play,解析器是 match / parse
- * @param {object|string} arg 钩子参数;`match` 传页面地址(字符串)
+ * @param {string} hook filters / list / search / detail / play
+ * @param {object|string} arg 钩子参数
  */
 export async function callPlugin(path, hook, arg) {
   if (!frame) throw new Error("插件宿主还没初始化");

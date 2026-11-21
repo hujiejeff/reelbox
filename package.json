@@ -7,7 +7,7 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "tauri": "tauri",
-    "test:ui": "node --test ui/parser-chain.test.mjs ui/import-shape.test.mjs",
+    "test:ui": "node --test ui/import-shape.test.mjs",
     "verify:arch": "node scripts/verify-architecture.mjs"
   },
   "devDependencies": {
