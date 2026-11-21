@@ -7,6 +7,8 @@ import {
   isParserSource,
   looksLikePluginSource,
   looksLikeParserSource,
+  looksLikeAdapterSource,
+  ADAPTER_KIND,
   ENGINE_KIND,
   PARSER_KIND,
   PLUGIN_KIND,
@@ -2093,6 +2095,109 @@ function bindParserManager() {
   }
 }
 
+/* ---------- 设置 → 源 → 适配器块 ---------- */
+// 适配器 = 「某种源格式怎么翻译成 list/detail/play」的那部分 js
+// (契约见 docs/ARCHITECTURE.md 第 4 节)。内置四个随包安装,用户也能自己写一个导入
+// (`plugins/*.adapter.js`)。**适配器不是源**:装好之后还得有一条配置地址。
+// 清单由后端给(list_adapters):内置的写在 Rust 里,导入的是扫插件目录扫出来的。
+
+/** list_adapters() 的结果:内置在前,导入的在后。进来一次就够,删/导入之后再取 */
+let adapterList = [];
+
+/** 重新问一遍适配器清单并重画这一块。失败时保留上一次的清单,只报日志 */
+async function loadAdapters() {
+  try {
+    const list = await invoke("list_adapters");
+    adapterList = Array.isArray(list) ? list : [];
+  } catch (e) {
+    log("LIST ADAPTERS FAIL", errText(e));
+  }
+  renderAdapterManager();
+  return adapterList;
+}
+
+/**
+ * 适配器块:每行 = 名字 + 「内置 / 导入」徽标 + 一行说明。
+ * 内置的说明是 hint(config 该填什么),导入的说明是 adapter id;导入的右边带删除。
+ * 只有内置时没有提示文案,直接列出来 —— 这一块本身就是"这里有什么适配器"的答案。
+ */
+function renderAdapterManager() {
+  const box = $("adaptermgr");
+  if (!box) return;
+  box.innerHTML = (adapterList || [])
+    .map((a) => {
+      const builtin = !!a.builtin;
+      const path = String(a.path || "");
+      const note = builtin ? String(a.hint || "") : String(a.id || "");
+      return (
+        '<div class="m3e-list-item" data-type="adapter" data-builtin="' + (builtin ? "1" : "0") + '"' +
+          (builtin ? "" : ' data-path="' + esc(path) + '"') + ">" +
+          '<span class="m3e-list-item__leading">' +
+            '<span class="m3e-icon" aria-hidden="true">extension</span></span>' +
+          '<span class="m3e-list-item__content">' +
+            '<span class="m3e-list-item__headline">' +
+              '<span class="src-row__name">' + esc(a.name) + "</span>" +
+              '<span class="src-badge"' + (builtin ? "" : ' data-type="plugin"') + ">" +
+                (builtin ? "内置" : "导入") + "</span>" +
+            "</span>" +
+            '<span class="m3e-list-item__supporting">' + esc(note) + "</span>" +
+          "</span>" +
+          '<span class="m3e-list-item__trailing">' +
+            (builtin
+              ? ""
+              : '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="adapter-del" data-path="' +
+                esc(path) + '" aria-label="删除适配器 · ' + esc(a.name) + '">' +
+                '<span class="m3e-icon" aria-hidden="true">delete</span></button>') +
+          "</span>" +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+/** 删掉一个导入的适配器:删文件 + 重取清单。内置的那几个没有删除按钮 */
+async function removeAdapter(entry) {
+  if (!entry || entry.builtin || !entry.path) return;
+  const ok = await confirmDialog(
+    "删除适配器「" + entry.name + "」?",
+    "删掉之后,靠它解析的源会报「适配器没装上」。可以再导入一次。",
+    "删除",
+    true
+  );
+  if (!ok) return;
+  try {
+    await invoke("delete_adapter", { path: entry.path });
+  } catch (e) {
+    log("ADAPTER DELETE FAIL", errText(e));
+    alertDialog("删除失败", errText(e));
+    return;
+  }
+  log("adapter removed", String(entry.id));
+  await loadAdapters();
+  toast("已删除适配器「" + entry.name + "」");
+}
+
+/** 适配器块的交互:导入(复用导入对话框)+ 删除导入的 */
+function bindAdapterManager() {
+  const box = $("adaptermgr");
+  if (box && !box.dataset.bound) {
+    box.dataset.bound = "1";
+    box.onclick = (e) => {
+      const b = e.target.closest("button[data-act]");
+      if (!b || b.getAttribute("data-act") !== "adapter-del") return;
+      const path = String(b.getAttribute("data-path") || "");
+      const entry = (adapterList || []).find((x) => !x.builtin && String(x.path || "") === path);
+      removeAdapter(entry);
+    };
+  }
+  const imp = $("adapterImport");
+  if (imp && !imp.dataset.bound) {
+    imp.dataset.bound = "1";
+    imp.onclick = () => runSingleImport(undefined, { adapter: true });
+  }
+  loadAdapters();
+}
+
 /**
  * 源列表:m3e list item,每项 = 图标容器 / 名称 + 类型徽标 / 地址 + 右侧「进去看」「更多」。
  * 容器颜色按类型(点播 secondary / 插件 tertiary / 直播 error 族);当前源只把
@@ -2103,6 +2208,8 @@ function renderSourceManager() {
   // 分段计数与列表永远同源同刷:导入/新增/删除之后不会再出现 11 vs 12(I7)
   renderSrcSeg();
   renderParserManager();
+  // 适配器块用自己那份清单(list_adapters):源列表怎么变都不影响它,重画一次只为跟上
+  renderAdapterManager();
   if (!box) return;
   // 解析器不是源:它们不进这一列(下面单开一块),但 data-idx 仍按 S.sources 算
   const all = S.sources || [];
@@ -2577,7 +2684,8 @@ function singleSourceOf(data) {
 
 /**
  * 判型表(内容优先,后缀兜底):
- *   源码里调了 define(                 → 插件(前缀的兼容见 plugin-host.js)
+ *   源码里调了 define( / adapter(      → 插件(前缀的兼容见 plugin-host.js;
+ *                                        adapter 由后端判成 kind=adapter,只装文件不建源)
  *   以 <?xml 或 <rss 开头               → 源(XML)
  *   JSON 顶层有 sources 数组             → 集合源(批量导入)
  *   JSON 里有 api/url/provide.vod 等字段 → 源(JSON)
@@ -2917,20 +3025,28 @@ async function pickImportTarget(cfg) {
  * 三条路:
  *   插件(js)      → 存进插件目录就是一条源,不发网络:规则文件不用试跑
  *   解析器(js)    → 走解析器那一块(不是源,不进源列表)
+ *   适配器(js)    → 只装文件(也不是源:加源还得用它的配置地址)
  *   其余(地址 / 配置) → **先探测**(probeSource),判出适配器再建源 —— P2 的主路径
  *
- * opts.parser = true 是「导入解析器」:同一套表单与判型,只是文案换成解析器的,
- * 且只收解析器插件(普通的源插件不加进源列表,也不设当前源)。
+ * opts.parser = true 是「导入解析器」,opts.adapter = true 是「导入适配器」:
+ * 同一套表单与判型,只是文案和"只收哪种插件"不同;三者都只装文件,不设当前源。
  */
 async function runSingleImport(preset, opts) {
   const asParser = !!(opts && opts.parser);
+  const asAdapter = !!(opts && opts.adapter);
   const ctx = await pickImportTarget({
     preset: preset,
-    headline: asParser ? "导入解析器" : "导入源",
+    headline: asAdapter ? "导入适配器" : asParser ? "导入解析器" : "导入源",
     okText: "导入",
-    icon: asParser ? "troubleshoot" : "file_upload",
-    placeholder: asParser ? "D:\\…\\share.reelbox.parser.js" : "https://…/api.php/provide/vod 或 D:\\…\\source.json",
-    note: asParser
+    icon: asAdapter ? "extension" : asParser ? "troubleshoot" : "file_upload",
+    placeholder: asAdapter
+      ? "D:\\…\\my.adapter.js"
+      : asParser
+      ? "D:\\…\\share.reelbox.parser.js"
+      : "https://…/api.php/provide/vod 或 D:\\…\\source.json",
+    note: asAdapter
+      ? "适配器是一个 js 文件,入口是 reelbox.adapter({...})。装好之后,用它的配置地址「导入源」才会建出源。"
+      : asParser
       ? "解析器是一个 js 文件,写 reelbox.parser({...}):有些源只给网页地址,靠它把播放地址取出来。选本地文件或填路径都行。"
       : "一个源:接口地址、站点配置或插件文件;链接和本地文件都行。加进去之前会先试一下能不能取到片单,能用才建源。",
   });
@@ -2951,13 +3067,26 @@ async function runSingleImport(preset, opts) {
     );
     return;
   }
+  // 「导入适配器」同理:只吃适配器(reelbox.adapter 入口,或 `.adapter.js` 文件)
+  if (asAdapter && !looksLikeAdapterSource(ctx.text) && !/\.adapter\.js$/i.test(ctx.fileName || "")) {
+    alertDialog(
+      "这不是适配器",
+      "适配器文件的入口是 reelbox.adapter({...}),文件名一般以 .adapter.js 收尾。" +
+        "源配置(接口地址 / 站点配置)请用「导入源」。"
+    );
+    return;
+  }
   if (!asParser && looksLikeParserSource(ctx.text)) {
     // 从「导入源」里进来的是解析器:照解析器的规则落地(不进源列表,也不探测)
     log("import:识别为解析器");
   }
-  // 插件与解析器都是 js 文件:文件本身就是规则,存下来即可,不需要发网络试跑
-  if (asParser || looksLikeParserSource(ctx.text) || ctx.hit.type === "plugin") {
-    await applyImport("plugin", ctx.hit, ctx);
+  if (!asAdapter && looksLikeAdapterSource(ctx.text)) {
+    // 从「导入源」里进来了一个适配器:一样只装文件,提示它"这不是源"
+    log("import:识别为适配器");
+  }
+  // 插件 / 解析器 / 适配器都是 js 文件:文件本身就是规则,存下来即可,不需要发网络试跑
+  if (asParser || asAdapter || looksLikePluginSource(ctx.text) || ctx.hit.type === "plugin") {
+    await applyImport("plugin", ctx.hit, Object.assign({}, ctx, { viaAdapter: asAdapter }));
     importPicked = null;
     return;
   }
@@ -3012,8 +3141,10 @@ async function runBatchImport(preset) {
 }
 
 /**
- * 按判型结果落地:插件存进插件目录,集合源逐个加入,单源(探测过)加进列表并设为当前。
- * ctx = { target, text, fileName, name, probe, probeTarget }
+ * 按判型结果落地:插件 / 解析器 / 适配器存进插件目录,集合源逐个加入,
+ * 单源(探测过)加进列表并设为当前。
+ * ctx = { target, text, fileName, name, probe, probeTarget, viaAdapter }
+ * —— `viaAdapter` 只影响适配器那句提示:从「导入适配器」进来和从「导入源」进来的说法不一样。
  */
 async function applyImport(type, hit, ctx) {
   const given = String(ctx.name || "").trim();
@@ -3022,12 +3153,27 @@ async function applyImport(type, hit, ctx) {
     try {
       const res = await invoke("save_plugin", { fileName: ctx.fileName || "plugin.js", text: ctx.text });
       const path = String((res && res.path) || "");
-      // 后端按源码/suffix 判出来的类型:parser 的插件不是源,engine 还差一份站点配置
+      // 后端按源码/suffix 判出来的类型:parser / adapter 的插件都不是源,
+      // engine 还差一份站点配置
       const pluginKind = String((res && res.kind) || "");
       const isParser = pluginKind === PARSER_KIND;
       const isEngine = pluginKind === ENGINE_KIND;
+      const isAdapter = pluginKind === ADAPTER_KIND;
       const name = given || String((res && res.name) || "");
       const known = (S.sources || []).find((x) => x.url === path || x.id === (res && res.id));
+
+      // 适配器也不是源:装的是文件(`plugins/*.adapter.js`),不建源、不设当前源。
+      // 要加源还得有它的配置地址,那一步走「导入源」的探测(见 docs/ARCHITECTURE.md 第 4 节)。
+      if (isAdapter) {
+        log("adapter imported", String(res && res.id), path);
+        await loadAdapters(); // 「设置 → 源 → 适配器」那块立刻多一条
+        toast(
+          ctx.viaAdapter
+            ? "已导入适配器:" + name
+            : "这是适配器,已安装;要加源请用它的配置地址"
+        );
+        return;
+      }
 
       // 解析器不是源:不设为当前源,也不进源下拉;提示送到它自己那一块
       if (isParser) {
@@ -3677,6 +3823,7 @@ function bindSettings() {
   bindSetScrollLines();
   bindSourceManager();
   bindParserManager();
+  bindAdapterManager();
 
   // 播放
   const segQ = $("segQuality");

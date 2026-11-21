@@ -1334,6 +1334,19 @@
                     <p class="set-note" id="parserHint"></p>
                     <div class="srcmgr" id="parsermgr"></div>
                   </div>
+
+                  <!-- 适配器:把「某种源格式」翻译成 列表 / 详情 / 播放 的那部分 js
+                       (内置 vod / iplayr / webox / reelbox,也可以自己写一个导入进来)。
+                       适配器不是源:装好之后还得有一条配置地址(契约见 docs/ARCHITECTURE.md 第 4 节)。 -->
+                  <div class="set-block" id="adapterBlock">
+                    <div class="set-block__head set-block__head--acts">
+                      <span class="set-block__title">适配器</span>
+                      <button type="button" class="m3e-button m3e-button--outlined" id="adapterImport">
+                        <span class="m3e-icon" aria-hidden="true">extension</span>导入适配器
+                      </button>
+                    </div>
+                    <div class="srcmgr" id="adaptermgr"></div>
+                  </div>
                 </div>
               </div>
               <!-- 底栏两个键,共用一套表单(地址框 / 名称框 / 选择文件),判型用同一套函数:

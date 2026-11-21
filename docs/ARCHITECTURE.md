@@ -111,6 +111,13 @@ reelbox.adapter({
 - 错误只能用四类码:`network` / `parse` / `auth` / `unsupported`。
 - 适配器**不持有全局状态**;同一份 config 的缓存可以放在 `ctx.cache`(内核提供,按 config 键)。
 
+适配器可以是**内置**的,也可以是用户**导入**的:内置的随包安装(`plugins/builtin/` 下的
+`<名字>.adapter.js`,四个:`vod` / `iplayr` / `webox` / `reelbox`);导入的落在
+`plugins/*.adapter.js`,入口写 `reelbox.adapter({...})`(形状与 `define` 相同,只是 `kind`
+记成 `adapter`)。导入适配器**只装文件**:它不是源,不会进源列表、也不会被设为当前源 ——
+要建源还得再给一份配置地址(`config`)。清单(`list_adapters`)和删除入口在
+**设置 → 源 → 适配器**,内置的四个写在 Rust 里,导入的是扫插件目录扫出来的。
+
 ## 4.5 实施状态(2026-11-21)
 
 | 阶段 | 状态 | 提交 | 证据 |
