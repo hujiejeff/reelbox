@@ -272,13 +272,13 @@ fn fetch_index(url: &str) -> Result<Index, String> {
         return Err(format!("拉取失败: HTTP {}", resp.status().as_u16()));
     }
     let text = resp.text().map_err(|e| format!("读取失败: {e}"))?;
-    serde_json::from_str::<Index>(&text).map_err(|e| format!("不是合法的 index.json: {e}"))
+    Index::parse(&text)
 }
 
 /// 本地 json 文件当订阅:同一个格式,同一个体检
 fn read_index_file(path: &str) -> Result<Index, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("读不了这个文件: {e}"))?;
-    serde_json::from_str::<Index>(&text).map_err(|e| format!("不是合法的 index.json: {e}"))
+    Index::parse(&text)
 }
 
 // ---------------------------------------------------------------- 应用一份索引
@@ -574,8 +574,7 @@ pub async fn sub_add_file(path: String) -> Result<Report, String> {
 /// 推不出仓库在哪,与其装半个不如说清楚。
 #[tauri::command]
 pub fn sub_add_text(text: String) -> Result<Report, String> {
-    let idx: Index =
-        serde_json::from_str(&text).map_err(|e| format!("不是合法的 index.json: {e}"))?;
+    let idx = Index::parse(&text)?;
     if !idx.plugins.is_empty() || !idx.adapters.is_empty() {
         return Err("这份配置带了插件或适配器,从文件导入装不了 —— 请把它放到仓库里用地址订阅".to_string());
     }

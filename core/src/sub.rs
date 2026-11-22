@@ -118,6 +118,28 @@ pub struct Index {
 }
 
 impl Index {
+    /// 从一段文本解析索引。
+    ///
+    /// 比 `serde_json::from_str` 多一句人话:老配置把 `version` 写成数字
+    /// (`"version": 1`),直接反序列化只会抛 `invalid type: integer, expected a string`,
+    /// 用户看不出该改哪儿。
+    pub fn parse(text: &str) -> Result<Index, String> {
+        match serde_json::from_str::<Index>(text) {
+            Ok(idx) => Ok(idx),
+            Err(e) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+                    if v.get("version").map(|x| x.is_number()).unwrap_or(false) {
+                        return Err(format!(
+                            "version 要写成字符串 \"1.0.0\"(老写法是数字 {}),改一下就能装",
+                            &v["version"]
+                        ));
+                    }
+                }
+                Err(format!("不是合法的 index.json: {e}"))
+            }
+        }
+    }
+
     pub fn code_entries(&self) -> impl Iterator<Item = (&'static str, &CodeEntry)> {
         self.adapters
             .iter()
@@ -470,6 +492,17 @@ mod tests {
         let p = problems(&idx, "0.2.9");
         assert!(p.iter().any(|x| x.contains("需要应用 0.3.0 以上")), "{p:?}");
         assert_eq!(problems(&idx, "0.3.1"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_accepts_semver_and_explains_numeric() {
+        let ok = Index::parse(r#"{"schema":"reelbox-index/1","name":"t","version":"1.0.0"}"#)
+            .expect("应该能解析");
+        assert_eq!(ok.version, "1.0.0");
+        // 老配置把版本写成数字:报错要说人话,而不是 "invalid type: integer"
+        let bad = Index::parse(r#"{"schema":"reelbox-index/1","name":"t","version":3}"#)
+            .expect_err("数字版本应该被拒");
+        assert!(bad.contains("要写成字符串"), "{bad}");
     }
 
     #[test]
