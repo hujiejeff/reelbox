@@ -377,9 +377,15 @@ fn apply_index(
     // 唯一保留的温情:同 id 的源把上次的 health/probe 带过去,免得换一次订阅
     // 所有源的健康状态都变回"没测过"。
     let old = crate::commands::load_sources();
+    // 插件型源:索引里只写插件 id,装到本机后再换成真实路径
+    let plugin_paths: std::collections::HashMap<&str, String> = idx
+        .plugins
+        .iter()
+        .map(|e| (e.id.as_str(), dir.join(&e.path).to_string_lossy().to_string()))
+        .collect();
     let mut list: Vec<Source> = Vec::with_capacity(idx.sources.len());
     for s in &idx.sources {
-        let mut src = s.to_source();
+        let mut src = s.to_source(plugin_paths.get(s.plugin.as_str()).map(|x| x.as_str()));
         src.from = id.to_string();
         if let Some(prev_src) = old.iter().find(|x| x.id == src.id && x.url == src.url) {
             src.health = prev_src.health.clone();
@@ -591,7 +597,7 @@ pub fn sub_add_text(text: String) -> Result<Report, String> {
         .sources
         .iter()
         .map(|s| {
-            let mut src = s.to_source();
+            let mut src = s.to_source(None);
             src.from = id.clone();
             src
         })

@@ -66,6 +66,12 @@ pub struct SubSource {
     pub url: String,
     #[serde(default)]
     pub adapter: String,
+    /// 这个源由包里的哪个插件解析(索引 `plugins[].id`)。
+    ///
+    /// 原生插件型的源,本机 `url` 存的就是插件文件路径;订阅里没法写死别人的路径,
+    /// 所以这里存**插件 id**,装的时候换成插件装好后在本机的路径。
+    #[serde(default)]
+    pub plugin: String,
     #[serde(default)]
     pub verify: bool,
     #[serde(default, rename = "verifyUrl")]
@@ -78,12 +84,16 @@ pub struct SubSource {
 
 impl SubSource {
     /// 变成应用里的源。`from` 由调用方填(订阅 id),这里不猜。
-    pub fn to_source(&self) -> Source {
+    ///
+    /// `plugin_url` 是"这个源用的插件装在本机哪儿":给了就用它当 `url`
+    /// (原生插件的源,url 本来就是插件文件路径),否则用索引里写的地址。
+    pub fn to_source(&self, plugin_url: Option<&str>) -> Source {
+        let url = plugin_url.map(str::to_string).unwrap_or_else(|| self.url.clone());
         Source {
             id: self.id.clone(),
             name: self.name.clone(),
             kind: self.kind.clone(),
-            url: self.url.clone(),
+            url,
             adapter: self.adapter.clone(),
             verify: self.verify,
             verify_url: self.verify_url.clone(),
@@ -246,8 +256,15 @@ pub fn problems(idx: &Index, app_version: &str) -> Vec<String> {
         ));
     }
 
-    let mut ids: Vec<(String, &'static str)> = Vec::new(); // (id, 什么)
+    let mut ids: Vec<(String, &'static str)> = Vec::new(); // 代码文件(插件 / 适配器)
+    let mut src_ids: Vec<(String, &'static str)> = Vec::new(); // 源
 
+    let mut plugin_ids: Vec<String> = Vec::new();
+    for e in &idx.plugins {
+        if !e.id.is_empty() {
+            plugin_ids.push(e.id.clone());
+        }
+    }
     let mut adapter_ids: Vec<String> = Vec::new();
     for e in &idx.adapters {
         claim(&mut out, &mut ids, &e.id, "adapter");
@@ -267,7 +284,7 @@ pub fn problems(idx: &Index, app_version: &str) -> Vec<String> {
     }
 
     for s in &idx.sources {
-        claim(&mut out, &mut ids, &s.id, "source");
+        claim(&mut out, &mut src_ids, &s.id, "source");
         let who = if s.id.is_empty() { s.name.as_str() } else { &s.id };
 
         if s.id.is_empty() {
@@ -283,7 +300,12 @@ pub fn problems(idx: &Index, app_version: &str) -> Vec<String> {
                 s.kind
             ));
         }
-        if s.url.trim().is_empty() {
+        if !s.plugin.is_empty() {
+            // 插件型的源:url 可以空着(url 会被换成插件路径),但插件得在包里
+            if !plugin_ids.iter().any(|x| x == &s.plugin) {
+                out.push(format!("源 {who}:引用了不在 plugins 里的插件 {:?}", s.plugin));
+            }
+        } else if s.url.trim().is_empty() {
             out.push(format!("源 {who}:缺 url"));
         } else if !is_http(&s.url) {
             // 指向本机文件的源不能进订阅:别人装了没有那个文件
@@ -320,7 +342,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// id 全局唯一(源、插件、适配器共用一个命名空间):订阅里一个 id 只该指一件事。
+/// 一个命名空间里不重名:插件 / 适配器共用一套(都是装在 plugins/ 下的文件),
+/// 源自己一套。所以"插件 4kvm + 源 4kvm"是合法的 —— 那是两件事。
 fn claim(out: &mut Vec<String>, ids: &mut Vec<(String, &'static str)>, id: &str, what: &'static str) {
     if id.is_empty() {
         return;
@@ -495,6 +518,30 @@ mod tests {
     }
 
     #[test]
+    fn plugin_source_needs_the_plugin_and_gets_local_url() {
+        let sha = "b".repeat(64);
+        // 引用了不存在的插件:拒绝
+        let bad = Index::parse(&format!(
+            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
+                 "sources":[{{"id":"a","name":"A","type":"webox","adapter":"reelbox","plugin":"nope"}}]}}"#
+        ))
+        .unwrap();
+        assert!(problems(&bad, "").iter().any(|x| x.contains("不在 plugins 里")), "{:?}", problems(&bad, ""));
+
+        // 插件在包里:通过,且装的时候 url 换成插件路径
+        let ok = Index::parse(&format!(
+            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
+                 "plugins":[{{"id":"4kvm","name":"4K","path":"4kvm.reelbox.js","sha256":"{sha}"}}],
+                 "sources":[{{"id":"a","name":"A","type":"webox","adapter":"reelbox","plugin":"4kvm"}}]}}"#
+        ))
+        .unwrap();
+        assert_eq!(problems(&ok, ""), Vec::<String>::new());
+        let src = ok.sources[0].to_source(Some("C:/plugins/4kvm.reelbox.js"));
+        assert_eq!(src.url, "C:/plugins/4kvm.reelbox.js");
+        assert_eq!(src.adapter, "reelbox");
+    }
+
+    #[test]
     fn parse_accepts_semver_and_explains_numeric() {
         let ok = Index::parse(r#"{"schema":"reelbox-index/1","name":"t","version":"1.0.0"}"#)
             .expect("应该能解析");
@@ -512,7 +559,7 @@ mod tests {
                 "verify":true,"verifyUrl":"https://x.com","posterRatio":"16:9"}"#,
         )
         .unwrap();
-        let src = s.to_source();
+        let src = s.to_source(None);
         assert_eq!(src.kind, "live");
         assert_eq!(src.verify_url, "https://x.com");
         assert_eq!(src.poster_ratio, "16:9");
