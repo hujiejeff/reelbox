@@ -885,6 +885,15 @@
   .p-seek:hover .p-knob, .p-seek.drag .p-knob { transform: translateY(-50%) scale(1); }
 
   .p-row { display: flex; align-items: center; gap: 10px; }
+  /* 直播:进度条整条藏掉,时间位置显示红点 + 直播中 */
+  #player.is-live #pTime { color: var(--m3e-sys-color-error); font-weight: 600; letter-spacing: .2px; }
+  #player.is-live #pTime::before {
+    content: "●";
+    margin-right: 6px;
+    font-size: 9px;
+    vertical-align: 2px;
+  }
+
   .p-time { font: 600 12.5px/1 ui-monospace, Consolas, monospace; opacity: .92; }
   .p-gap { flex: 1; }
 

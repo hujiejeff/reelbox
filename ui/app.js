@@ -949,7 +949,7 @@ function isCrawlSource(src) {
 function isUsableSource(src) {
   if (!src) return false;
   const t = sourceType(src);
-  if (t !== "vod" && t !== "plugin") return false;
+  if (t !== "vod" && t !== "plugin" && t !== "live") return false;
   return !isCrawlSource(src);
 }
 
@@ -1955,8 +1955,10 @@ function sourceType(s) {
   if (!s) return "vod";
   const kind = srcKind(s);
   const url = String(s.url || "");
+  // kind=live 优先:直播源也可以是插件形态,不能因为"它是插件"就归成点播
+  if (kind === "live") return "live";
   if (isPluginSource(s)) return "plugin";
-  if (kind === "live" || /\.m3u8?$/i.test(url.split(/[?#]/)[0])) return "live";
+  if (/\.m3u8?$/i.test(url.split(/[?#]/)[0])) return "live";
   return "vod";
 }
 
@@ -4164,8 +4166,65 @@ function playerFail(info) {
 const PLAY_PATH = "M9.2 5.6v12.8L19 12z";
 const PAUSE_PATH = "M8.6 5.8h2.9v12.4H8.6z M12.5 5.8h2.9v12.4h-2.9z";
 
+// 直播:没有进度、不续播、不连播,断了自动重连
+let liveMode = false;
+let liveRetryTimer = 0;
+let liveRetryCount = 0;
+let liveLast = { url: "", name: "", mime: "" };
+
+function liveOff() {
+  liveMode = false;
+  clearTimeout(liveRetryTimer);
+  liveRetryCount = 0;
+  liveLast = { url: "", name: "", mime: "" };
+  const seek = $("seek");
+  if (seek) seek.style.display = "";
+  const prev = $("pPrev");
+  const next = $("pNext");
+  if (prev) prev.style.display = "";
+  if (next) next.style.display = "";
+  const player = $("player");
+  if (player) player.classList.remove("is-live");
+}
+
+/** 直播断流:隔 3 秒重新起一次,最多 5 次 */
+function liveRetry(reason) {
+  if (!liveMode || !liveLast.url) return;
+  if (liveRetryCount >= 5) {
+    playerFail({
+      step: "stream",
+      kind: "network",
+      title: "直播断了",
+      hint: "重连 5 次都没成。可能是源暂时挂了,换一个频道或稍后再试。",
+      raw: String(reason || ""),
+    });
+    return;
+  }
+  liveRetryCount++;
+  pStatus("直播断流,正在重连(" + liveRetryCount + "/5)…", false);
+  clearTimeout(liveRetryTimer);
+  liveRetryTimer = setTimeout(() => {
+    if (!liveMode) return;
+    openPlayer(liveLast.url, liveLast.name, liveLast.mime, "hls");
+  }, 3000);
+}
+
 function pSync() {
   const v = $("video");
+  if (liveMode) {
+    $("pTime").textContent = "直播中";
+    const playing0 = !v.paused && !v.ended;
+    $("pPlayIcon").textContent = playing0 ? "pause" : "play_arrow";
+    $("pBigPath").setAttribute("d", playing0 ? PAUSE_PATH : PLAY_PATH);
+    $("player").classList.toggle("playing", playing0);
+    if (!playing0) $("player").classList.remove("idle");
+    const vol0 = v.muted ? 0 : v.volume;
+    paintVol(vol0 * 100);
+    $("pMuteIcon").textContent = vol0 === 0 ? "volume_off" : vol0 < 0.5 ? "volume_down" : "volume_up";
+    $("pPrev").setAttribute("aria-disabled", "true");
+    $("pNext").setAttribute("aria-disabled", "true");
+    return;
+  }
   const dur = isFinite(v.duration) ? v.duration : 0;
   $("pTime").textContent = fmtTime(v.currentTime) + " / " + fmtTime(dur);
   const pct = dur ? (v.currentTime / dur) * 100 : 0;
@@ -4504,6 +4563,7 @@ function keepVolumeOpen() {
 }
 
 function closePlayer() {
+  liveOff();
   const box = $("player");
   const v = $("video");
   playSeq++; // 关播放器 = 放弃正在解析 / 取流的那条链路
@@ -4557,6 +4617,19 @@ function saveProgress(force) {
 
 function openPlayer(url, name, mime, kind) {
   const v = $("video");
+  if (liveMode) {
+    liveLast = { url: url || liveLast.url, name: name || liveLast.name, mime: mime || liveLast.mime };
+    $("player").classList.add("is-live");
+    const seek = $("seek");
+    if (seek) seek.style.display = "none";
+    const prev = $("pPrev");
+    const next = $("pNext");
+    // .p-icon 有自己的 display("grid"),单靠 hidden 属性盖不住
+    if (prev) prev.style.display = "none";
+    if (next) next.style.display = "none";
+  } else {
+    liveOff();
+  }
   const full = S.detailTitle && name && name !== S.detailTitle
     ? S.detailTitle + " · " + name
     : name || S.detailTitle || "";
@@ -4569,16 +4642,22 @@ function openPlayer(url, name, mime, kind) {
   tickTimer = setInterval(pSync, 250);
 
   v.onloadedmetadata = () => {
-    if (playCtx && playCtx.resume > 5) {
+    if (!liveMode && playCtx && playCtx.resume > 5) {
       try { v.currentTime = playCtx.resume; } catch (_) {}
     }
     pSync();
   };
   v.ontimeupdate = () => saveProgress(false);
-  v.onplaying = () => { pStatus(""); hidePlayerFail(); pSync(); };
+  v.onplaying = () => {
+    pStatus("");
+    hidePlayerFail();
+    liveRetryCount = 0;
+    pSync();
+  };
   v.onpause = pSync;
   v.onended = () => {
     const ctx = playCtx;
+    if (liveMode) return;
     pSync();
     if (!ctx || !ctx.list || !ctx.list.length) return;
     if (!autoplayOn()) {
@@ -4593,6 +4672,11 @@ function openPlayer(url, name, mime, kind) {
   // 出错先记现场:<video> 自己的错误码往往比 hls.js 的 details 更直接
   v.onerror = () => {
     const e = v.error || {};
+    if (liveMode) {
+      log("LIVE ERR", "code=" + (e.code || 0), "net=" + v.networkState);
+      liveRetry("video code=" + (e.code || 0));
+      return;
+    }
     log(
       "VIDEO ERR", "code=" + (e.code || 0), "msg=" + (e.message || ""),
       "readyState=" + v.readyState, "networkState=" + v.networkState,
@@ -4694,6 +4778,37 @@ function pageWithoutStream(st) {
 }
 
 /** 插件源的 play 钩子:返回 {sources:[{id,name,url,mime,headers}]},换成内部 Stream 形状 */
+/**
+ * 直播起播:分类 → 列表 → play,没有详情、没有进度。
+ * 复用点播那条取流链路(player_url / 白名单 / hls.js),只是把播放器切进直播模式。
+ */
+async function playLive(item) {
+  if (!item) return;
+  const gen = ++playSeq;
+  liveMode = true;
+  liveRetryCount = 0;
+  pStartLoading();
+  const title = item.title || "直播";
+  playCtx = { live: true, key: "", id: item.id, name: title, group: "", mime: "", list: [], index: -1, resume: 0 };
+  openPlayer("", title);
+  try {
+    const st = pluginMode()
+      ? await pluginStream("", item.id)
+      : await invoke("play", { source: S.source, episodeId: item.id });
+    if (gen !== playSeq) return;
+    if (!st || !st.url) throw new Error("源没有给出播放地址");
+    const local = await invoke("player_url", { stream: st });
+    lastLocalUrl = local;
+    if (gen !== playSeq) return;
+    openPlayer(local, title, st.mime || "application/x-mpegURL", "hls");
+  } catch (e) {
+    log("LIVE FAIL", e);
+    liveMode = false;
+    pStatus("取流失败");
+    playerFail(errorInfo("stream", e));
+  }
+}
+
 async function pluginStream(groupId, episodeId) {
   const res = await callAdapter(S.source, "play", {
     contentId: S.detailId || "",
@@ -4914,7 +5029,10 @@ document.addEventListener("click", (e) => {
   const card = e.target.closest(".card");
   if (card) {
     const it = S.items[Number(card.getAttribute("data-i"))];
-    if (it) return openDetail(it);
+    if (!it) return;
+    // 直播源点了就播:频道没有详情页、没有剧集
+    if (sourceType(S.source) === "live") return playLive(it);
+    return openDetail(it);
   }
 });
 

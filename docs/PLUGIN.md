@@ -94,6 +94,27 @@ const html = await ctx.http.get("https://某个站点/list", { session: s.id });
 用户也可以在 **设置 → 校验** 里自己开一个会话先试通(不写代码也能验证站点能不能过),
 会话列表里能看状态、把窗口叫回来、或者撤销。
 
+## 直播源(和点播同一套契约)
+
+直播和点播用的是**同一套钩子**,区别只在播放器:
+
+```js
+reelbox.define({
+  id: "mychannels",
+  kind: "reelbox",
+  list: async () => ({ items: [{ id: "cctv1", title: "CCTV-1", poster: "" }], next: "" }),
+  play: async (ctx, { id }) => ({
+    url: "https://example.com/cctv1.m3u8",
+    mime: "application/x-mpegURL",
+  }),
+});
+```
+
+- `detail` **不会被调用**:直播没有详情页,点频道直接播。
+- 源的 `type` 写 `live`,播放器会自动进直播模式:不显示进度条、不显示上下集、
+  显示「直播中」、不续播不连播、断流每 3 秒重连(最多 5 次)。
+- `list` 的 `filters.classify` 仍然是分类入口(比如按 `group-title` 分组)。
+
 ## 引擎插件:一份代码 + 一份站点配置
 
 把「怎么爬」和「爬哪个站」拆开的插件写法(`kind: "engine"`,站点配置放源里的
