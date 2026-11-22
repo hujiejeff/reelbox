@@ -281,6 +281,8 @@
     background: var(--m3e-sys-color-surface-container-high);
   }
   .grid--live .poster img { object-fit: contain; padding: 12px; box-sizing: border-box; }
+  /* 台标本身是宽的(接近 16:9):铺满磁贴,只留一点边 */
+  .grid--live .poster img.is-wide { object-fit: cover; padding: 4px; }
   /* 拿不到台标别留一块空灰:给个电视图标 */
   .poster__icon {
     position: absolute;

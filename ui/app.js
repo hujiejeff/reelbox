@@ -1290,6 +1290,11 @@ function appendCards(from) {
         img.alt = "";
         img.src = u;
         box.classList.add("has-img");
+        // 台标是方的就 contain(裁了会掉字),本身够宽就 cover 铺满
+        img.addEventListener("load", () => {
+          const r = img.naturalWidth / (img.naturalHeight || 1);
+          if (r >= 1.3) img.classList.add("is-wide");
+        });
         box.prepend(img);
       })
       .catch(() => {
