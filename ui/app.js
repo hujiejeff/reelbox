@@ -3685,20 +3685,110 @@ function bindVerifyPanel() {
 
 let SUB_STORE = { active: "", items: [], dirty: false };
 
+/** 读账本失败的原因(非空时列表位置换成一条错误块,而不是假装"还没有订阅") */
+let subLoadErr = "";
+
 function subActiveItem() {
   return (SUB_STORE.items || []).find((x) => x.id === SUB_STORE.active) || null;
 }
 
+/** 这条订阅的来路:远程 / 本地文件 / 本地配置 / 本地副本(一句话能扫读) */
+function subKind(it) {
+  if (it.id === "local") return "本地配置";
+  if (it.kind === "remote") return "远程";
+  if (it.path) return "本地文件";
+  return "本地副本";
+}
+
+/** ISO 时间 → `MM-DD HH:mm`。这一行是扫读用的,秒和年份都是噪音 */
+function subWhen(iso) {
+  const s = String(iso || "").trim();
+  if (!s) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(s);
+  return m ? m[2] + "-" + m[3] + " " + m[4] + ":" + m[5] : s.slice(0, 10);
+}
+
+/** 一条订阅的纯文本摘要(鼠标悬停在名字上时给全量信息) */
 function subMeta(it) {
-  const parts = ["v" + (it.version || "0.0.0"), (it.source_count || 0) + " 条源"];
-  parts.push(it.kind === "remote" ? "远程" : "本地");
+  const parts = ["v" + (it.version || "0.0.0"), (it.source_count || 0) + " 条源", subKind(it)];
   if (it.files && it.files.length) parts.push(it.files.length + " 个文件");
-  if (it.checked_at) parts.push("检查于 " + it.checked_at.replace("T", " ").replace("Z", ""));
+  if (it.has_update) parts.push("可更新 " + it.latest);
+  const when = subWhen(it.checked_at);
+  if (when) parts.push("检查于 " + when);
   return parts.join(" · ");
+}
+
+/** meta 行的小 token:每条一个 span,换行时是一列列的,不会糊成一段 */
+function subTokens(it) {
+  const out = [["v" + (it.version || "0.0.0"), "sub-card__ver"]];
+  out.push([(it.source_count || 0) + " 条源", ""]);
+  if (it.files && it.files.length) out.push([it.files.length + " 个文件", ""]);
+  out.push([subKind(it), ""]);
+  const when = subWhen(it.checked_at);
+  if (when) out.push(["检查于 " + when, ""]);
+  return out;
+}
+
+/**
+ * 一张卡只有一个主操作(填充按钮),其余都进「更多」。
+ *
+ * 优先级 = 此刻最该做的事:有新版本 → 更新;手改过 → 先存成新订阅(否则更新会盖掉);
+ * 没在用的 → 启用。正在用又没有新版本 = 没有主操作,卡上就不给按钮。
+ */
+function subPrimary(it) {
+  const active = it.id === SUB_STORE.active;
+  const dirty = active && SUB_STORE.dirty && it.id !== "local";
+  if (active && it.has_update) {
+    return { id: "update", label: "更新到 " + it.latest, fn: () => subUpdate(it) };
+  }
+  if (dirty) return { id: "clone", label: "存成新订阅", fn: () => subClone() };
+  // 「设为当前」沿用源页对当前源的说法(§2.4),别再造一个动词
+  if (!active) return { id: "switch", label: "设为当前", fn: () => subSwitch(it) };
+  return null;
+}
+
+function subTagEl(text, cls) {
+  const s = document.createElement("span");
+  s.className = cls;
+  s.textContent = text;
+  return s;
+}
+
+/** 次操作:每张卡一个 ⋮,菜单里按"这条订阅能不能用"给条目 */
+function subMenu(it, anchor) {
+  const primary = subPrimary(it);
+  const dirty = it.id === SUB_STORE.active && SUB_STORE.dirty && it.id !== "local";
+  const canCheck = it.kind === "remote" || !!it.path;
+  const items = [];
+  if (it.has_update && (!primary || primary.id !== "update")) {
+    items.push({ id: "update", label: "更新到 " + it.latest, icon: "cloud_download" });
+  }
+  if (canCheck) items.push({ id: "check", label: "检查更新", icon: "travel_explore" });
+  if (dirty && (!primary || primary.id !== "clone")) {
+    items.push({ id: "clone", label: "存成新订阅", icon: "content_copy" });
+  }
+  items.push({ id: "export", label: "导出为文件", icon: "file_upload" });
+  if (it.id !== "local") {
+    items.push({ divider: true }, { id: "remove", label: "删除订阅", icon: "delete", danger: true });
+  }
+  openMenu(
+    anchor,
+    [{ type: "label", label: subKind(it) + " · v" + (it.version || "0.0.0") }].concat(items),
+    (id) => {
+      if (id === "update") subUpdate(it);
+      else if (id === "check") subCheck(it);
+      else if (id === "clone") subClone();
+      else if (id === "export") subExport(it);
+      else if (id === "remove") subRemove(it);
+    }
+  );
 }
 
 function subCard(it) {
   const active = it.id === SUB_STORE.active;
+  // 「本地配置」的改动本来就是它自己,不该按"有本地改动"处理(那是远程订阅的语义)
+  const dirty = active && SUB_STORE.dirty && it.id !== "local";
+
   const card = document.createElement("article");
   card.className = "sub-card";
   if (active) card.dataset.active = "";
@@ -3707,68 +3797,153 @@ function subCard(it) {
   head.className = "sub-card__head";
   const text = document.createElement("div");
   text.className = "sub-card__text";
+  text.title = subMeta(it);
 
   const name = document.createElement("div");
   name.className = "sub-card__name";
-  name.append(document.createTextNode(it.name || it.id));
-  if (active) {
-    const tag = document.createElement("span");
-    tag.className = "sub-tag";
-    tag.textContent = "使用中";
-    name.append(tag);
-  }
-  if (it.has_update) {
-    const tag = document.createElement("span");
-    tag.className = "sub-tag sub-tag--new";
-    tag.textContent = "可更新 " + it.latest;
-    name.append(tag);
-  }
-  if (it.id === SUB_STORE.active && SUB_STORE.dirty) {
-    const tag = document.createElement("span");
-    tag.className = "sub-tag sub-tag--dirty";
-    tag.textContent = "有本地改动";
-    name.append(tag);
-  }
+  const title = document.createElement("span");
+  title.className = "sub-card__title";
+  title.textContent = it.name || it.id;
+  name.append(title);
+  if (active) name.append(subTagEl("使用中", "sub-tag"));
+  if (it.has_update) name.append(subTagEl("新版本 " + it.latest, "sub-tag sub-tag--new"));
 
   const meta = document.createElement("div");
   meta.className = "sub-card__meta";
-  meta.textContent = subMeta(it);
+  for (const [label, cls] of subTokens(it)) {
+    const s = document.createElement("span");
+    if (cls) s.className = cls;
+    s.textContent = label;
+    meta.append(s);
+  }
 
   text.append(name, meta);
-  head.append(text);
+  const addr = it.url || it.path || "";
+  if (addr) {
+    const line = document.createElement("div");
+    line.className = "sub-card__addr";
+    line.textContent = addr;
+    text.append(line);
+  }
 
-  const acts = document.createElement("div");
-  acts.className = "sub-card__acts";
-  const btn = (label, fn, cls) => {
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "m3e-icon-button m3e-icon-button--standard sub-card__more";
+  more.setAttribute("aria-label", "更多操作");
+  more.setAttribute("aria-haspopup", "menu");
+  more.title = "更多操作";
+  more.innerHTML = '<span class="m3e-icon" aria-hidden="true">more_vert</span>';
+  more.onclick = () => subMenu(it, more);
+  head.append(text, more);
+  card.append(head);
+
+  if (dirty) {
+    const note = document.createElement("p");
+    note.className = "sub-card__note";
+    const icon = document.createElement("span");
+    icon.className = "m3e-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "edit_note";
+    note.append(icon, document.createTextNode("有本地改动,直接更新会覆盖手改的内容。"));
+    card.append(note);
+  }
+
+  const primary = subPrimary(it);
+  if (primary) {
+    const foot = document.createElement("div");
+    foot.className = "sub-card__foot";
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "m3e-button m3e-button--text" + (cls ? " " + cls : "");
-    b.textContent = label;
-    b.onclick = fn;
-    return b;
-  };
-
-  if (!active) acts.append(btn("切换", () => subSwitch(it)));
-  if (active && SUB_STORE.dirty && it.id !== "local") acts.append(btn("存成新订阅", () => subClone()));
-  if (it.has_update) acts.append(btn("更新到 " + it.latest, () => subUpdate(it)));
-  if (it.kind === "remote" || it.path) acts.append(btn("检查", () => subCheck(it)));
-  acts.append(btn("导出", () => subExport(it)));
-  if (it.id !== "local") acts.append(btn("删除", () => subRemove(it), "sub-danger"));
-
-  card.append(head, acts);
+    b.className = "m3e-button m3e-button--filled";
+    b.textContent = primary.label;
+    b.onclick = primary.fn;
+    foot.append(b);
+    card.append(foot);
+  }
   return card;
+}
+
+/** 空态 / 读取失败共用:图标 + 一句话 + 一个主按钮 */
+function subBlank(icon, title, msg, action) {
+  const box = document.createElement("div");
+  box.className = "sub-blank";
+  const headEl = document.createElement("div");
+  headEl.className = "sub-blank__head";
+  const ic = document.createElement("span");
+  ic.className = "m3e-icon";
+  ic.setAttribute("aria-hidden", "true");
+  ic.textContent = icon;
+  headEl.append(ic, document.createTextNode(title));
+  const p = document.createElement("p");
+  p.textContent = msg;
+  box.append(headEl, p);
+  if (action) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "m3e-button m3e-button--filled";
+    b.textContent = action.label;
+    b.onclick = action.fn;
+    box.append(b);
+  }
+  return box;
+}
+
+/** 空态里那个「粘贴地址」:滚到输入框并聚焦(别让用户自己找) */
+function focusSubUrl() {
+  const input = $("subUrl");
+  if (!input) return;
+  const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  input.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
+  try {
+    input.focus({ preventScroll: true });
+  } catch (_) {
+    input.focus();
+  }
+}
+
+/** 一条都没有 = 只剩内置的本地配置,而且里面也没源 */
+function subIsEmpty(items) {
+  if (!items.length) return true;
+  return items.length === 1 && items[0].id === "local" && !(items[0].source_count || 0);
 }
 
 function renderSubs() {
   const box = $("subList");
   if (!box) return;
   box.innerHTML = "";
-  for (const it of SUB_STORE.items || []) box.append(subCard(it));
+  const items = SUB_STORE.items || [];
+  const checkAll = $("btnSubCheckAll");
+  if (checkAll) checkAll.hidden = items.length < 2;
+  if (subLoadErr) {
+    box.append(subBlank("warning", "读取订阅失败", subLoadErr, { label: "重试", fn: () => loadSubs() }));
+    return;
+  }
+  if (subIsEmpty(items)) {
+    box.append(
+      subBlank(
+        "cloud_download",
+        "还没有订阅",
+        "现在用的是内置的「本地配置」,里面还没有源。粘一份 index.json 的地址,源、插件、适配器一次装齐。",
+        { label: "粘贴地址", fn: focusSubUrl }
+      )
+    );
+    return;
+  }
+  for (const it of items) box.append(subCard(it));
 }
 
-function subSay(text) {
+/**
+ * 反馈行:成功/失败都写这一条,不占额外版面。
+ * 空字符串 = 收起来(不再挂一个「—」占位)。tone="err" 走错误色。
+ */
+function subSay(text, tone) {
   const out = $("subOut");
-  if (out) out.textContent = text;
+  if (!out) return;
+  const t = String(text == null ? "" : text).trim();
+  out.textContent = t || "—";
+  out.hidden = !t;
+  if (tone === "err") out.setAttribute("data-tone", "err");
+  else out.removeAttribute("data-tone");
 }
 
 function subReport(r) {
@@ -3795,8 +3970,10 @@ async function reloadAfterSub() {
 async function loadSubs() {
   try {
     SUB_STORE = await invoke("sub_state");
+    subLoadErr = "";
   } catch (e) {
-    log("SUB state fail", errText(e));
+    subLoadErr = errText(e);
+    log("SUB state fail", subLoadErr);
   }
   renderSubs();
 }
@@ -3806,7 +3983,7 @@ async function subCall(fn, ok) {
     const r = await fn();
     if (ok) subSay(ok(r));
   } catch (e) {
-    subSay("失败:" + errText(e));
+    subSay("失败:" + errText(e), "err");
   }
   await loadSubs();
   await reloadAfterSub();
@@ -3861,7 +4038,7 @@ async function subSwitch(it) {
         const path = await invoke("sub_export", { id: cur.id });
         subSay("已备份当前配置:" + path);
       } catch (e) {
-        subSay("备份失败,没有切换:" + errText(e));
+        subSay("备份失败,没有切换:" + errText(e), "err");
         return;
       }
     }
@@ -4029,25 +4206,52 @@ async function subReset() {
 async function subAdd() {
   const input = $("subUrl");
   const raw = input ? input.value.trim() : "";
-  if (!raw) return;
+  if (!raw) {
+    if (input) input.focus();
+    return;
+  }
   const isUrl = /^https?:/i.test(raw);
-  subSay(isUrl ? "正在拉取…" : "正在读文件…");
-  await subCall(
-    async () => {
-      const r = isUrl
-        ? await invoke("sub_add", { url: raw })
-        : await invoke("sub_add_file", { path: raw });
-      if (input) input.value = "";
-      return r;
-    },
-    subReport
-  );
+  // 拉一份索引可能要几秒:按钮自己说在干嘛,期间不给再点一次
+  const btn = $("btnSubAdd");
+  const label = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    btn.textContent = isUrl ? "正在拉取…" : "正在读取…";
+  }
+  subSay(isUrl ? "正在拉取 " + raw : "正在读 " + raw);
+  try {
+    await subCall(
+      async () => {
+        const r = isUrl
+          ? await invoke("sub_add", { url: raw })
+          : await invoke("sub_add_file", { path: raw });
+        if (input) input.value = "";
+        return r;
+      },
+      subReport
+    );
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+      btn.textContent = label || "添加";
+    }
+  }
 }
 
 function bindSubPanel() {
   const add = $("btnSubAdd");
-  if (!add || !$("subUrl")) return;
+  const input = $("subUrl");
+  if (!add || !input) return;
   add.onclick = subAdd;
+  // 粘完直接回车 = 添加(地址栏一样的习惯)
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      subAdd();
+    }
+  });
 
   const pick = $("btnSubPick");
   const file = $("subFile");
@@ -4061,7 +4265,7 @@ function bindSubPanel() {
         const text = await f.text();
         await subCall(async () => invoke("sub_add_text", { text }), subReport);
       } catch (e) {
-        subSay("读文件失败:" + errText(e));
+        subSay("读文件失败:" + errText(e), "err");
       }
       file.value = "";
     };
