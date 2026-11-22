@@ -1,3 +1,4 @@
+// @builtin-version 2   (随包升级时会按这个数字覆盖旧文件)
 // m3u / m3u8 直播频道表适配器(内置)。
 //
 // 一份 IPTV 频道表长这样:
@@ -48,12 +49,50 @@ function parse(text) {
     list.push({
       url: t,
       name: name,
+      // 频道身份:同一个 tvg-id = 同一个台的不同线路
+      id: pending["tvg-id"] || "",
       group: pending["group-title"] || "",
       logo: pending["tvg-logo"] || "",
     });
     pending = null;
   }
   return list;
+}
+
+/**
+ * 合并键:有 tvg-id 用 tvg-id(去掉 @SD/@HD 这类画质后缀),没有就退回归一化标题。
+ * 归一化只做两件事:去掉 (1080p) 这类画质、去掉空白 —— 别的都不敢动,
+ * 免得把「CCTV1」和「CCTV1 香港」并成一个。
+ */
+function mergeKey(ch) {
+  var id = String(ch.id || "").replace(/@[^@]*$/, "").trim();
+  if (id) return "id:" + id.toLowerCase();
+  var n = String(ch.name || "")
+    .toLowerCase()
+    .replace(/\((?:1080|720|576|540|480|360)p\)/g, "")
+    .replace(/\s+/g, "");
+  return "nm:" + n;
+}
+
+/** 把频道列表压成「一个台一条」,线路挂在 lines 上 */
+function groupChannels(list) {
+  var order = [];
+  var map = {};
+  for (var i = 0; i < list.length; i++) {
+    var ch = list[i];
+    var k = mergeKey(ch);
+    if (!map[k]) {
+      map[k] = { key: k, name: ch.name, group: ch.group, logo: ch.logo, lines: [] };
+      order.push(k);
+    }
+    var g = map[k];
+    if (g.lines.indexOf(ch.url) < 0) g.lines.push(ch.url);
+    if (!g.logo && ch.logo) g.logo = ch.logo;
+    if (!g.group && ch.group) g.group = ch.group;
+  }
+  return order.map(function (k) {
+    return map[k];
+  });
 }
 
 /** 频道表按 config(地址)缓存:切分组、点播放都要它,别每次都重下 */
@@ -106,17 +145,17 @@ reelbox.define({
   list: async function (ctx, arg) {
     var list = await load(ctx, arg.options);
     var want = (arg.filters && arg.filters.classify) || "";
+    var groups = groupChannels(list);
     var items = [];
-    for (var i = 0; i < list.length; i++) {
-      var ch = list[i];
-      if (want && ch.group !== want) continue;
+    for (var i = 0; i < groups.length; i++) {
+      var g = groups[i];
+      if (want && g.group !== want) continue;
       items.push({
-        // id 用全表下标:切分组也稳定,play 时能直接取回地址
-        id: "ch" + i,
-        title: ch.name,
-        poster: ch.logo,
-        // 卡片副标题:显示分组
-        remark: ch.group,
+        // id 用合并后的下标:play 时重新分组也能对上(表没变就稳定)
+        id: "g" + i,
+        title: g.name,
+        poster: g.logo,
+        remark: g.lines.length > 1 ? g.lines.length + " 条线路" : g.group,
       });
     }
     return { items: items, next: "" };
@@ -129,9 +168,13 @@ reelbox.define({
 
   play: async function (ctx, arg) {
     var list = await load(ctx, arg.options);
-    var i = parseInt(String(arg.id || "").replace(/^ch/, ""), 10);
-    var ch = list[i];
-    if (!ch) throw new Error("parse: 找不到这个频道");
-    return { url: ch.url, mime: "application/x-mpegURL" };
+    var groups = groupChannels(list);
+    var i = parseInt(String(arg.id || "").replace(/^g/, ""), 10);
+    var g = groups[i];
+    if (!g || !g.lines.length) throw new Error("parse: 找不到这个频道");
+    // 多线路:返回数组,播放器失败会顺延到下一条
+    return g.lines.map(function (u) {
+      return { url: u, mime: "application/x-mpegURL" };
+    });
   },
 });

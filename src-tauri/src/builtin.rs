@@ -43,6 +43,18 @@ fn path_of(name: &str) -> PathBuf {
         .join(format!("{name}.adapter.js"))
 }
 
+/// 从适配器源码第一行读版本标记(`// @builtin-version N`)。没有标记算 0。
+fn version_of(text: &str) -> u32 {
+    let first = text.lines().next().unwrap_or("");
+    first
+        .split('@')
+        .nth(1)
+        .and_then(|rest| rest.strip_prefix("builtin-version"))
+        .and_then(|n| n.trim().split_whitespace().next())
+        .and_then(|n| n.parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
 /// 启动时调用一次(见 `lib.rs` 的 `setup`):把内置适配器写进插件目录。
 ///
 /// **文件已存在就不动**:第一次装好之后,这个文件的作者就是用户了。
@@ -56,7 +68,17 @@ pub fn install() {
                 // 目录可能是被用户删了一半:补建一下,下次导入还能落在这里
                 let _ = std::fs::create_dir_all(dir);
             }
-            continue;
+            // 文件里的版本 >= 包里的版本:不动它(用户就地改过的也就保住了)
+            let have = std::fs::read_to_string(&path)
+                .map(|t| version_of(&t))
+                .unwrap_or(0);
+            if have >= version_of(source) {
+                continue;
+            }
+            crate::logging::event(&format!(
+                "BUILTIN {name} 升级 {have} → {}",
+                version_of(source)
+            ));
         }
         if let Some(dir) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(dir) {

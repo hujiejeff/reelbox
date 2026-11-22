@@ -1,3 +1,4 @@
+// @builtin-version 1   (随包升级时会按这个数字覆盖旧文件)
 // 适配器:苹果 CMS v10 的两种采集接口 —— JSON(`api.php/provide/vod`)与
 // XML(`/at/xml`)。
 //

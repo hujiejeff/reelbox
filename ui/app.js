@@ -4210,6 +4210,12 @@ let liveMode = false;
 let liveRetryTimer = 0;
 let liveRetryCount = 0;
 let liveLast = { url: "", name: "", mime: "" };
+// 同一个台的多条线路:失败就换下一条,全挂完才重试
+let liveLines = [];
+let liveIdx = 0;
+let liveMime = "application/x-mpegURL";
+let liveHeaders = {};
+let liveTitle = "";
 // 只出声不出画:这条流的画面编码(MPEG-2 / HEVC)WebView 解不了,只提示一次
 let liveNoVideo = false;
 
@@ -4219,6 +4225,9 @@ function liveOff() {
   liveRetryCount = 0;
   liveNoVideo = false;
   liveLast = { url: "", name: "", mime: "" };
+  liveLines = [];
+  liveIdx = 0;
+  liveTitle = "";
   const seek = $("seek");
   if (seek) seek.style.display = "";
   const prev = $("pPrev");
@@ -4231,23 +4240,43 @@ function liveOff() {
 
 /** 直播断流:隔 3 秒重新起一次,最多 5 次 */
 function liveRetry(reason) {
-  if (!liveMode || !liveLast.url) return;
-  if (liveRetryCount >= 5) {
+  if (!liveMode) return;
+  // 还有别的线路:先换下一条,这比原地重试有用得多
+  if (liveIdx + 1 < liveLines.length) {
+    liveIdx++;
+    clearTimeout(liveRetryTimer);
+    const gen = playSeq;
+    pStatus("这条线断了,换下一条(" + (liveIdx + 1) + "/" + liveLines.length + ")…", false);
+    log("LIVE switch line", liveIdx + 1 + "/" + liveLines.length);
+    liveRetryTimer = setTimeout(() => {
+      if (!liveMode) return;
+      startLiveLine(gen).catch((e) => {
+        log("LIVE line fail", String(e && e.message ? e.message : e));
+        liveRetry("line " + (liveIdx + 1));
+      });
+    }, 1200);
+    return;
+  }
+  if (!liveLast.url && !liveLines.length) return;
+  if (liveRetryCount >= 3) {
     playerFail({
       step: "stream",
       kind: "network",
       title: "直播断了",
-      hint: "重连 5 次都没成。可能是源暂时挂了,换一个频道或稍后再试。",
+      hint: "所有线路都试过了还是不行。可能是源暂时挂了,换一个频道或稍后再试。",
       raw: String(reason || ""),
     });
     return;
   }
   liveRetryCount++;
-  pStatus("直播断流,正在重连(" + liveRetryCount + "/5)…", false);
+  liveIdx = 0; // 重来一遍:从第一条线路再走
+  pStatus("所有线路都不通,再试一次(" + liveRetryCount + "/3)…", false);
   clearTimeout(liveRetryTimer);
+  const gen = playSeq;
   liveRetryTimer = setTimeout(() => {
     if (!liveMode) return;
-    openPlayer(liveLast.url, liveLast.name, liveLast.mime, "hls");
+    if (!liveLines.length) return;
+    startLiveLine(gen).catch(() => {});
   }, 3000);
 }
 
@@ -4787,6 +4816,11 @@ function openPlayer(url, name, mime, kind) {
       );
       if (!d.fatal) return;
       log("HLS FATAL", d.details);
+      // 直播:先别报死,换线路去(还有线就换,全试完才失败)
+      if (liveMode) {
+        liveRetry("hls:" + d.details);
+        return;
+      }
       pStatus("播放失败:" + d.details);
       window.__err && window.__err("hls: " + d.details);
       playerFail({
@@ -4845,16 +4879,38 @@ async function playLive(item) {
       : await invoke("play", { source: S.source, episodeId: item.id });
     if (gen !== playSeq) return;
     if (!st || !st.url) throw new Error("源没有给出播放地址");
-    const local = await invoke("player_url", { stream: st });
-    lastLocalUrl = local;
-    if (gen !== playSeq) return;
-    openPlayer(local, title, st.mime || "application/x-mpegURL", "hls");
+    liveTitle = title;
+    liveMime = st.mime || "application/x-mpegURL";
+    liveHeaders = st.headers || {};
+    // 适配器返回数组 = 同一个台的多条线路(见 examples/m3u.reelbox.js)
+    const urls = [st.url].concat((st.options || []).map((o) => o && o.url)).filter(Boolean);
+    liveLines = urls.filter((u, i) => urls.indexOf(u) === i);
+    liveIdx = 0;
+    await startLiveLine(gen);
   } catch (e) {
     log("LIVE FAIL", e);
     liveMode = false;
     pStatus("取流失败");
     playerFail(errorInfo("stream", e));
   }
+}
+
+/** 起一条线路;标题里带「线路 n/m」,多条线时用户能看出来 */
+async function startLiveLine(gen) {
+  const url = liveLines[liveIdx];
+  if (!url) throw new Error("没有可用的线路");
+  const local = await invoke("player_url", {
+    stream: { url: url, mime: liveMime, headers: liveHeaders },
+  });
+  if (gen !== playSeq) return;
+  lastLocalUrl = local;
+  liveLast = { url: local, name: liveTitle, mime: liveMime };
+  const name =
+    liveLines.length > 1
+      ? liveTitle + " · 线路 " + (liveIdx + 1) + "/" + liveLines.length
+      : liveTitle;
+  log("LIVE play line", liveIdx + 1 + "/" + liveLines.length, shortUrl(url, 90));
+  openPlayer(local, name, liveMime, "hls");
 }
 
 async function pluginStream(groupId, episodeId) {
