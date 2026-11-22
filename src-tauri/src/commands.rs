@@ -174,6 +174,13 @@ pub fn plugin_read(path: String) -> Result<String, String> {
     std::fs::read_to_string(&p).map_err(|e| format!("读插件失败: {e}"))
 }
 
+/// 适配器 id → 装在本机的文件(订阅装的适配器靠它解析)。
+/// 手动加的插件源没有对应条目,返回 None,前端会退回用 `url` 当路径。
+#[tauri::command]
+pub fn adapter_file(id: String) -> Option<String> {
+    crate::sub::adapter_file(&id).map(|p| p.to_string_lossy().to_string())
+}
+
 /// 导入时读本地文件(源配置 / 集合 / 插件源码都可能是本地文件)。
 /// 前端只拿文本,判型在 ui/app.js 的 analyzeImport 里做。
 #[tauri::command]

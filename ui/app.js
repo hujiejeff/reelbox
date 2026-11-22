@@ -167,6 +167,7 @@ async function init() {
 
 
 
+
   // 老配置里有名字塌成 "-" 的 id(见 docs/REVIEW-2026-11-14.md A1):
   // 先修 id 再往下走,收藏与进度里「源id|片名」的键会同步搬过去。
   if (migrateSourceIds()) renderFavs();
@@ -585,7 +586,8 @@ async function switchSource(src, opts) {
 // 判定只做一次(导入时写进 adapter + probe),运行时不再重新猜格式。
 
 /** 钩子跑在沙箱里的适配器(其余的交给 Rust:现在只剩 `vod-rs` 那条回滚路径) */
-const SANDBOX_ADAPTERS = ["reelbox", "webox", "iplayr", "vod", "m3u"];
+// 后端只有 vod-rs 走 Rust 的 CMS 客户端,其余(含订阅里装的适配器 id)都在沙箱跑。
+// 用黑名单而不是白名单:订阅可以带任意 id 的适配器,列不全。
 
 /** 插件文件随包安装的适配器(名字 → `builtin_adapters()` 里的键) */
 const BUILTIN_ADAPTERS = ["iplayr", "vod", "m3u"];
@@ -601,9 +603,9 @@ function sourceAdapter(src) {
   return "vod";
 }
 
-/** 钩子跑在沙箱 iframe 里吗(`vod` 是,`vod-rs` 不是) */
+/** 钩子跑在沙箱 iframe 里吗(`vod-rs` 不是,其余都是) */
 function pluginMode(src) {
-  return SANDBOX_ADAPTERS.indexOf(sourceAdapter(src || S.source)) >= 0;
+  return sourceAdapter(src || S.source) !== "vod-rs";
 }
 
 /**
@@ -637,6 +639,10 @@ async function adapterPath(src) {
     }
     return path;
   }
+  // 订阅装的适配器:按 id 问后端它落在哪个文件。
+  // 手动加的插件源没有这条记录,退回"url 就是文件路径"的老约定。
+  const hit = await invoke("adapter_file", { id: name }).catch(() => null);
+  if (hit) return String(hit);
   return String((src && src.url) || "");
 }
 
