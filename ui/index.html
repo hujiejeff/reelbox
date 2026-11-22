@@ -595,13 +595,9 @@
     background: var(--m3e-sys-color-tertiary-container);
     color: var(--m3e-sys-color-on-tertiary-container);
   }
-  .sub-dirty {
-    display: flex; flex-direction: column; gap: 8px;
-    padding: 12px 14px;
-    border-radius: var(--m3e-sys-shape-corner-large, 16px);
-    background: var(--m3e-sys-color-tertiary-container);
-    color: var(--m3e-sys-color-on-tertiary-container);
-    font: 400 14px/20px system-ui, "PingFang SC", sans-serif;
+  .sub-tag--dirty {
+    background: var(--m3e-sys-color-secondary-container);
+    color: var(--m3e-sys-color-on-secondary-container);
   }
   .sub-danger { color: var(--m3e-sys-color-error); }
   .set-block__head { display: flex; align-items: center; min-height: 24px; }
@@ -1653,13 +1649,6 @@
               <div class="set-page__scroll">
                 <div class="set-page__body">
                   <p class="set-page__sub">同一时刻只有一份配置生效。切换 = 整体换一套源;每条订阅都在本地留了快照,切回来不用联网。远程订阅改了仓库,点「检查」看有没有新版本。</p>
-
-                  <div class="sub-dirty" id="subDirty" hidden>
-                    <div class="sub-dirty__text" id="subDirtyText">当前这套源和这份订阅不一样了</div>
-                    <div class="set-acts">
-                      <button type="button" class="m3e-button m3e-button--tonal" id="btnSubClone">存成新的本地订阅</button>
-                    </div>
-                  </div>
 
                   <div class="sub-cards" id="subList"></div>
 

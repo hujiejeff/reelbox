@@ -2384,34 +2384,12 @@ async function applySources(list) {
   renderSources();
   syncSetSummaries();
   syncSearchBox(); // 有源/没源决定搜索框能不能用
-  // 用的是订阅配置、又手改了源:问一次要不要存成独立的本地订阅
-  await maybeAdoptEdit();
-}
-
-/// 远程订阅下改了源:提醒一次(只提醒一次,不然每改一次弹一次)
-let SUB_ADOPT_ASKED = false;
-async function maybeAdoptEdit() {
-  try {
-    const st = await invoke("sub_state");
-    SUB_STORE = st;
-    if (!st.dirty) {
-      SUB_ADOPT_ASKED = false;
-      return;
-    }
-    if (!st.active || st.active === "local" || SUB_ADOPT_ASKED) return;
-    SUB_ADOPT_ASKED = true;
-    const it = (st.items || []).find((x) => x.id === st.active);
-    const ok = await confirmDialog(
-      "改了订阅配置",
-      "你现在用的是「" +
-        ((it && it.name) || "订阅") +
-        "」。直接改源只存在本机,订阅一更新就会被盖回去。要不要把当前这套复制成一份新的本地订阅并切过去?",
-      "存成新订阅"
-    );
-    if (ok) await subClone();
-  } catch (e) {
-    log("SUB adopt fail", errText(e));
-  }
+  // 手改过就记一笔:卡片上会显示「有本地改动」,更新前会拦一下
+  invoke("sub_state")
+    .then((st) => {
+      SUB_STORE = st;
+    })
+    .catch((e) => log("SUB state fail", errText(e)));
 }
 
 /* ---------- 全部测速(I6) ---------- */
@@ -3745,6 +3723,12 @@ function subCard(it) {
     tag.textContent = "可更新 " + it.latest;
     name.append(tag);
   }
+  if (it.id === SUB_STORE.active && SUB_STORE.dirty) {
+    const tag = document.createElement("span");
+    tag.className = "sub-tag sub-tag--dirty";
+    tag.textContent = "有本地改动";
+    name.append(tag);
+  }
 
   const meta = document.createElement("div");
   meta.className = "sub-card__meta";
@@ -3765,6 +3749,7 @@ function subCard(it) {
   };
 
   if (!active) acts.append(btn("切换", () => subSwitch(it)));
+  if (active && SUB_STORE.dirty && it.id !== "local") acts.append(btn("存成新订阅", () => subClone()));
   if (it.has_update) acts.append(btn("更新到 " + it.latest, () => subUpdate(it)));
   if (it.kind === "remote" || it.path) acts.append(btn("检查", () => subCheck(it)));
   acts.append(btn("导出", () => subExport(it)));
@@ -3814,19 +3799,6 @@ async function loadSubs() {
     log("SUB state fail", errText(e));
   }
   renderSubs();
-  const banner = $("subDirty");
-  if (banner) {
-    const it = subActiveItem();
-    const on = !!(SUB_STORE.dirty && it && it.id !== "local");
-    banner.hidden = !on;
-    const label = $("subDirtyText");
-    if (on && label) {
-      label.textContent =
-        "当前这套源和「" +
-        (it.name || it.id) +
-        "」不一样了(可能手改过)。想留住改动就存成一份本地订阅。";
-    }
-  }
 }
 
 async function subCall(fn, ok) {
@@ -3942,7 +3914,33 @@ async function subCheckAll() {
   );
 }
 
+/** 有本地改动时点「更新」:提醒一下,给"先存成新订阅"这条路 */
+function subDirtyAsk(it) {
+  return dialog({
+    icon: "edit_note",
+    headline: "有本地改动",
+    content:
+      '<p class="dlg-text">「' +
+      esc(it.name || it.id) +
+      "」这套源你手改过。直接更新会把它<b>盖掉</b>,换回订阅里的内容。</p>" +
+      '<p class="dlg-text">存成新订阅 = 把当前这套复制成一条本地订阅,原来的订阅照常更新。</p>',
+    actions: [
+      { label: "取消", value: "cancel" },
+      { label: "直接更新", value: "update" },
+      { label: "存成新订阅", value: "clone", primary: true },
+    ],
+    dismissValue: "cancel",
+  });
+}
+
 async function subUpdate(it) {
+  // 有本地改动时更新 = 把改动盖掉。要覆盖之前先问一句 ——
+  // 提示放在这里,而不是编辑完就弹(那时候什么都不会丢)。
+  if (it.id === SUB_STORE.active && SUB_STORE.dirty) {
+    const choice = await subDirtyAsk(it);
+    if (!choice || choice === "cancel") return;
+    if (choice === "clone") await subClone(true);
+  }
   subSay("正在更新「" + (it.name || it.id) + "」…");
   await subCall(async () => invoke("sub_update", { id: it.id }), subReport);
 }
@@ -3985,9 +3983,9 @@ async function subRemove(it) {
   );
 }
 
-async function subClone() {
+async function subClone(auto) {
   const it = subActiveItem();
-  const ok = await confirmDialog(
+  const ok = auto === true ? true : await confirmDialog(
     "存成新的本地订阅",
     "当前这套源会复制成一份新的本地订阅并立刻切过去,原来那份「" +
       (it ? it.name : "") +
@@ -4071,8 +4069,7 @@ function bindSubPanel() {
 
   const all = $("btnSubCheckAll");
   if (all) all.onclick = subCheckAll;
-  const clone = $("btnSubClone");
-  if (clone) clone.onclick = subClone;
+  // 「存成新订阅」的入口在卡片上(只在有本地改动时出现),不在这里
   const reset = $("btnSubReset");
   if (reset) reset.onclick = subReset;
 
