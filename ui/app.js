@@ -3040,7 +3040,9 @@ async function readImportText(target) {
   if (looksLikeUrl(target)) {
     const r = await invoke("plugin_fetch", { url: target, headers: null });
     if (r && r.status >= 400) throw new Error("服务器返回 " + r.status);
-    return { text: String((r && r.body) || ""), fileName: "" };
+    // URL 末段当文件名:适配器靠 .adapter.js 后缀认,从链接进来的也得认得出
+    const name = target.split(/[?#]/)[0].split("/").filter(Boolean).pop() || "";
+    return { text: String((r && r.body) || ""), fileName: name };
   }
   const text = await invoke("read_text_file", { path: target });
   return { text: text, fileName: target.split(/[\\/]/).pop() || "" };
@@ -3088,10 +3090,10 @@ async function runSingleImport(preset, opts) {
     okText: "导入",
     icon: asAdapter ? "extension" : "file_upload",
     placeholder: asAdapter
-      ? "D:\\…\\my.adapter.js"
+      ? "https://…/my.adapter.js 或 D:\\…\\my.adapter.js"
       : "https://…/api.php/provide/vod 或 D:\\…\\source.json",
     note: asAdapter
-      ? "适配器是一个 js 文件,入口是 reelbox.adapter({...})。装好之后,用它的配置地址「导入源」才会建出源。"
+      ? "适配器是一个 js 文件,入口是 reelbox.adapter({...})。链接和本地文件都行;装好之后,用它的配置地址「导入源」才会建出源。"
       : "一个源:接口地址、站点配置或插件文件;链接和本地文件都行。加进去之前会先试一下能不能取到片单,能用才建源。",
   });
   if (!ctx) return;
@@ -3680,225 +3682,95 @@ function bindVerifyPanel() {
 
 // ---------------------------------------------------------------- 配置订阅
 //
-// 模型:一个生效、其余挂着。切换 = 整体换一套源,每条订阅在本地都有快照。
-// 后端算好 has_update / dirty,这边只负责画和点。
+// 交互照「源」「适配器」两页来:页头右边一个「添加」,列表用 m3e-list-item,
+// 当前生效那行 aria-current(容器换主色、名字 600),行尾只有「更多」。
 
 let SUB_STORE = { active: "", items: [], dirty: false };
-
-/** 读账本失败的原因(非空时列表位置换成一条错误块,而不是假装"还没有订阅") */
 let subLoadErr = "";
 
 function subActiveItem() {
   return (SUB_STORE.items || []).find((x) => x.id === SUB_STORE.active) || null;
 }
 
-/** 这条订阅的来路:远程 / 本地文件 / 本地配置 / 本地副本(一句话能扫读) */
 function subKind(it) {
-  if (it.id === "local") return "本地配置";
-  if (it.kind === "remote") return "远程";
-  if (it.path) return "本地文件";
-  return "本地副本";
+  return it.kind === "remote" ? "远程" : "本地";
 }
 
-/** ISO 时间 → `MM-DD HH:mm`。这一行是扫读用的,秒和年份都是噪音 */
+/** ISO → 11-22 08:12(本地时间);认不出来就原样给回去 */
 function subWhen(iso) {
-  const s = String(iso || "").trim();
-  if (!s) return "";
-  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(s);
-  return m ? m[2] + "-" + m[3] + " " + m[4] + ":" + m[5] : s.slice(0, 10);
+  const s = String(iso || "");
+  if (s.length < 16) return "";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
 }
 
-/** 一条订阅的纯文本摘要(鼠标悬停在名字上时给全量信息) */
+/** 行上那行灰字:版本 · 条数 · 来源 · 检查时间 */
 function subMeta(it) {
   const parts = ["v" + (it.version || "0.0.0"), (it.source_count || 0) + " 条源", subKind(it)];
   if (it.files && it.files.length) parts.push(it.files.length + " 个文件");
-  if (it.has_update) parts.push("可更新 " + it.latest);
   const when = subWhen(it.checked_at);
   if (when) parts.push("检查于 " + when);
   return parts.join(" · ");
 }
 
-/** meta 行的小 token:每条一个 span,换行时是一列列的,不会糊成一段 */
-function subTokens(it) {
-  const out = [["v" + (it.version || "0.0.0"), "sub-card__ver"]];
-  out.push([(it.source_count || 0) + " 条源", ""]);
-  if (it.files && it.files.length) out.push([it.files.length + " 个文件", ""]);
-  out.push([subKind(it), ""]);
-  const when = subWhen(it.checked_at);
-  if (when) out.push(["检查于 " + when, ""]);
-  return out;
-}
-
-/**
- * 一张卡只有一个主操作(填充按钮),其余都进「更多」。
- *
- * 优先级 = 此刻最该做的事:有新版本 → 更新;手改过 → 先存成新订阅(否则更新会盖掉);
- * 没在用的 → 启用。正在用又没有新版本 = 没有主操作,卡上就不给按钮。
- */
-function subPrimary(it) {
+/** 一条订阅 = 一行(和源列表同一个组件,不用另造卡片) */
+function subRow(it) {
   const active = it.id === SUB_STORE.active;
   const dirty = active && SUB_STORE.dirty && it.id !== "local";
-  if (active && it.has_update) {
-    return { id: "update", label: "更新到 " + it.latest, fn: () => subUpdate(it) };
+  let badges = "";
+  if (active) badges += '<span class="sub-badge">使用中</span>';
+  if (it.has_update) {
+    badges += '<span class="sub-badge sub-badge--new">可更新 ' + esc(it.latest) + "</span>";
   }
-  if (dirty) return { id: "clone", label: "存成新订阅", fn: () => subClone() };
-  // 「设为当前」沿用源页对当前源的说法(§2.4),别再造一个动词
-  if (!active) return { id: "switch", label: "设为当前", fn: () => subSwitch(it) };
-  return null;
+  if (dirty) badges += '<span class="sub-badge sub-badge--dirty">有本地改动</span>';
+
+  const icon = it.kind === "remote" ? "cloud_download" : "folder_open";
+  return (
+    '<div class="m3e-list-item" data-id="' + esc(it.id) + '"' + (active ? ' aria-current="true"' : "") + ">" +
+      '<span class="m3e-list-item__leading">' +
+        '<span class="m3e-icon" aria-hidden="true">' + icon + "</span></span>" +
+      '<span class="m3e-list-item__content">' +
+        '<span class="m3e-list-item__headline">' +
+          '<span class="src-row__name">' + esc(it.name || it.id) + "</span>" +
+          badges +
+        "</span>" +
+        '<span class="m3e-list-item__supporting">' + esc(subMeta(it)) + "</span>" +
+      "</span>" +
+      '<span class="m3e-list-item__trailing">' +
+        '<button type="button" class="m3e-icon-button m3e-icon-button--standard" data-act="more" data-id="' +
+          esc(it.id) + '" aria-haspopup="menu" aria-label="更多 · ' + esc(it.name || it.id) + '">' +
+          '<span class="m3e-icon" aria-hidden="true">more_vert</span></button>' +
+      "</span>" +
+    "</div>"
+  );
 }
 
-function subTagEl(text, cls) {
-  const s = document.createElement("span");
-  s.className = cls;
-  s.textContent = text;
-  return s;
-}
-
-/** 次操作:每张卡一个 ⋮,菜单里按"这条订阅能不能用"给条目 */
+/** 行尾「更多」:检查 / 更新 / 存成新订阅 / 导出 / 删除 */
 function subMenu(it, anchor) {
-  const primary = subPrimary(it);
-  const dirty = it.id === SUB_STORE.active && SUB_STORE.dirty && it.id !== "local";
+  const active = it.id === SUB_STORE.active;
+  const dirty = active && SUB_STORE.dirty && it.id !== "local";
   const canCheck = it.kind === "remote" || !!it.path;
-  const items = [];
-  if (it.has_update && (!primary || primary.id !== "update")) {
-    items.push({ id: "update", label: "更新到 " + it.latest, icon: "cloud_download" });
-  }
+  const items = [{ type: "label", label: subKind(it) + " · v" + (it.version || "0.0.0") }];
+
+  if (!active) items.push({ id: "switch", label: "设为当前", icon: "swap_horiz" });
+  if (it.has_update) items.push({ id: "update", label: "更新到 " + it.latest, icon: "cloud_download" });
   if (canCheck) items.push({ id: "check", label: "检查更新", icon: "travel_explore" });
-  if (dirty && (!primary || primary.id !== "clone")) {
-    items.push({ id: "clone", label: "存成新订阅", icon: "content_copy" });
-  }
+  if (dirty) items.push({ id: "clone", label: "存成新订阅", icon: "content_copy" });
   items.push({ id: "export", label: "导出为文件", icon: "file_upload" });
   if (it.id !== "local") {
     items.push({ divider: true }, { id: "remove", label: "删除订阅", icon: "delete", danger: true });
   }
-  openMenu(
-    anchor,
-    [{ type: "label", label: subKind(it) + " · v" + (it.version || "0.0.0") }].concat(items),
-    (id) => {
-      if (id === "update") subUpdate(it);
-      else if (id === "check") subCheck(it);
-      else if (id === "clone") subClone();
-      else if (id === "export") subExport(it);
-      else if (id === "remove") subRemove(it);
-    }
-  );
-}
 
-function subCard(it) {
-  const active = it.id === SUB_STORE.active;
-  // 「本地配置」的改动本来就是它自己,不该按"有本地改动"处理(那是远程订阅的语义)
-  const dirty = active && SUB_STORE.dirty && it.id !== "local";
-
-  const card = document.createElement("article");
-  card.className = "sub-card";
-  if (active) card.dataset.active = "";
-
-  const head = document.createElement("div");
-  head.className = "sub-card__head";
-  const text = document.createElement("div");
-  text.className = "sub-card__text";
-  text.title = subMeta(it);
-
-  const name = document.createElement("div");
-  name.className = "sub-card__name";
-  const title = document.createElement("span");
-  title.className = "sub-card__title";
-  title.textContent = it.name || it.id;
-  name.append(title);
-  if (active) name.append(subTagEl("使用中", "sub-tag"));
-  if (it.has_update) name.append(subTagEl("新版本 " + it.latest, "sub-tag sub-tag--new"));
-
-  const meta = document.createElement("div");
-  meta.className = "sub-card__meta";
-  for (const [label, cls] of subTokens(it)) {
-    const s = document.createElement("span");
-    if (cls) s.className = cls;
-    s.textContent = label;
-    meta.append(s);
-  }
-
-  text.append(name, meta);
-  const addr = it.url || it.path || "";
-  if (addr) {
-    const line = document.createElement("div");
-    line.className = "sub-card__addr";
-    line.textContent = addr;
-    text.append(line);
-  }
-
-  const more = document.createElement("button");
-  more.type = "button";
-  more.className = "m3e-icon-button m3e-icon-button--standard sub-card__more";
-  more.setAttribute("aria-label", "更多操作");
-  more.setAttribute("aria-haspopup", "menu");
-  more.title = "更多操作";
-  more.innerHTML = '<span class="m3e-icon" aria-hidden="true">more_vert</span>';
-  more.onclick = () => subMenu(it, more);
-  head.append(text, more);
-  card.append(head);
-
-  if (dirty) {
-    const note = document.createElement("p");
-    note.className = "sub-card__note";
-    const icon = document.createElement("span");
-    icon.className = "m3e-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.textContent = "edit_note";
-    note.append(icon, document.createTextNode("有本地改动,直接更新会覆盖手改的内容。"));
-    card.append(note);
-  }
-
-  const primary = subPrimary(it);
-  if (primary) {
-    const foot = document.createElement("div");
-    foot.className = "sub-card__foot";
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "m3e-button m3e-button--filled";
-    b.textContent = primary.label;
-    b.onclick = primary.fn;
-    foot.append(b);
-    card.append(foot);
-  }
-  return card;
-}
-
-/** 空态 / 读取失败共用:图标 + 一句话 + 一个主按钮 */
-function subBlank(icon, title, msg, action) {
-  const box = document.createElement("div");
-  box.className = "sub-blank";
-  const headEl = document.createElement("div");
-  headEl.className = "sub-blank__head";
-  const ic = document.createElement("span");
-  ic.className = "m3e-icon";
-  ic.setAttribute("aria-hidden", "true");
-  ic.textContent = icon;
-  headEl.append(ic, document.createTextNode(title));
-  const p = document.createElement("p");
-  p.textContent = msg;
-  box.append(headEl, p);
-  if (action) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "m3e-button m3e-button--filled";
-    b.textContent = action.label;
-    b.onclick = action.fn;
-    box.append(b);
-  }
-  return box;
-}
-
-/** 空态里那个「粘贴地址」:滚到输入框并聚焦(别让用户自己找) */
-function focusSubUrl() {
-  const input = $("subUrl");
-  if (!input) return;
-  const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  input.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
-  try {
-    input.focus({ preventScroll: true });
-  } catch (_) {
-    input.focus();
-  }
+  openMenu(anchor, items, (id) => {
+    if (id === "switch") subSwitch(it);
+    else if (id === "update") subUpdate(it);
+    else if (id === "check") subCheck(it);
+    else if (id === "clone") subClone();
+    else if (id === "export") subExport(it);
+    else if (id === "remove") subRemove(it);
+  });
 }
 
 /** 一条都没有 = 只剩内置的本地配置,而且里面也没源 */
@@ -3910,26 +3782,48 @@ function subIsEmpty(items) {
 function renderSubs() {
   const box = $("subList");
   if (!box) return;
-  box.innerHTML = "";
   const items = SUB_STORE.items || [];
-  const checkAll = $("btnSubCheckAll");
-  if (checkAll) checkAll.hidden = items.length < 2;
+
   if (subLoadErr) {
-    box.append(subBlank("warning", "读取订阅失败", subLoadErr, { label: "重试", fn: () => loadSubs() }));
+    box.innerHTML = stateCard({
+      icon: "warning",
+      title: "读取订阅失败",
+      msg: subLoadErr,
+      error: true,
+      actions: [{ id: "retry", label: "重试", primary: true }],
+    });
+    const b = box.querySelector('[data-act="retry"]');
+    if (b) b.onclick = () => loadSubs();
     return;
   }
+
   if (subIsEmpty(items)) {
-    box.append(
-      subBlank(
-        "cloud_download",
-        "还没有订阅",
-        "现在用的是内置的「本地配置」,里面还没有源。粘一份 index.json 的地址,源、插件、适配器一次装齐。",
-        { label: "粘贴地址", fn: focusSubUrl }
-      )
-    );
+    box.innerHTML = stateCard({
+      icon: "cloud_download",
+      title: "还没有订阅",
+      msg: "现在用的是内置的「本地配置」,里面还没有源。添加一份 index.json,源、插件、适配器一次装齐。",
+      actions: [{ id: "add", label: "添加订阅", primary: true }],
+    });
+    const b = box.querySelector('[data-act="add"]');
+    if (b) b.onclick = subAddDialog;
     return;
   }
-  for (const it of items) box.append(subCard(it));
+
+  box.innerHTML = items.map(subRow).join("");
+  box.onclick = (e) => {
+    const more = e.target.closest('[data-act="more"]');
+    if (more) {
+      e.stopPropagation();
+      const one = items.find((x) => x.id === more.getAttribute("data-id"));
+      if (one) subMenu(one, more);
+      return;
+    }
+    const row = e.target.closest(".m3e-list-item");
+    if (!row) return;
+    const one = items.find((x) => x.id === row.getAttribute("data-id"));
+    if (!one || one.id === SUB_STORE.active) return;
+    subSwitch(one);
+  };
 }
 
 /**
@@ -3992,9 +3886,8 @@ async function subCall(fn, ok) {
 /**
  * 切换前问一句:当前这套要不要先备份。
  *
- * 为什么值得问:切换是**完整替换** —— `sources.json` 会整个换成目标那份。
- * 目标那份有快照、随时能切回来,但用户看不出来,只看到"我的源没了"。
- * 给一个"备份成文件"的出口,这件事就不吓人了。
+ * 切换是**完整替换** —— sources.json 会整个换成目标那份。目标那份有快照、
+ * 随时能切回来,但用户看不出来,只看到"我的源没了"。给一个"备份成文件"的出口。
  *
  * 返回 "cancel" / "switch" / "backup"
  */
@@ -4162,13 +4055,16 @@ async function subRemove(it) {
 
 async function subClone(auto) {
   const it = subActiveItem();
-  const ok = auto === true ? true : await confirmDialog(
-    "存成新的本地订阅",
-    "当前这套源会复制成一份新的本地订阅并立刻切过去,原来那份「" +
-      (it ? it.name : "") +
-      "」保持原样。",
-    "存成新订阅"
-  );
+  const ok =
+    auto === true
+      ? true
+      : await confirmDialog(
+          "存成新的本地订阅",
+          "当前这套源会复制成一份新的本地订阅并立刻切过去,原来那份「" +
+            (it ? it.name : "") +
+            "」保持原样。",
+          "存成新订阅"
+        );
   if (!ok) return;
   await subCall(
     async () => {
@@ -4203,80 +4099,41 @@ async function subReset() {
   );
 }
 
-async function subAdd() {
-  const input = $("subUrl");
-  const raw = input ? input.value.trim() : "";
-  if (!raw) {
-    if (input) input.focus();
-    return;
-  }
-  const isUrl = /^https?:/i.test(raw);
-  // 拉一份索引可能要几秒:按钮自己说在干嘛,期间不给再点一次
-  const btn = $("btnSubAdd");
-  const label = btn ? btn.textContent : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.setAttribute("aria-busy", "true");
-    btn.textContent = isUrl ? "正在拉取…" : "正在读取…";
-  }
-  subSay(isUrl ? "正在拉取 " + raw : "正在读 " + raw);
-  try {
-    await subCall(
-      async () => {
-        const r = isUrl
-          ? await invoke("sub_add", { url: raw })
-          : await invoke("sub_add_file", { path: raw });
-        if (input) input.value = "";
-        return r;
-      },
-      subReport
-    );
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.removeAttribute("aria-busy");
-      btn.textContent = label || "添加";
-    }
-  }
+/**
+ * 「添加」:和「导入源」「导入适配器」同一套表单 —— 地址、本机路径、选择文件都认。
+ *
+ * 三条路的分工:
+ *   文件选择器挑的  → 内容存成快照(sub_add_text),以后不跟原文件
+ *   手打的路径      → 记住路径(sub_add_file),每次同步重读那个文件
+ *   地址            → 远程订阅(sub_add),能检查更新
+ */
+async function subAddDialog() {
+  const ctx = await pickImportTarget({
+    headline: "添加订阅",
+    okText: "添加",
+    icon: "cloud_download",
+    placeholder: "https://…/index.json 或 D:\\…\\index.json",
+    note: "地址、本机路径、选择文件都行。装完会立刻切换过去;切换前会问要不要备份当前这份。",
+  });
+  if (!ctx) return;
+  const picked = importPicked;
+  importPicked = null;
+  subSay("正在应用…");
+  await subCall(async () => {
+    if (picked) return invoke("sub_add_text", { text: ctx.text });
+    if (looksLikeUrl(ctx.target)) return invoke("sub_add", { url: ctx.target });
+    return invoke("sub_add_file", { path: ctx.target });
+  }, subReport);
 }
 
 function bindSubPanel() {
   const add = $("btnSubAdd");
-  const input = $("subUrl");
-  if (!add || !input) return;
-  add.onclick = subAdd;
-  // 粘完直接回车 = 添加(地址栏一样的习惯)
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      subAdd();
-    }
-  });
-
-  const pick = $("btnSubPick");
-  const file = $("subFile");
-  if (pick && file) {
-    pick.onclick = () => file.click();
-    file.onchange = async () => {
-      const f = file.files && file.files[0];
-      if (!f) return;
-      subSay("正在读取 " + f.name + "…");
-      try {
-        const text = await f.text();
-        await subCall(async () => invoke("sub_add_text", { text }), subReport);
-      } catch (e) {
-        subSay("读文件失败:" + errText(e), "err");
-      }
-      file.value = "";
-    };
-  }
-
+  if (!add) return;
+  add.onclick = subAddDialog;
   const all = $("btnSubCheckAll");
   if (all) all.onclick = subCheckAll;
-  // 「存成新订阅」的入口在卡片上(只在有本地改动时出现),不在这里
   const reset = $("btnSubReset");
   if (reset) reset.onclick = subReset;
-
   loadSubs();
 }
 

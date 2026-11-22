@@ -558,123 +558,30 @@
     color: var(--m3e-sys-color-on-surface-variant);
   }
   .set-block { display: flex; flex-direction: column; }
-  /* ---------- 订阅页:一张卡 = 一份配置,主操作只有一个 ---------- */
-  /* hidden 在自带 display 的元素(.m3e-button / .set-mono)上会被作者样式盖掉,
-     这一页的显隐(全部检查更新 / 反馈行)靠这一条兜住 */
-  .set-page[data-page="subs"] [hidden] { display: none; }
-  /* 块内节奏:段头 → 列表 12;块与块仍是 .set-page__body 的 24 */
-  .sub-sec { display: flex; flex-direction: column; gap: 12px; }
-
-  .sub-cards { display: flex; flex-direction: column; gap: 12px; }
-  .sub-card {
-    position: relative;
-    display: flex; flex-direction: column; gap: 10px;
-    padding: 14px 16px 14px 18px;
-    border: 1px solid var(--m3e-sys-color-outline-variant);
-    border-radius: 16px;
-    background: var(--m3e-sys-color-surface-container-low);
+  /* ---------- 订阅页:行用 .srcmgr 那一套,这里只补徽标与反馈行 ---------- */
+  /* 行上那行灰字是「版本 · 条数 · 来源」,不是地址 —— 不用等宽字体 */
+  .srcmgr.subs .m3e-list-item__content .m3e-list-item__supporting {
+    font-family: system-ui, "PingFang SC", sans-serif;
+    font-size: 12px;
+    line-height: 16px;
   }
-  /* 生效的那份:左边一条 3dp 主色色条 + 更实的底 + 标题加粗。
-     刻意不铺高饱和色 —— 同一屏里的 primary 要留给主按钮(§7.4) */
-  .sub-card[data-active] { background: var(--m3e-sys-color-surface-container-high); }
-  .sub-card[data-active]::before {
-    content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px;
-    border-radius: 0 3px 3px 0; background: var(--m3e-sys-color-primary);
-  }
-  .sub-card__head { display: flex; align-items: flex-start; gap: 8px; }
-  .sub-card__text { flex: 1; min-width: 0; }
-  .sub-card__name {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    font: 500 16px/24px system-ui, "PingFang SC", sans-serif;
-    color: var(--m3e-sys-color-on-surface);
-  }
-  .sub-card[data-active] .sub-card__name { font-weight: 600; }
-  .sub-card__title {
-    min-width: 0; max-width: 100%;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  /* meta 拆成一个个 token(版本 / 条数 / 来源 / 检查时间):靠列间距分开,不插「·」——
-     一插就有换行时落在行首的那个点(400dp 下必现)。窄屏换行也还是一列列的 */
-  .sub-card__meta {
-    display: flex; flex-wrap: wrap; align-items: baseline;
-    column-gap: 12px; row-gap: 2px; margin-top: 4px;
-    font: 500 12px/16px system-ui, "PingFang SC", sans-serif; letter-spacing: .02em;
-    color: var(--m3e-sys-color-on-surface-variant);
-  }
-  .sub-card__meta > span { white-space: nowrap; }
-  .sub-card__ver { font-family: ui-monospace, Consolas, monospace; }
-  /* 地址/路径:单行截断,等宽(§7.1 例外 1),证明"这条到底从哪来" */
-  .sub-card__addr {
-    margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font: 400 11.5px/16px ui-monospace, Consolas, monospace;
-    color: var(--m3e-sys-color-on-surface-variant);
-  }
-  /* 「更多」:唯一一个次操作入口,和源列表行同一个位置语义(§2.3) */
-  .sub-card__more { flex: none; margin: -4px -6px 0 0; }
-  .sub-card__more .m3e-icon { color: var(--m3e-sys-color-on-surface-variant); }
-  /* 有本地改动:贴在主按钮上方说一句,不藏进菜单 */
-  .sub-card__note {
-    display: flex; align-items: flex-start; gap: 6px; margin: 0;
-    padding: 8px 10px; border-radius: 12px;
-    background: var(--m3e-sys-color-surface-container-highest);
-    font: 400 12px/16px system-ui, "PingFang SC", sans-serif;
-    color: var(--m3e-sys-color-on-surface-variant);
-  }
-  .sub-card__note .m3e-icon { flex: none; font-size: 16px; line-height: 16px; }
-  /* 卡底动作行:一条细线把"信息"和"动作"分开,里面只放一个填充按钮 */
-  .sub-card__foot {
-    display: flex; align-items: center; gap: 12px;
-    padding-top: 10px;
-    border-top: 1px solid var(--m3e-sys-color-outline-variant);
-  }
-  /* 徽标:使用中不再用实底主色(那样和一屏里的主按钮打架),改用浅容器色 */
-  .sub-tag {
-    display: inline-block; padding: 1px 8px; border-radius: 999px;
+  .sub-badge {
+    flex: none; display: inline-block; padding: 1px 8px; border-radius: 999px;
     font: 500 11px/18px system-ui, "PingFang SC", sans-serif;
     background: var(--m3e-sys-color-primary-container);
     color: var(--m3e-sys-color-on-primary-container);
   }
-  .sub-tag--new {
+  .sub-badge--new {
     background: var(--m3e-sys-color-tertiary-container);
     color: var(--m3e-sys-color-on-tertiary-container);
   }
-  /* 空态 / 读取失败:一句话 + 一个主按钮(不再留一个空 div) */
-  .sub-blank {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
-    padding: 20px 18px;
-    border: 1px solid var(--m3e-sys-color-outline-variant);
-    border-radius: 16px;
-    background: var(--m3e-sys-color-surface-container-low);
+  .sub-badge--dirty {
+    background: var(--m3e-sys-color-secondary-container);
+    color: var(--m3e-sys-color-on-secondary-container);
   }
-  .sub-blank__head {
-    display: flex; align-items: center; gap: 8px;
-    font: 500 16px/24px system-ui, "PingFang SC", sans-serif;
-    color: var(--m3e-sys-color-on-surface);
-  }
-  .sub-blank__head .m3e-icon { font-size: 20px; color: var(--m3e-sys-color-on-surface-variant); }
-  .sub-blank p {
-    margin: 0; max-width: 34em;
-    font: 400 14px/20px system-ui, "PingFang SC", sans-serif;
-    color: var(--m3e-sys-color-on-surface-variant);
-  }
-  .sub-blank .m3e-button { margin-top: 4px; }
-  /* 添加区:段头 / 一句说明 / 输入 + 两个按钮,竖向 8 的节奏 */
-  .sub-add { gap: 8px; }
-  .sub-add .verify-form { margin-top: 0; }
-  /* 反馈行:成功时可能好几行(哪些没装成),给到 4 行再自己滚 */
-  .sub-out { display: block; overflow-y: auto; max-height: 104px; }
+  /* 反馈行:成功时可能好几行(哪些没装成),给到四行再自己滚 */
+  .sub-out { display: block; overflow-y: auto; max-height: 104px; margin-top: 8px; }
   .sub-out[data-tone="err"] { color: var(--m3e-sys-color-error); }
-  /* 重置:压到页脚,一条细线 + 一句小字,只有文字形态的危险按钮 */
-  .sub-danger-zone {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
-    padding-top: 16px;
-    border-top: 1px solid var(--m3e-sys-color-outline-variant);
-  }
-  .sub-danger-zone p {
-    margin: 0; max-width: 40em;
-    font: 400 12px/16px system-ui, "PingFang SC", sans-serif;
-    color: var(--m3e-sys-color-on-surface-variant);
-  }
   .sub-danger { color: var(--m3e-sys-color-error); }
   .set-block__head { display: flex; align-items: center; min-height: 24px; }
   /* 块头右侧带一个动作(源页的「导入适配器」):标题左、按钮右,间距 12 */
@@ -1714,50 +1621,30 @@
               </div>
             </section>
 
-            <!-- 配置订阅:一条链接装齐源 + 插件 + 适配器 -->
+            <!-- 配置订阅:页头「添加」+ 行列表 + 页脚动作,和「源」「适配器」两页同一套 -->
             <section class="set-page" data-page="subs">
               <header class="set-page__bar">
                 <button type="button" class="set-page__back" data-back aria-label="返回">
                   <span class="m3e-icon" aria-hidden="true">arrow_back</span>
                 </button>
-                <h2 class="set-page__title">配置订阅</h2>
+                <h2 class="set-page__title">订阅</h2>
+                <div class="set-page__acts">
+                  <button type="button" class="m3e-button m3e-button--outlined" id="btnSubAdd">
+                    <span class="m3e-icon" aria-hidden="true">add_link</span>添加
+                  </button>
+                </div>
               </header>
               <div class="set-page__scroll">
                 <div class="set-page__body">
-                  <p class="set-page__sub">同一时刻只有一份生效。切换 = 整体换一套源;每份都在本地留了快照,断网也能切回来。</p>
-
-                  <!-- 1. 订阅列表:段头挂「全部检查更新」,列表里生效的那份自带色条 -->
-                  <section class="sub-sec">
-                    <div class="set-block__head set-block__head--acts">
-                      <span class="set-block__title">订阅</span>
-                      <button type="button" class="m3e-button m3e-button--text" id="btnSubCheckAll">全部检查更新</button>
-                    </div>
-                    <div class="sub-cards" id="subList"></div>
-                  </section>
-
-                  <!-- 2. 添加:粘地址 / 从文件,两个按钮;反馈行在下面 -->
-                  <section class="set-block sub-add">
-                    <div class="set-block__head"><span class="set-block__title">添加订阅</span></div>
-                    <p class="set-page__sub">粘一份 index.json 的地址,或选一个本机 json。源、插件、适配器一次装齐。</p>
-                    <div class="verify-form">
-                      <input id="subUrl" class="set-input" spellcheck="false" autocomplete="off"
-                        placeholder="https://…/index.json 或本机 json 路径" value="">
-                      <div class="set-acts">
-                        <button type="button" class="m3e-button m3e-button--filled" id="btnSubAdd">添加</button>
-                        <button type="button" class="m3e-button m3e-button--outlined" id="btnSubPick">从文件…</button>
-                      </div>
-                    </div>
-                    <input type="file" id="subFile" accept=".json,application/json" hidden>
-                    <p class="set-mono sub-out" id="subOut" hidden>—</p>
-                  </section>
-
-                  <!-- 3. 重置:页脚一条细线,只有一句小字和一个文字按钮,不抢戏 -->
-                  <section class="sub-danger-zone">
-                    <p>重置会清空所有订阅和源,回到空白的本地配置。原来的 sources.json 会先备份一份。这一步不能撤销。</p>
-                    <button type="button" class="m3e-button m3e-button--text sub-danger" id="btnSubReset">重置全部</button>
-                  </section>
+                  <p class="set-page__sub">同一时刻只有一份生效:点一行整套换过去,右边「更多」里检查更新、导出、删除。切换前会问你,当前这份要不要先备份。</p>
+                  <div class="srcmgr subs" id="subList"></div>
+                  <p class="set-mono sub-out" id="subOut" hidden>—</p>
                 </div>
               </div>
+              <footer class="set-page__footer">
+                <button type="button" class="m3e-button m3e-button--outlined set-page__import" id="btnSubCheckAll">全部检查更新</button>
+                <button type="button" class="m3e-button m3e-button--text set-page__batch sub-danger" id="btnSubReset">重置</button>
+              </footer>
             </section>
 
             <!-- 5. 关于 -->
