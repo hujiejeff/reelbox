@@ -4210,7 +4210,7 @@ let liveMode = false;
 let liveRetryTimer = 0;
 let liveRetryCount = 0;
 let liveLast = { url: "", name: "", mime: "" };
-// 同一个台的多条线路:失败就换下一条,全挂完才重试
+// 同一个台的多条线路:由用户在右上角手动切换(不自动跳)
 let liveLines = [];
 let liveIdx = 0;
 let liveMime = "application/x-mpegURL";
@@ -4241,42 +4241,28 @@ function liveOff() {
 /** 直播断流:隔 3 秒重新起一次,最多 5 次 */
 function liveRetry(reason) {
   if (!liveMode) return;
-  // 还有别的线路:先换下一条,这比原地重试有用得多
-  if (liveIdx + 1 < liveLines.length) {
-    liveIdx++;
-    clearTimeout(liveRetryTimer);
-    const gen = playSeq;
-    pStatus("这条线断了,换下一条(" + (liveIdx + 1) + "/" + liveLines.length + ")…", false);
-    log("LIVE switch line", liveIdx + 1 + "/" + liveLines.length);
-    liveRetryTimer = setTimeout(() => {
-      if (!liveMode) return;
-      startLiveLine(gen).catch((e) => {
-        log("LIVE line fail", String(e && e.message ? e.message : e));
-        liveRetry("line " + (liveIdx + 1));
-      });
-    }, 1200);
-    return;
-  }
-  if (!liveLast.url && !liveLines.length) return;
+  // 不自动换线路(用户自己用右上角那个按钮换),这里只重连当前这条
+  if (!liveLast.url) return;
   if (liveRetryCount >= 3) {
     playerFail({
       step: "stream",
       kind: "network",
-      title: "直播断了",
-      hint: "所有线路都试过了还是不行。可能是源暂时挂了,换一个频道或稍后再试。",
+      title: "这条线路播不了",
+      hint:
+        liveLines.length > 1
+          ? "右上角可以换一条线路(" + liveLines.length + " 条),或者点重试。"
+          : "重连 3 次都没成。可能是源暂时挂了,换一个频道或稍后再试。",
       raw: String(reason || ""),
     });
+    renderLevels();
     return;
   }
   liveRetryCount++;
-  liveIdx = 0; // 重来一遍:从第一条线路再走
-  pStatus("所有线路都不通,再试一次(" + liveRetryCount + "/3)…", false);
+  pStatus("直播断流,正在重连(" + liveRetryCount + "/3)…", false);
   clearTimeout(liveRetryTimer);
-  const gen = playSeq;
   liveRetryTimer = setTimeout(() => {
     if (!liveMode) return;
-    if (!liveLines.length) return;
-    startLiveLine(gen).catch(() => {});
+    openPlayer(liveLast.url, liveLast.name, liveLast.mime, "hls");
   }, 3000);
 }
 
@@ -4346,6 +4332,25 @@ function pTogglePlay() {
 function renderLevels() {
   const btn = $("pQuality");
   const menu0 = $("pLevels");
+  // 直播:这里放「线路」,不是清晰度
+  if (playCtx && playCtx.lines && playCtx.lines.length > 1) {
+    const n = playCtx.lines.length;
+    const cur = playCtx.lineIdx || 0;
+    btn.hidden = false;
+    btn.textContent = "线路 " + (cur + 1) + "/" + n;
+    menu0.innerHTML = playCtx.lines
+      .map((_, i) => '<button data-line="' + i + '">线路 ' + (i + 1) + "</button>")
+      .join("");
+    menu0.querySelectorAll("button").forEach((b) => {
+      const i = Number(b.getAttribute("data-line"));
+      if (i === cur) b.setAttribute("aria-current", "true");
+      b.onclick = () => {
+        menu0.hidden = true;
+        switchLiveLine(i);
+      };
+    });
+    return;
+  }
   // 插件给了多档:直接用插件的档位
   const opts = (playCtx && playCtx.options) || [];
   if (opts.length > 1) {
@@ -4463,7 +4468,10 @@ function bindPlayer() {
   $("pRetry").onclick = () => {
     const c = playCtx;
     hidePlayerFail();
-    if (c && c.id) playEpisode(c.id, c.name, c.group || "");
+    if (!c || !c.id) return;
+    // 直播没有剧集:重试 = 把这条线路再起一次
+    if (c.live) return playLive({ id: c.id, title: c.name });
+    playEpisode(c.id, c.name, c.group || "");
   };
 
   $("pPrev").onclick = () => jumpEpisode(-1);
@@ -4895,10 +4903,26 @@ async function playLive(item) {
   }
 }
 
+/** 换线路:用户在右上角点的,失败不自动跳,只有这里会换 */
+function switchLiveLine(i) {
+  if (!liveMode || !liveLines.length) return;
+  if (i < 0 || i >= liveLines.length) return;
+  liveIdx = i;
+  if (playCtx) playCtx.lineIdx = i;
+  liveRetryCount = 0;
+  pStartLoading("切换线路…");
+  startLiveLine(playSeq).catch((e) => {
+    log("LIVE switch fail", String(e && e.message ? e.message : e));
+    liveRetry("manual switch");
+  });
+}
+
 /** 起一条线路;标题里带「线路 n/m」,多条线时用户能看出来 */
 async function startLiveLine(gen) {
   const url = liveLines[liveIdx];
   if (!url) throw new Error("没有可用的线路");
+  // 解析地址可能要点时间,先摆加载态(有时候看着"没 loading"就是这段空的)
+  pStartLoading("加载中…");
   const local = await invoke("player_url", {
     stream: { url: url, mime: liveMime, headers: liveHeaders },
   });
@@ -4910,7 +4934,12 @@ async function startLiveLine(gen) {
       ? liveTitle + " · 线路 " + (liveIdx + 1) + "/" + liveLines.length
       : liveTitle;
   log("LIVE play line", liveIdx + 1 + "/" + liveLines.length, shortUrl(url, 90));
+  if (playCtx) {
+    playCtx.lines = liveLines;
+    playCtx.lineIdx = liveIdx;
+  }
   openPlayer(local, name, liveMime, "hls");
+  renderLevels();
 }
 
 async function pluginStream(groupId, episodeId) {
