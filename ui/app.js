@@ -4184,11 +4184,14 @@ let liveMode = false;
 let liveRetryTimer = 0;
 let liveRetryCount = 0;
 let liveLast = { url: "", name: "", mime: "" };
+// 只出声不出画:这条流的画面编码(MPEG-2 / HEVC)WebView 解不了,只提示一次
+let liveNoVideo = false;
 
 function liveOff() {
   liveMode = false;
   clearTimeout(liveRetryTimer);
   liveRetryCount = 0;
+  liveNoVideo = false;
   liveLast = { url: "", name: "", mime: "" };
   const seek = $("seek");
   if (seek) seek.style.display = "";
@@ -4225,6 +4228,12 @@ function liveRetry(reason) {
 function pSync() {
   const v = $("video");
   if (liveMode) {
+    // 有声音没画面:说明音频轨能解、视频轨不能。常见于 MPEG-2 / HEVC 的老 IPTV 源
+    if (!liveNoVideo && v.readyState >= 2 && v.videoWidth === 0) {
+      liveNoVideo = true;
+      pStatus("只有声音:这条流的画面编码不受支持(常见于 MPEG-2 / HEVC 频道)", false);
+      log("LIVE no video", "audio=" + v.readyState + " vw=0");
+    }
     $("pTime").textContent = "直播中";
     const playing0 = !v.paused && !v.ended;
     $("pPlayIcon").textContent = playing0 ? "pause" : "play_arrow";

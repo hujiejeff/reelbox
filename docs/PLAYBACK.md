@@ -4,6 +4,25 @@
 
 ![播放实拍](playback.png)
 
+## 内置解码器能放什么
+
+WebView2(Chromium)自带的解码器有限,IPTV 那种老流经常踩线。实测这台机器上
+`MediaSource.isTypeSupported` 的结果:
+
+| 编码 | 支持 |
+| --- | --- |
+| H.264 / AVC | ✅ |
+| AAC | ✅ |
+| MP3(MPEG-1 Layer III) | ✅ |
+| AC-3 | ✅ |
+| **MPEG-2 video** | ❌ |
+| **HEVC / H.265** | ❌ |
+| **MP2(mp4a.40.33)** | ❌ |
+
+所以会出现「有声音没画面」:音频轨能解、视频轨是 MPEG-2/HEVC 就黑屏。
+播放器检测到 `videoWidth === 0` 时会提示一句「画面编码不受支持」,不再让人干瞪眼。
+Android 那边是系统解码器,MPEG-2 一般能放 —— 同一个源换个端可能就正常。
+
 ## 为什么要本地反代
 
 桌面 WebView 直接播 m3u8 有三个绕不过去的问题:
