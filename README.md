@@ -6,10 +6,26 @@ Tauri 2 + Rust 核心 + 原生 Web UI,一套代码跑 Windows / macOS / Linux。
 
 ## 能力
 
-- **三类源**:苹果 CMS(`vod` / `xml`)、JS 插件(`.js`)、网络索引批量导入
-- **播放**:本地 HLS 反代 + hls.js;mp4 直链按内容判型走原生 `<video>`;支持 Range 拖动
-- **插件沙箱**:JS 插件在 WebView 的 sandbox iframe 中执行(`origin: null`,读不到父页 DOM 与宿主 IPC),支持 `ctx.compute.run` 运行 wasm
-- **适配器**:把苹果 CMS、iplayr 配置、WeBox 老插件这些不同格式翻译成同一套接口;内置三个,也能导入自己的
+**源**
+
+- **点播**:苹果 CMS(JSON / XML)、iplayr 配置(XPath 规则)、WeBox 老插件、自己写的 JS 插件
+- **直播**:`m3u / m3u8` 频道表,粘地址就能用;同一个台的多条线路合并成一张卡,右上角手动切
+- **适配器**:把上面这些不同格式翻译成同一套 `list / detail / play`;内置 `vod` / `iplayr` / `m3u`,
+  也能导入自己写的
+- **人工校验**:站点要过 Cloudflare 或登录时,在应用内打开真实页面让用户点一次,
+  之后的请求带着这套会话走(cookie 不出本机)
+
+**播放**
+
+- 本地 HLS 反代 + hls.js;mp4 直链按内容判型走原生 `<video>`;支持 Range 拖动
+- 反代每请求一线程(直播边下分片边刷清单不会互相堵)
+- 直播模式:无进度条、无上下集、「● 直播中」、断流重连
+- 内置解码器能放什么、放不了什么,见 [docs/PLAYBACK.md](docs/PLAYBACK.md)
+
+**运行时**
+
+- **插件沙箱**:JS 插件在 WebView 的 sandbox iframe 中执行(`origin: null`,读不到父页 DOM 与宿主 IPC),
+  支持 `ctx.compute.run` 运行 wasm
 - **界面**:Material 3 Expressive(m3e)+ Material You 动态取色,明 / 暗 / 纯黑 / 多配色
 - **细节**:进度记忆、自动连播、手动清晰度、收藏、源测速、列表与详情的加载 / 空 / 错误三态
 
@@ -38,7 +54,15 @@ cargo build --release
 cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 ```
 
-验收脚本在仓库根目录:`verify-playback.ps1`(静态接线检查)、`verify-plugin-playback.ps1`(连跑插件源自检)。二进制支持 `--selftest`,会自己跑一遍列表 → 详情 → 播放并把结果写进日志。
+验收:
+
+```bash
+npm run test:ui          # 前端纯逻辑(node --test)
+npm run verify:arch      # 架构自检 + 上面的测试
+```
+
+另有 `verify-playback.ps1`(静态接线检查)、`verify-plugin-playback.ps1`(连跑插件源自检)。
+二进制支持 `--selftest`,会自己跑一遍列表 → 详情 → 播放并把结果写进日志。
 
 ## 关于源
 
@@ -51,7 +75,10 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 | 文件 | 内容 |
 | --- | --- |
 | [docs/SPEC.md](docs/SPEC.md) | 源契约 |
-| [docs/PLUGIN.md](docs/PLUGIN.md) | 插件契约 |
+| **[docs/AUTHORING-ADAPTER.md](docs/AUTHORING-ADAPTER.md)** | **写一个适配器(翻译一种格式)** |
+| **[docs/AUTHORING-PLUGIN.md](docs/AUTHORING-PLUGIN.md)** | **写一个源插件(搞定一个站点)** |
+| **[docs/AUTHORING-IPLAYR.md](docs/AUTHORING-IPLAYR.md)** | **写一份 iplayr 配置(XPath 规则)** |
+| [docs/PLUGIN.md](docs/PLUGIN.md) | 插件契约(v1 全量) |
 | [docs/PLUGIN-QUICKSTART.md](docs/PLUGIN-QUICKSTART.md) | 三分钟写一个插件 |
 | [docs/PLUGIN-RUNTIME.md](docs/PLUGIN-RUNTIME.md) | 插件运行时与两套引擎 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 内核 / 适配器两层与迁移计划 |
@@ -72,7 +99,13 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 
 ## 状态
 
-开发中。已覆盖点播(三类源、播放、收藏、源管理);直播源在路线图 v0.3。
+开发中,自用为主。
+
+- 点播:四类源、播放、收藏、源管理、进度记忆 —— 可用
+- 直播:m3u 频道表、多线路、断流重连 —— 可用(编码受限,见 [docs/PLAYBACK.md](docs/PLAYBACK.md))
+- 人工校验:Cloudflare / 登录页 —— 可用(拦截型 WAF 除外,那种是真封)
+- 移动端:Android / iOS 构建链路在,最近一轮网络层与播放层重构后未回归
+
 
 ## 许可
 
