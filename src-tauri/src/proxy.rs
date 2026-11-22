@@ -72,6 +72,27 @@ pub fn wrap(url: &str, headers: &str) -> String {
 }
 
 /// 起服务(只起一次),返回端口
+/// 同时在处理的请求上限。到了上限就地处理(背压),不会无限开线程。
+const MAX_INFLIGHT: usize = 48;
+static INFLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// 每个请求一个线程。
+///
+/// **不能串行**:HLS 直播里播放器一边下几 MB 的分片、一边每几秒来取一次清单,
+/// 串行时那个分片会把清单刷新堵在后头,播放器等到超时(实测 levelLoadTimeOut)。
+fn serve(req: tiny_http::Request) {
+    let n = INFLIGHT.fetch_add(1, Ordering::Relaxed);
+    if n >= MAX_INFLIGHT {
+        INFLIGHT.fetch_sub(1, Ordering::Relaxed);
+        handle(req);
+        return;
+    }
+    std::thread::spawn(move || {
+        handle(req);
+        INFLIGHT.fetch_sub(1, Ordering::Relaxed);
+    });
+}
+
 pub fn ensure() -> u16 {
     *PORT.get_or_init(|| {
         let server = Server::http("127.0.0.1:0").expect("proxy: 端口绑定失败");
@@ -82,7 +103,7 @@ pub fn ensure() -> u16 {
             .port();
         std::thread::spawn(move || {
             for req in server.incoming_requests() {
-                handle(req);
+                serve(req);
             }
         });
         port
