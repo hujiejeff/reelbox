@@ -3273,7 +3273,7 @@ dependencies = [
 
 [[package]]
 name = "reelbox"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "reelbox-core",
@@ -3287,7 +3287,7 @@ dependencies = [
 
 [[package]]
 name = "reelbox-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "boa_engine",
  "image",

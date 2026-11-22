@@ -70,7 +70,7 @@ npm run verify:arch      # 架构自检 + 上面的测试
 
 源与插件的关系见 [docs/SOURCES.md](docs/SOURCES.md)。
 
-不想一条条加的话,可以把它们放进一个仓库做成**配置订阅**:设置 → 订阅,粘一个 `index.json` 地址,源、插件、适配器一次装齐。做法见 [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md)。
+不想一条条加的话,可以把它们放进一个仓库做成**配置订阅**:设置 → 订阅,粘一个 `index.json` 地址,源和适配器一次装齐。做法见 [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md)。
 
 ## 文档
 
@@ -87,7 +87,7 @@ npm run verify:arch      # 架构自检 + 上面的测试
 | [docs/ARCHITECTURE-EVIDENCE.md](docs/ARCHITECTURE-EVIDENCE.md) | 三层架构的验收快照(可复现) |
 | [docs/ENGINE-PLUGINS.md](docs/ENGINE-PLUGINS.md) | 引擎插件 + 站点配置(一个插件爬一类站) |
 | [docs/SOURCES.md](docs/SOURCES.md) | 源与插件的区别、存放位置、回落规则 |
-| [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md) | 配置订阅:index.json 格式、合并规则、安全边界 |
+| [docs/SUBSCRIPTIONS.md](docs/SUBSCRIPTIONS.md) | 配置订阅:index.json(v2)格式、安装流程、安全边界 |
 | [docs/PLAYBACK.md](docs/PLAYBACK.md) | 播放架构、反代设计、已知限制 |
 | [docs/NETWORK.md](docs/NETWORK.md) | 网络出口:系统代理、FakeIP、超时与重试 |
 | [docs/DESIGN-SPEC-UI.md](docs/DESIGN-SPEC-UI.md) | 界面规格 |

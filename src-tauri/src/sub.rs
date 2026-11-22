@@ -34,11 +34,11 @@ const KIND_REMOTE: &str = "remote";
 /// 拿它和磁盘上现在的指纹比,就知道用户有没有动过。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InstalledFile {
+    /// 适配器 id(索引 adapters[].id)
     pub id: String,
-    /// `adapter` / `plugin`
-    pub kind: String,
     /// `plugins/` 下的文件名
     pub file: String,
+    /// **装的时候**自己算的指纹,不来自索引 —— 用来判断用户有没有手改过
     pub sha256: String,
 }
 
@@ -141,6 +141,21 @@ pub struct Report {
 
 fn base() -> PathBuf {
     crate::paths::base_dir()
+}
+
+/// 适配器 id → 装在本机的文件。运行时(commands::plugin_path)靠它找代码。
+///
+/// 从账本里翻:每份订阅记着它装过哪些适配器、落到哪个文件。
+pub fn adapter_file(id: &str) -> Option<PathBuf> {
+    for item in store_load().items {
+        if let Some(f) = item.files.iter().find(|f| f.id == id) {
+            let p = crate::paths::plugins_dir().join(&f.file);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 fn store_path() -> PathBuf {
@@ -293,7 +308,7 @@ fn apply_index(
     prev: &[InstalledFile],
     force: bool,
 ) -> Result<(Vec<InstalledFile>, Vec<Source>, Report), String> {
-    let problems = sub::problems(idx, env!("CARGO_PKG_VERSION"));
+    let problems = sub::problems(idx);
     if !problems.is_empty() {
         return Err(format!(
             "这份配置有问题,没有安装:\n· {}",
@@ -308,69 +323,89 @@ fn apply_index(
         ..Default::default()
     };
 
-    // ---- 文件 ----
+    // ---- 代码:只装被源引用到的适配器 ----
+    //
+    // 索引里没有 sha256,所以每次同步都把代码拉一遍再和本地比:
+    //   一样        → 什么都不做
+    //   不一样,本地没改过 → 覆盖
+    //   不一样,本地改过   → 不覆盖,列进报告
     let dir = crate::paths::plugins_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("建插件目录失败: {e}"))?;
     let mut files: Vec<InstalledFile> = Vec::new();
+    let used: Vec<&sub::Adapter> = idx
+        .adapters
+        .iter()
+        .filter(|a| idx.sources.iter().any(|x| x.adapter == a.id))
+        .collect();
 
-    for (kind, e) in idx.code_entries() {
-        // path 可能是文件名,也可能是绝对地址;落盘一律用文件名
-        let name = sub::local_name(&e.path);
+    for a in used {
+        let name = sub::local_name(&a.url);
         let target = dir.join(&name);
-        let want = e.sha256.to_lowercase();
-        let prev_rec = prev.iter().find(|f| f.kind == kind && f.id == e.id).cloned();
+        let url = sub::resolve(base_url, &a.url);
+        let prev_rec = prev.iter().find(|f| f.id == a.id).cloned();
 
-        if target.exists() {
-            let cur = std::fs::read(&target)
-                .map(|b| sub::sha256_hex(&b))
-                .unwrap_or_default();
-            if cur == want {
-                files.push(InstalledFile {
-                    id: e.id.clone(),
-                    kind: kind.into(),
-                    file: name.clone(),
-                    sha256: want,
-                });
-                continue;
-            }
-            // 用户改过的判据:磁盘现状 ≠ 我上次写下它的指纹
-            let untouched = prev_rec.as_ref().map(|r| r.sha256 == cur).unwrap_or(false);
-            if !untouched && !force {
-                report
-                    .skipped
-                    .push(format!("{} {}:本地已改过,保留你的版本", kind, e.id));
-                files.push(prev_rec.unwrap_or(InstalledFile {
-                    id: e.id.clone(),
-                    kind: kind.into(),
-                    file: name.clone(),
-                    sha256: cur,
-                }));
-                continue;
-            }
-        }
-
-        let src = sub::code_url(base_url, &e.path);
-        match fetch_bytes(&src) {
-            Ok(bytes) => {
-                let got = sub::sha256_hex(&bytes);
-                if got != want {
-                    report.skipped.push(format!(
-                        "{} {}:下载到的内容和索引里的 sha256 对不上,没装",
-                        kind, e.id
-                    ));
-                    continue;
+        let bytes = match fetch_bytes(&url) {
+            Ok(b) => b,
+            Err(err) => {
+                // 拉不到:本地已经有一份就继续用它,别让整份配置因为一个 404 装不上
+                if target.exists() {
+                    report.skipped.push(format!("适配器 {}:更新失败({err}),继续用本地这份", a.id));
+                    // 本地这份也得记进账本 —— 不然运行时按 id 找不到文件
+                    let sha = std::fs::read(&target)
+                        .map(|b| sub::sha256_hex(&b))
+                        .unwrap_or_default();
+                    files.push(prev_rec.unwrap_or(InstalledFile {
+                        id: a.id.clone(),
+                        file: name,
+                        sha256: sha,
+                    }));
+                } else {
+                    report.skipped.push(format!("适配器 {}:{err}", a.id));
                 }
+                continue;
+            }
+        };
+        let want = sub::sha256_hex(&bytes);
+        let cur = std::fs::read(&target).ok().map(|x| sub::sha256_hex(&x));
+
+        match cur {
+            Some(c) if c == want => files.push(InstalledFile {
+                id: a.id.clone(),
+                file: name,
+                sha256: want,
+            }),
+            Some(c) => {
+                let untouched = prev_rec.as_ref().map(|r| r.sha256 == c).unwrap_or(false);
+                if untouched || force {
+                    std::fs::write(&target, &bytes)
+                        .map_err(|err| format!("写 {} 失败: {err}", a.url))?;
+                    report.files += 1;
+                    files.push(InstalledFile {
+                        id: a.id.clone(),
+                        file: name,
+                        sha256: want,
+                    });
+                } else {
+                    report
+                        .skipped
+                        .push(format!("适配器 {}:本地已改过,保留你的版本", a.id));
+                    files.push(prev_rec.unwrap_or(InstalledFile {
+                        id: a.id.clone(),
+                        file: name,
+                        sha256: c,
+                    }));
+                }
+            }
+            None => {
                 std::fs::write(&target, &bytes)
-                    .map_err(|err| format!("写 {} 失败: {err}", e.path))?;
+                    .map_err(|err| format!("写 {} 失败: {err}", a.url))?;
                 report.files += 1;
                 files.push(InstalledFile {
-                    id: e.id.clone(),
-                    kind: kind.into(),
-                    file: name.clone(),
+                    id: a.id.clone(),
+                    file: name,
                     sha256: want,
                 });
             }
-            Err(err) => report.skipped.push(format!("{} {}:{}", kind, e.id, err)),
         }
     }
 
@@ -380,14 +415,9 @@ fn apply_index(
     // 所有源的健康状态都变回"没测过"。
     let old = crate::commands::load_sources();
     // 插件型源:索引里只写插件 id,装到本机后再换成真实路径
-    let plugin_paths: std::collections::HashMap<&str, String> = idx
-        .plugins
-        .iter()
-        .map(|e| (e.id.as_str(), dir.join(&e.path).to_string_lossy().to_string()))
-        .collect();
     let mut list: Vec<Source> = Vec::with_capacity(idx.sources.len());
     for s in &idx.sources {
-        let mut src = s.to_source(plugin_paths.get(s.plugin.as_str()).map(|x| x.as_str()));
+        let mut src = s.to_source();
         src.from = id.to_string();
         if let Some(prev_src) = old.iter().find(|x| x.id == src.id && x.url == src.url) {
             src.health = prev_src.health.clone();
@@ -583,10 +613,10 @@ pub async fn sub_add_file(path: String) -> Result<Report, String> {
 #[tauri::command]
 pub fn sub_add_text(text: String) -> Result<Report, String> {
     let idx = Index::parse(&text)?;
-    if !idx.plugins.is_empty() || !idx.adapters.is_empty() {
-        return Err("这份配置带了插件或适配器,从文件导入装不了 —— 请把它放到仓库里用地址订阅".to_string());
+    if !idx.adapters.is_empty() {
+        return Err("这份配置带了适配器,从文件导入装不了 —— 请把它放到仓库里用地址订阅".to_string());
     }
-    let problems = sub::problems(&idx, env!("CARGO_PKG_VERSION"));
+    let problems = sub::problems(&idx);
     if !problems.is_empty() {
         return Err(format!("这份配置有问题,没有安装:
 · {}", problems.join("
@@ -599,7 +629,7 @@ pub fn sub_add_text(text: String) -> Result<Report, String> {
         .sources
         .iter()
         .map(|s| {
-            let mut src = s.to_source(None);
+            let mut src = s.to_source();
             src.from = id.clone();
             src
         })

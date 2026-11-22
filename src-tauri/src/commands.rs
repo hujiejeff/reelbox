@@ -115,7 +115,14 @@ fn plugin_path(src: &Source) -> Result<std::path::PathBuf, String> {
         "vod" => crate::builtin::adapter_path("vod").ok_or_else(|| {
             "内置 vod 适配器没装上(插件目录里找不到 builtin/vod.adapter.js):重装或重编应用即可".to_string()
         }),
-        _ => Ok(std::path::PathBuf::from(&src.url)),
+        other => {
+            // 订阅装的适配器:按 id 去账本里找它落在哪个文件
+            if let Some(p) = crate::sub::adapter_file(other) {
+                return Ok(p);
+            }
+            // 手工加的插件源:当年就是把文件路径写进了 url
+            Ok(std::path::PathBuf::from(&src.url))
+        }
     }
 }
 

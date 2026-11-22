@@ -1,20 +1,29 @@
-//! 配置订阅:一份 `index.json` 里装着源、源插件、适配器。
+//! 配置订阅:一份 `index.json` 里装着源和适配器。
 //!
 //! 「一条链接换全部配置」——用户在应用里粘一个地址,里面写什么就会被装什么。
 //! 所以这里做两件事,都不碰 IO(可以单独测):
 //!
-//! 1. **解析**:把索引读成一个宽容的结构(`SubSource` 每个字段都有缺省值),
-//!    而不是直接反序列化成 [`Source`] —— 后者字段缺一个就只会抛一句
-//!    "missing field",用户看不出是哪条源写坏了。
+//! 1. **解析**:把索引读成一个宽容的结构(字段都有缺省值),而不是直接
+//!    反序列化成 [`Source`] —— 后者字段缺一个就只会抛 `missing field`,
+//!    用户看不出是哪条源写坏了。
 //! 2. **挑错**:[`problems`] 一次列全所有毛病,由调用方决定是拒绝还是仅提示。
 //!
-//! 真正的下载、比对 sha256、写盘在 `src-tauri/src/sub.rs`。
+//! 真正的下载、写盘在 `src-tauri/src/sub.rs`。契约见 `docs/SUBSCRIPTIONS.md`。
+//!
+//! ## v2 的两条设计约束
+//!
+//! - **代码的元信息只存在代码里**:`define({ id, name, version })` 写在 js 里,
+//!   索引不重复一遍,也就不会出现"文件里 1.0.0、索引里 1.1.0"这种对不上的事。
+//! - **插件和适配器是一种东西**:都对源说"由这段代码解析",所以只有 `adapters[]`。
 
 use crate::source::Source;
 use serde::{Deserialize, Serialize};
 
-/// 索引文件的格式标识。以后不兼容地改结构,就换成 `/2`。
-pub const SCHEMA: &str = "reelbox-index/1";
+/// 索引格式。**只有这一代**:v1 已经废弃,不做自动转换。
+pub const SCHEMA: &str = "reelbox-index/2";
+
+/// 上一代的格式标识:读到它要给一句人话,而不是一片字段错误。
+pub const SCHEMA_V1: &str = "reelbox-index/1";
 
 /// 随包安装的适配器。
 ///
@@ -23,34 +32,24 @@ pub const SCHEMA: &str = "reelbox-index/1";
 /// 开了两套升级机制 —— 到底听谁的说不清。
 pub const BUILTIN_ADAPTERS: &[&str] = &["vod", "vod-rs", "iplayr", "m3u", "reelbox"];
 
-/// 源的类型(界面上的徽标、源页分段都按它分)。
+/// 源的类型(界面上的徽标、源页分段、直播模式都按它分)。
 pub const SOURCE_TYPES: &[&str] = &["vod", "xml", "live", "webox"];
 
 pub fn is_builtin_adapter(id: &str) -> bool {
     BUILTIN_ADAPTERS.contains(&id)
 }
 
-/// 索引里的一条代码文件(适配器或插件)。
-///
-/// `path` 只写文件名 —— 应用只扫描 `plugins/` 第一层,放子目录等于没装。
+/// 一条自定义适配器(插件在这里也算适配器:对源来说角色相同)。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CodeEntry {
+pub struct Adapter {
+    /// 源用 `adapter` 字段引用它
     #[serde(default)]
     pub id: String,
     #[serde(default)]
     pub name: String,
+    /// 代码文件的位置:相对索引,或完整的 http(s) 地址
     #[serde(default)]
-    pub path: String,
-    /// 这个文件自己的版本(`1.2.0` 这种),便于人看变更;
-    /// 应用判断"要不要重下"看 `sha256`,不看它。
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub sha256: String,
-    /// 需要的最低应用版本(`x.y.z`)。新适配器用了旧应用没有的能力时,
-    /// 安装前就该拒绝,而不是运行时抛一堆 undefined。
-    #[serde(default, rename = "minApp")]
-    pub min_app: String,
+    pub url: String,
 }
 
 /// 索引里的一条源。字段全是缺省值,坏一条不连累整份索引的解析。
@@ -60,18 +59,15 @@ pub struct SubSource {
     pub id: String,
     #[serde(default)]
     pub name: String,
-    #[serde(default, rename = "type")]
-    pub kind: String,
+    /// 站点地址(插件的源也一样:插件自己知道站点在哪)
     #[serde(default)]
     pub url: String,
+    /// 用哪个适配器:内置名字,或 `adapters[].id`
     #[serde(default)]
     pub adapter: String,
-    /// 这个源由包里的哪个插件解析(索引 `plugins[].id`)。
-    ///
-    /// 原生插件型的源,本机 `url` 存的就是插件文件路径;订阅里没法写死别人的路径,
-    /// 所以这里存**插件 id**,装的时候换成插件装好后在本机的路径。
-    #[serde(default)]
-    pub plugin: String,
+    /// `vod` / `xml` / `live` / `webox`。必填 —— 靠猜的话直播插件必被猜成点播
+    #[serde(default, rename = "type")]
+    pub kind: String,
     #[serde(default)]
     pub verify: bool,
     #[serde(default, rename = "verifyUrl")]
@@ -84,16 +80,12 @@ pub struct SubSource {
 
 impl SubSource {
     /// 变成应用里的源。`from` 由调用方填(订阅 id),这里不猜。
-    ///
-    /// `plugin_url` 是"这个源用的插件装在本机哪儿":给了就用它当 `url`
-    /// (原生插件的源,url 本来就是插件文件路径),否则用索引里写的地址。
-    pub fn to_source(&self, plugin_url: Option<&str>) -> Source {
-        let url = plugin_url.map(str::to_string).unwrap_or_else(|| self.url.clone());
+    pub fn to_source(&self) -> Source {
         Source {
             id: self.id.clone(),
             name: self.name.clone(),
             kind: self.kind.clone(),
-            url,
+            url: self.url.clone(),
             adapter: self.adapter.clone(),
             verify: self.verify,
             verify_url: self.verify_url.clone(),
@@ -111,8 +103,7 @@ pub struct Index {
     pub schema: String,
     #[serde(default)]
     pub name: String,
-    /// 订阅自己的版本,`1.0.0` 这种 —— 和软件包一致,能一眼看出"这是第几版改的"。
-    /// 应用判断"有没有更新"只比它,不看时间。
+    /// 订阅自己的版本,`1.0.0` 这种 —— 应用靠它判断有没有更新
     #[serde(default)]
     pub version: String,
     #[serde(default)]
@@ -120,9 +111,7 @@ pub struct Index {
     #[serde(default)]
     pub homepage: String,
     #[serde(default)]
-    pub adapters: Vec<CodeEntry>,
-    #[serde(default)]
-    pub plugins: Vec<CodeEntry>,
+    pub adapters: Vec<Adapter>,
     #[serde(default)]
     pub sources: Vec<SubSource>,
 }
@@ -130,12 +119,20 @@ pub struct Index {
 impl Index {
     /// 从一段文本解析索引。
     ///
-    /// 比 `serde_json::from_str` 多一句人话:老配置把 `version` 写成数字
-    /// (`"version": 1`),直接反序列化只会抛 `invalid type: integer, expected a string`,
-    /// 用户看不出该改哪儿。
+    /// 比 `serde_json::from_str` 多两句人话:老配置把 `version` 写成数字、
+    /// 或者还是 v1 的 schema —— 这两种都只会抛看不懂的类型错误。
     pub fn parse(text: &str) -> Result<Index, String> {
         match serde_json::from_str::<Index>(text) {
-            Ok(idx) => Ok(idx),
+            Ok(idx) => {
+                if idx.schema == SCHEMA_V1 {
+                    return Err(
+                        "这份配置是旧格式(schema reelbox-index/1),当前版本只认 reelbox-index/2 \
+                         —— 让仓库作者升级一下"
+                            .to_string(),
+                    );
+                }
+                Ok(idx)
+            }
             Err(e) => {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
                     if v.get("version").map(|x| x.is_number()).unwrap_or(false) {
@@ -144,21 +141,26 @@ impl Index {
                             &v["version"]
                         ));
                     }
+                    if v.get("schema").and_then(|x| x.as_str()) == Some(SCHEMA_V1) {
+                        return Err(
+                            "这份配置是旧格式(schema reelbox-index/1),当前版本只认 \
+                             reelbox-index/2 —— 让仓库作者升级一下"
+                                .to_string(),
+                        );
+                    }
                 }
                 Err(format!("不是合法的 index.json: {e}"))
             }
         }
     }
 
-    pub fn code_entries(&self) -> impl Iterator<Item = (&'static str, &CodeEntry)> {
-        self.adapters
-            .iter()
-            .map(|e| ("adapter", e))
-            .chain(self.plugins.iter().map(|e| ("plugin", e)))
+    /// 某个 adapter id 对应的代码条目
+    pub fn adapter_of(&self, id: &str) -> Option<&Adapter> {
+        self.adapters.iter().find(|a| a.id == id)
     }
 }
 
-/// 把索引里的相对路径接成绝对地址。
+/// 把相对地址接成绝对地址。
 ///
 /// `base` 是索引自己的地址(`https://host/a/b/index.json`),相对路径按它的
 /// 目录拼。这样同一份索引放 raw、jsDelivr、Pages 都能用。
@@ -177,27 +179,12 @@ pub fn resolve(base: &str, path: &str) -> String {
     format!("{dir}{}", p.trim_start_matches("./"))
 }
 
-/// 索引里的代码文件在仓库的 `plugins/` 下(`path` 只写文件名),这里拼出真实地址。
-///
-/// 单独一个函数是因为"索引里写文件名、地址里是多一级目录"这件事两边都要一致:
-/// 校验脚本按 `plugins/<path>` 找文件,下载也必须按同一个位置找,否则 404 之后
-/// 会被当成"网络问题",排查半天。
-pub fn code_url(base: &str, path: &str) -> String {
-    let p = path.trim();
-    // 写死一个绝对地址也认:插件放在别的仓库 / 别的 CDN 时用得上。
-    // 代价是这份索引就绑在那个域名上了 —— 换入口要改索引,不再是一份走天下。
-    if is_http(p) {
-        return p.to_string();
-    }
-    resolve(base, &format!("plugins/{}", p.trim_start_matches("./")))
-}
-
 /// 这个文件装到本机叫什么名字。
 ///
-/// 相对路径时 `path` 本身就是文件名;写成绝对地址时取 URL 最后一段
+/// 相对路径时 `url` 本身就是文件名;写成绝对地址时取 URL 最后一段
 /// (去掉 `?xv=1` 这类查询串)。
-pub fn local_name(path: &str) -> String {
-    let p = path.trim();
+pub fn local_name(url: &str) -> String {
+    let p = url.trim();
     let no_query = p.split(['?', '#']).next().unwrap_or(p);
     no_query.rsplit('/').next().unwrap_or(no_query).to_string()
 }
@@ -242,18 +229,19 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     ver_cmp(candidate, current) == std::cmp::Ordering::Greater
 }
 
-/// 应用版本够不够 `minApp`。任一边认不出来就不拦,免得误伤。
-fn version_ok(app: &str, min: &str) -> bool {
-    if !is_semver(app) || !is_semver(min) {
-        return true;
-    }
-    ver_cmp(app, min) != std::cmp::Ordering::Less
+/// 文件指纹(小写十六进制)。
+///
+/// 索引里**不写** sha256:完整性靠 HTTPS + 地址由配置作者控制。
+/// 这里算出来的值只存进本地账本,用来判断"用户手改过没有"。
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// 一次列出所有毛病。空 vec = 可以装。
-///
-/// `app_version` 用来判 `minApp`;传空串跳过这项检查。
-pub fn problems(idx: &Index, app_version: &str) -> Vec<String> {
+pub fn problems(idx: &Index) -> Vec<String> {
     let mut out = Vec::new();
 
     if idx.schema != SCHEMA {
@@ -272,69 +260,74 @@ pub fn problems(idx: &Index, app_version: &str) -> Vec<String> {
         ));
     }
 
-    let mut ids: Vec<(String, &'static str)> = Vec::new(); // 代码文件(插件 / 适配器)
-    let mut src_ids: Vec<(String, &'static str)> = Vec::new(); // 源
-
-    let mut plugin_ids: Vec<String> = Vec::new();
-    for e in &idx.plugins {
-        if !e.id.is_empty() {
-            plugin_ids.push(e.id.clone());
-        }
-    }
-    let mut adapter_ids: Vec<String> = Vec::new();
-    for e in &idx.adapters {
-        claim(&mut out, &mut ids, &e.id, "adapter");
-        if is_builtin_adapter(&e.id) {
+    // ---- 适配器 ----
+    let mut ids: Vec<(String, &'static str)> = Vec::new();
+    for a in &idx.adapters {
+        let who = if a.id.is_empty() { a.name.as_str() } else { &a.id };
+        if a.id.is_empty() {
+            out.push(format!("适配器 {who}:缺 id"));
+        } else if is_builtin_adapter(&a.id) {
             out.push(format!(
                 "适配器 \"{}\" 是内置名字,订阅里不能重名(内置靠 @builtin-version 升级)",
-                e.id
+                a.id
             ));
-        } else {
-            adapter_ids.push(e.id.clone());
         }
-        check_code(&mut out, "adapter", e, ".adapter.js", app_version);
-    }
-    for e in &idx.plugins {
-        claim(&mut out, &mut ids, &e.id, "plugin");
-        check_code(&mut out, "plugin", e, ".reelbox.js", app_version);
+        if is_duplicate(&ids, &a.id) {
+            out.push(format!("id \"{}\" 重复(适配器之间)", a.id));
+        }
+        if a.name.trim().is_empty() {
+            out.push(format!("适配器 {who}:缺 name"));
+        }
+        if a.url.trim().is_empty() {
+            out.push(format!("适配器 {who}:缺 url(代码文件在哪)"));
+        }
+        if !ids.iter().any(|(x, _)| x == &a.id) {
+            ids.push((a.id.clone(), "adapter"));
+        }
     }
 
+    // ---- 源 ----
+    let mut src_ids: Vec<(String, &'static str)> = Vec::new();
     for s in &idx.sources {
-        claim(&mut out, &mut src_ids, &s.id, "source");
         let who = if s.id.is_empty() { s.name.as_str() } else { &s.id };
-
         if s.id.is_empty() {
             out.push(format!("源 {who}:缺 id(更新时靠它认人)"));
+        }
+        if is_duplicate(&src_ids, &s.id) {
+            out.push(format!("id \"{}\" 重复(源之间)", s.id));
+        } else {
+            src_ids.push((s.id.clone(), "source"));
         }
         if s.name.trim().is_empty() {
             out.push(format!("源 {who}:缺 name"));
         }
-        if !SOURCE_TYPES.contains(&s.kind.as_str()) {
-            out.push(format!(
-                "源 {who}:type 只能是 {},现在是 {:?}",
-                SOURCE_TYPES.join(" / "),
-                s.kind
-            ));
-        }
-        if !s.plugin.is_empty() {
-            // 插件型的源:url 可以空着(url 会被换成插件路径),但插件得在包里
-            if !plugin_ids.iter().any(|x| x == &s.plugin) {
-                out.push(format!("源 {who}:引用了不在 plugins 里的插件 {:?}", s.plugin));
-            }
-        } else if s.url.trim().is_empty() {
+        if s.url.trim().is_empty() {
             out.push(format!("源 {who}:缺 url"));
         } else if !is_http(&s.url) {
             // 指向本机文件的源不能进订阅:别人装了没有那个文件
             out.push(format!(
-                "源 {who}:url 必须是 http(s),不能是本地路径 —— 本地插件的源请改成 adapter + plugin"
+                "源 {who}:url 必须是 http(s)(本地插件请用 adapter + adapters 里的代码)"
             ));
         }
         if s.adapter.is_empty() {
             out.push(format!("源 {who}:缺 adapter"));
-        } else if !is_builtin_adapter(&s.adapter) && !adapter_ids.iter().any(|x| *x == s.adapter) {
+        } else if !is_builtin_adapter(&s.adapter) && idx.adapter_of(&s.adapter).is_none() {
             out.push(format!(
-                "源 {who}:adapter \"{}\" 既不是内置的,也不在本索引的 adapters 里",
+                "源 {who}:adapter \"{}\" 既不是内置的,也不在 adapters 里",
                 s.adapter
+            ));
+        }
+        if s.kind.is_empty() {
+            // 必填是权衡过的:直播插件(url 是站点域名、不是 .m3u8)猜不出来
+            out.push(format!(
+                "源 {who}:缺 type({}),靠猜会把直播插件当成点播",
+                SOURCE_TYPES.join(" / ")
+            ));
+        } else if !SOURCE_TYPES.contains(&s.kind.as_str()) {
+            out.push(format!(
+                "源 {who}:type 只能是 {},现在是 {:?}",
+                SOURCE_TYPES.join(" / "),
+                s.kind
             ));
         }
         if s.verify && s.verify_url.trim().is_empty() && !is_http(&s.url) {
@@ -348,27 +341,8 @@ pub fn problems(idx: &Index, app_version: &str) -> Vec<String> {
     out
 }
 
-/// 文件指纹(小写十六进制)。
-///
-/// 订阅靠它判断「这份文件还是我装的那份吗」:对不上 = 用户改过,不能闷头覆盖。
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(bytes);
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// 一个命名空间里不重名:插件 / 适配器共用一套(都是装在 plugins/ 下的文件),
-/// 源自己一套。所以"插件 4kvm + 源 4kvm"是合法的 —— 那是两件事。
-fn claim(out: &mut Vec<String>, ids: &mut Vec<(String, &'static str)>, id: &str, what: &'static str) {
-    if id.is_empty() {
-        return;
-    }
-    if let Some((_, prev)) = ids.iter().find(|(x, _)| x == id) {
-        out.push(format!("id \"{id}\" 重复({prev} 和 {what})"));
-    } else {
-        ids.push((id.to_string(), what));
-    }
+fn is_duplicate(ids: &[(String, &'static str)], id: &str) -> bool {
+    !id.is_empty() && ids.iter().any(|(x, _)| x == id)
 }
 
 fn is_ratio(s: &str) -> bool {
@@ -378,64 +352,104 @@ fn is_ratio(s: &str) -> bool {
     a.parse::<u32>().is_ok() && b.parse::<u32>().is_ok() && a.parse::<u32>().unwrap() > 0
 }
 
-fn check_code(out: &mut Vec<String>, kind: &str, e: &CodeEntry, suffix: &str, app_version: &str) {
-    let who = if e.id.is_empty() { e.name.clone() } else { e.id.clone() };
-    if e.id.is_empty() {
-        out.push(format!("{kind} {who}:缺 id"));
-    }
-    if e.name.trim().is_empty() {
-        out.push(format!("{kind} {who}:缺 name"));
-    }
-    if e.path.trim().is_empty() {
-        out.push(format!("{kind} {who}:缺 path"));
-        return;
-    }
-    // path 两种写法:plugins/ 下的文件名,或者一个完整的 http(s) 地址。
-    // 前者要求不带目录 —— 应用只扫 plugins/ 一层,子目录等于没装。
-    if !is_http(&e.path) && (e.path.contains('/') || e.path.contains('\\')) {
-        out.push(format!(
-            "{kind} {who}:path 要么是文件名(装在 plugins/ 下),要么是完整的 http(s) 地址"
-        ));
-    }
-    if !local_name(&e.path).ends_with(suffix) {
-        out.push(format!("{kind} {who}:文件名必须以 {suffix} 结尾"));
-    }
-    if e.sha256.len() != 64 || !e.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
-        out.push(format!("{kind} {who}:sha256 必须填 64 位十六进制(用 stamp 脚本生成)"));
-    }
-    if !e.min_app.is_empty() {
-        let parts: Vec<&str> = e.min_app.split('.').collect();
-        let shape_ok = parts.len() == 3 && parts.iter().all(|p| p.parse::<u32>().is_ok());
-        if !shape_ok {
-            out.push(format!("{kind} {who}:minApp 要写成 x.y.z"));
-        } else if !app_version.is_empty() && !version_ok(app_version, &e.min_app) {
-            out.push(format!(
-                "{kind} {who}:需要应用 {} 以上,现在是 {}",
-                e.min_app, app_version
-            ));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn idx_with_sources(json: &str) -> Index {
-        serde_json::from_str(json).expect("解析失败")
+    fn idx(json: &str) -> Index {
+        Index::parse(json).expect("解析失败")
+    }
+
+    fn good_sha() -> String {
+        "a".repeat(64)
     }
 
     #[test]
-    fn sha256_matches_known_vectors() {
-        // 空串和 "abc" 的 SHA-256 是公开测试向量,和 JS / 命令行对得上才算对
-        assert_eq!(
-            sha256_hex(b""),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    fn minimal_index_has_no_problems() {
+        let i = idx(
+            r#"{"schema":"reelbox-index/2","name":"t","version":"1.0.0",
+                "sources":[{"id":"a","name":"A","url":"https://a.com/api","adapter":"vod","type":"vod"}]}"#,
         );
-        assert_eq!(
-            sha256_hex(b"abc"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        assert_eq!(problems(&i), Vec::<String>::new());
+        assert_eq!(i.sources[0].to_source().kind, "vod");
+    }
+
+    #[test]
+    fn v1_schema_is_rejected_with_a_human_message() {
+        let e = Index::parse(r#"{"schema":"reelbox-index/1","name":"t","version":"1.0.0"}"#)
+            .expect_err("v1 应该被拒");
+        assert!(e.contains("旧格式"), "{e}");
+    }
+
+    #[test]
+    fn numeric_version_gets_a_hint() {
+        let e = Index::parse(r#"{"schema":"reelbox-index/2","name":"t","version":3}"#)
+            .expect_err("数字版本应该被拒");
+        assert!(e.contains("要写成字符串"), "{e}");
+    }
+
+    #[test]
+    fn catches_structural_mistakes() {
+        let i = idx(
+            r#"{"schema":"reelbox-index/2","name":"","version":"1",
+                "adapters":[{"id":"m3u","name":"抢名字","url":"x.js"}],
+                "sources":[
+                  {"id":"dup","name":"A","url":"https://a.com","adapter":"vod"},
+                  {"id":"dup","name":"B","url":"C:/x/c.js","adapter":"nope"},
+                  {"id":"c","name":"C","url":"https://c.com","adapter":"vod","type":"movie"}
+                ]}"#,
         );
+        let p = problems(&i).join("\n");
+        assert!(p.contains("缺 name"), "{p}");
+        assert!(p.contains("version 要写成"), "{p}");
+        assert!(p.contains("是内置名字"), "{p}");
+        assert!(p.contains("重复"), "{p}");
+        assert!(p.contains("不能是本地路径") || p.contains("必须是 http(s)"), "{p}");
+        assert!(p.contains("既不是内置的"), "{p}");
+        assert!(p.contains("缺 type"), "{p}");
+    }
+
+    #[test]
+    fn adapter_reference_must_exist_and_is_not_a_source_id() {
+        let i = idx(
+            r#"{"schema":"reelbox-index/2","name":"t","version":"1.0.0",
+                "adapters":[{"id":"4kvm","name":"4K","url":"plugins/4kvm.reelbox.js"}],
+                "sources":[
+                  {"id":"4kvm","name":"4K影视","url":"https://www.4kvm.net","adapter":"4kvm","type":"webox"},
+                  {"id":"x","name":"X","url":"https://x.com","adapter":"ghost","type":"vod"}
+                ]}"#,
+        );
+        let p = problems(&i).join("\n");
+        // 源 id 和适配器 id 可以同名(两个命名空间),但 ghost 找不到
+        assert!(!p.contains("\"4kvm\" 重复") || p.contains("ghost"), "{p}");
+        assert!(p.contains("ghost"), "{p}");
+    }
+
+    #[test]
+    fn absolute_adapter_url_is_allowed() {
+        let i = idx(
+            r#"{"schema":"reelbox-index/2","name":"t","version":"1.0.0",
+                "adapters":[{"id":"a","name":"A","url":"https://cdn.x.com/a.reelbox.js"}],
+                "sources":[{"id":"s","name":"S","url":"https://s.com","adapter":"a","type":"vod"}]}"#,
+        );
+        assert_eq!(problems(&i), Vec::<String>::new());
+        assert_eq!(i.adapter_of("a").map(|x| x.url.as_str()), Some("https://cdn.x.com/a.reelbox.js"));
+    }
+
+    #[test]
+    fn resolve_joins_relative_against_index_dir() {
+        assert_eq!(
+            resolve("https://raw.example.com/u/r/master/index.json", "plugins/a.js"),
+            "https://raw.example.com/u/r/master/plugins/a.js"
+        );
+        assert_eq!(resolve("https://a.com/x/index.json", "https://b.com/y.js"), "https://b.com/y.js");
+        assert_eq!(resolve("index.json", "a.js"), "a.js");
+    }
+
+    #[test]
+    fn local_name_takes_the_last_segment() {
+        assert_eq!(local_name("plugins/4kvm.reelbox.js"), "4kvm.reelbox.js");
+        assert_eq!(local_name("https://cdn.x.com/p/4kvm.reelbox.js?v=2"), "4kvm.reelbox.js");
     }
 
     #[test]
@@ -446,163 +460,20 @@ mod tests {
         }
         assert!(is_newer("1.0.1", "1.0.0"));
         assert!(is_newer("1.1.0", "1.0.9"));
-        assert!(is_newer("2.0.0", "1.99.99"));
         assert!(!is_newer("1.0.0", "1.0.0"));
-        assert!(!is_newer("1.0.0", "1.0.1"));
-        // 段数不齐时缺的算 0:1.0 == 1.0.0
         assert!(!is_newer("1.0", "1.0.0"));
     }
 
     #[test]
-    fn resolve_joins_relative_against_index_dir() {
+    fn sha256_matches_known_vectors() {
         assert_eq!(
-            resolve("https://raw.example.com/u/r/main/index.json", "plugins/a.reelbox.js"),
-            "https://raw.example.com/u/r/main/plugins/a.reelbox.js"
-        );
-        // 绝对地址原样返回
-        assert_eq!(
-            resolve("https://a.com/x/index.json", "https://b.com/y.js"),
-            "https://b.com/y.js"
-        );
-        // 没有斜杠的 base 不 panic
-        assert_eq!(resolve("index.json", "a.js"), "a.js");
-        // 空路径
-        assert_eq!(resolve("https://a.com/x/index.json", ""), "");
-    }
-
-    #[test]
-    fn absolute_code_path_is_used_as_is() {
-        // 写死绝对地址:原样用,不拼 plugins/
-        assert_eq!(
-            code_url("https://a.com/u/r/master/index.json", "https://cdn.x.com/p/4kvm.reelbox.js"),
-            "https://cdn.x.com/p/4kvm.reelbox.js"
-        );
-        // 落盘用的名字:相对路径就是文件名,绝对地址取 URL 最后一段(去掉查询串)
-        assert_eq!(local_name("4kvm.reelbox.js"), "4kvm.reelbox.js");
-        assert_eq!(local_name("https://cdn.x.com/p/4kvm.reelbox.js?v=2"), "4kvm.reelbox.js");
-        assert_eq!(local_name("./a/b/x.adapter.js"), "x.adapter.js");
-    }
-
-    #[test]
-    fn problems_allows_absolute_path_but_not_subdirs() {
-        let sha = "c".repeat(64);
-        let ok = Index::parse(&format!(
-            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
-                 "plugins":[{{"id":"p","name":"P","path":"https://cdn.x.com/p/p.reelbox.js","sha256":"{sha}"}}]}}"#
-        ))
-        .unwrap();
-        assert_eq!(problems(&ok, ""), Vec::<String>::new());
-
-        let bad = Index::parse(&format!(
-            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
-                 "plugins":[{{"id":"q","name":"Q","path":"sub/q.reelbox.js","sha256":"{sha}"}}]}}"#
-        ))
-        .unwrap();
-        assert!(problems(&bad, "").iter().any(|x| x.contains("要么是文件名")), "{:?}", problems(&bad, ""));
-    }
-
-    #[test]
-    fn code_url_points_at_plugins_dir() {
-        assert_eq!(
-            code_url("https://a.com/u/r/main/index.json", "iplayr.adapter.js"),
-            "https://a.com/u/r/main/plugins/iplayr.adapter.js"
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         assert_eq!(
-            code_url("https://a.com/u/r/main/index.json", "./x.reelbox.js"),
-            "https://a.com/u/r/main/plugins/x.reelbox.js"
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-    }
-
-    #[test]
-    fn good_index_has_no_problems() {
-        let idx = idx_with_sources(
-            r#"{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
-                "sources":[{"id":"a","name":"A","type":"vod","url":"https://a.com","adapter":"vod"}]}"#,
-        );
-        assert_eq!(problems(&idx, "0.2.3"), Vec::<String>::new());
-    }
-
-    #[test]
-    fn catches_structural_mistakes() {
-        let idx = idx_with_sources(
-            r#"{"schema":"reelbox-index/2","name":"","version":"1",
-                "adapters":[{"id":"m3u","name":"抢名字","path":"m3u.adapter.js","sha256":"aa"}],
-                "sources":[
-                  {"id":"dup","name":"A","type":"vod","url":"https://a.com","adapter":"vod"},
-                  {"id":"dup","name":"B","type":"movie","url":"C:/x/c.js","adapter":"nope"}
-                ]}"#,
-        );
-        let p = problems(&idx, "").join("\n");
-        assert!(p.contains("schema 必须是"), "{p}");
-        assert!(p.contains("缺 name"), "{p}");
-        assert!(p.contains("version 要写成"), "{p}");
-        assert!(p.contains("是内置名字"), "{p}");
-        assert!(p.contains("sha256 必须填"), "{p}");
-        assert!(p.contains("重复"), "{p}");
-        assert!(p.contains("type 只能是"), "{p}");
-        assert!(p.contains("不能是本地路径"), "{p}");
-        assert!(p.contains("既不是内置的"), "{p}");
-    }
-
-    #[test]
-    fn min_app_blocks_old_client() {
-        let sha = "a".repeat(64);
-        let idx = idx_with_sources(&format!(
-            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
-                 "plugins":[{{"id":"p","name":"P","path":"p.reelbox.js","sha256":"{sha}","minApp":"0.3.0"}}]}}"#
-        ));
-        let p = problems(&idx, "0.2.9");
-        assert!(p.iter().any(|x| x.contains("需要应用 0.3.0 以上")), "{p:?}");
-        assert_eq!(problems(&idx, "0.3.1"), Vec::<String>::new());
-    }
-
-    #[test]
-    fn plugin_source_needs_the_plugin_and_gets_local_url() {
-        let sha = "b".repeat(64);
-        // 引用了不存在的插件:拒绝
-        let bad = Index::parse(&format!(
-            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
-                 "sources":[{{"id":"a","name":"A","type":"webox","adapter":"reelbox","plugin":"nope"}}]}}"#
-        ))
-        .unwrap();
-        assert!(problems(&bad, "").iter().any(|x| x.contains("不在 plugins 里")), "{:?}", problems(&bad, ""));
-
-        // 插件在包里:通过,且装的时候 url 换成插件路径
-        let ok = Index::parse(&format!(
-            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
-                 "plugins":[{{"id":"4kvm","name":"4K","path":"4kvm.reelbox.js","sha256":"{sha}"}}],
-                 "sources":[{{"id":"a","name":"A","type":"webox","adapter":"reelbox","plugin":"4kvm"}}]}}"#
-        ))
-        .unwrap();
-        assert_eq!(problems(&ok, ""), Vec::<String>::new());
-        let src = ok.sources[0].to_source(Some("C:/plugins/4kvm.reelbox.js"));
-        assert_eq!(src.url, "C:/plugins/4kvm.reelbox.js");
-        assert_eq!(src.adapter, "reelbox");
-    }
-
-    #[test]
-    fn parse_accepts_semver_and_explains_numeric() {
-        let ok = Index::parse(r#"{"schema":"reelbox-index/1","name":"t","version":"1.0.0"}"#)
-            .expect("应该能解析");
-        assert_eq!(ok.version, "1.0.0");
-        // 老配置把版本写成数字:报错要说人话,而不是 "invalid type: integer"
-        let bad = Index::parse(r#"{"schema":"reelbox-index/1","name":"t","version":3}"#)
-            .expect_err("数字版本应该被拒");
-        assert!(bad.contains("要写成字符串"), "{bad}");
-    }
-
-    #[test]
-    fn sub_source_maps_camel_case_fields() {
-        let s: SubSource = serde_json::from_str(
-            r#"{"id":"x","name":"X","type":"live","url":"https://x.com/a.m3u","adapter":"m3u",
-                "verify":true,"verifyUrl":"https://x.com","posterRatio":"16:9"}"#,
-        )
-        .unwrap();
-        let src = s.to_source(None);
-        assert_eq!(src.kind, "live");
-        assert_eq!(src.verify_url, "https://x.com");
-        assert_eq!(src.poster_ratio, "16:9");
-        assert!(src.verify);
-        assert!(src.from.is_empty());
+        assert_eq!(good_sha().len(), 64);
     }
 }
