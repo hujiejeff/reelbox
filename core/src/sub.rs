@@ -41,9 +41,10 @@ pub struct CodeEntry {
     pub name: String,
     #[serde(default)]
     pub path: String,
-    /// 这个文件自己的版本,便于人看变更;应用判断"要不要重下"看 `sha256`。
+    /// 这个文件自己的版本(`1.2.0` 这种),便于人看变更;
+    /// 应用判断"要不要重下"看 `sha256`,不看它。
     #[serde(default)]
-    pub version: u32,
+    pub version: String,
     #[serde(default)]
     pub sha256: String,
     /// 需要的最低应用版本(`x.y.z`)。新适配器用了旧应用没有的能力时,
@@ -100,8 +101,10 @@ pub struct Index {
     pub schema: String,
     #[serde(default)]
     pub name: String,
+    /// 订阅自己的版本,`1.0.0` 这种 —— 和软件包一致,能一眼看出"这是第几版改的"。
+    /// 应用判断"有没有更新"只比它,不看时间。
     #[serde(default)]
-    pub version: u32,
+    pub version: String,
     #[serde(default)]
     pub updated: String,
     #[serde(default)]
@@ -156,15 +159,47 @@ fn is_http(url: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
-/// `x.y.z` 形态的比较:只要打头的两段不小于要求就算够(补丁号不参与)。
-fn version_ok(app: &str, min: &str) -> bool {
-    let parse = |s: &str| -> Vec<u32> { s.split('.').map(|x| x.parse::<u32>().unwrap_or(0)).collect() };
-    let a = parse(app);
-    let b = parse(min);
-    if a.len() < 2 || b.len() < 2 {
-        return true; // 版本号不认识就不拦,免得误伤
+/// 三段式版本号:`1` / `1.0` / `1.0.0-beta` 都不算 —— 订阅版本只认 `x.y.z`。
+pub fn is_semver(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 4 && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// 比版本,按段比数字。认不出来的段算 0(所以 `1` 和 `1.0.0` 相等)。
+pub fn ver_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.')
+            .take(3)
+            .map(|x| x.trim().parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (va, vb) = (parse(a), parse(b));
+    for i in 0..3 {
+        let (x, y) = (
+            va.get(i).copied().unwrap_or(0),
+            vb.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return x.cmp(&y);
+        }
     }
-    (a[0], a[1]) >= (b[0], b[1])
+    std::cmp::Ordering::Equal
+}
+
+/// `candidate` 比 `current` 新?—— 「检查更新」就靠这一句。
+pub fn is_newer(candidate: &str, current: &str) -> bool {
+    ver_cmp(candidate, current) == std::cmp::Ordering::Greater
+}
+
+/// 应用版本够不够 `minApp`。任一边认不出来就不拦,免得误伤。
+fn version_ok(app: &str, min: &str) -> bool {
+    if !is_semver(app) || !is_semver(min) {
+        return true;
+    }
+    ver_cmp(app, min) != std::cmp::Ordering::Less
 }
 
 /// 一次列出所有毛病。空 vec = 可以装。
@@ -182,8 +217,11 @@ pub fn problems(idx: &Index, app_version: &str) -> Vec<String> {
     if idx.name.trim().is_empty() {
         out.push("缺 name(订阅列表里显示的就是它)".into());
     }
-    if idx.version == 0 {
-        out.push("version 必须是 ≥1 的整数".into());
+    if !is_semver(&idx.version) {
+        out.push(format!(
+            "version 要写成 1.0.0 这种三段式(semver),现在是 {:?}",
+            idx.version
+        ));
     }
 
     let mut ids: Vec<(String, &'static str)> = Vec::new(); // (id, 什么)
@@ -337,6 +375,21 @@ mod tests {
     }
 
     #[test]
+    fn semver_shape_and_compare() {
+        assert!(is_semver("1.0.0") && is_semver("0.2.10"));
+        for bad in ["1", "1.0", "v1.0.0", "1.0.0-beta", "", "1..0"] {
+            assert!(!is_semver(bad), "{bad} 不该算 semver");
+        }
+        assert!(is_newer("1.0.1", "1.0.0"));
+        assert!(is_newer("1.1.0", "1.0.9"));
+        assert!(is_newer("2.0.0", "1.99.99"));
+        assert!(!is_newer("1.0.0", "1.0.0"));
+        assert!(!is_newer("1.0.0", "1.0.1"));
+        // 段数不齐时缺的算 0:1.0 == 1.0.0
+        assert!(!is_newer("1.0", "1.0.0"));
+    }
+
+    #[test]
     fn resolve_joins_relative_against_index_dir() {
         assert_eq!(
             resolve("https://raw.example.com/u/r/main/index.json", "plugins/a.reelbox.js"),
@@ -368,7 +421,7 @@ mod tests {
     #[test]
     fn good_index_has_no_problems() {
         let idx = idx_with_sources(
-            r#"{"schema":"reelbox-index/1","name":"t","version":1,
+            r#"{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
                 "sources":[{"id":"a","name":"A","type":"vod","url":"https://a.com","adapter":"vod"}]}"#,
         );
         assert_eq!(problems(&idx, "0.2.3"), Vec::<String>::new());
@@ -377,7 +430,7 @@ mod tests {
     #[test]
     fn catches_structural_mistakes() {
         let idx = idx_with_sources(
-            r#"{"schema":"reelbox-index/2","name":"","version":0,
+            r#"{"schema":"reelbox-index/2","name":"","version":"1",
                 "adapters":[{"id":"m3u","name":"抢名字","path":"m3u.adapter.js","sha256":"aa"}],
                 "sources":[
                   {"id":"dup","name":"A","type":"vod","url":"https://a.com","adapter":"vod"},
@@ -387,7 +440,7 @@ mod tests {
         let p = problems(&idx, "").join("\n");
         assert!(p.contains("schema 必须是"), "{p}");
         assert!(p.contains("缺 name"), "{p}");
-        assert!(p.contains("version 必须是"), "{p}");
+        assert!(p.contains("version 要写成"), "{p}");
         assert!(p.contains("是内置名字"), "{p}");
         assert!(p.contains("sha256 必须填"), "{p}");
         assert!(p.contains("重复"), "{p}");
@@ -399,7 +452,7 @@ mod tests {
     #[test]
     fn code_entry_path_rules() {
         let idx = idx_with_sources(
-            r#"{"schema":"reelbox-index/1","name":"t","version":1,
+            r#"{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
                 "plugins":[{"id":"p","name":"P","path":"sub/p.reelbox.js","sha256":"aa"}]}"#,
         );
         let p = problems(&idx, "").join("\n");
@@ -411,7 +464,7 @@ mod tests {
     fn min_app_blocks_old_client() {
         let sha = "a".repeat(64);
         let idx = idx_with_sources(&format!(
-            r#"{{"schema":"reelbox-index/1","name":"t","version":1,
+            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
                  "plugins":[{{"id":"p","name":"P","path":"p.reelbox.js","sha256":"{sha}","minApp":"0.3.0"}}]}}"#
         ));
         let p = problems(&idx, "0.2.9");

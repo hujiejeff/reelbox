@@ -164,6 +164,8 @@ async function init() {
     return showListError(errorInfo("source", e), () => init());
   }
 
+
+
   // 老配置里有名字塌成 "-" 的 id(见 docs/REVIEW-2026-11-14.md A1):
   // 先修 id 再往下走,收藏与进度里「源id|片名」的键会同步搬过去。
   if (migrateSourceIds()) renderFavs();
@@ -2382,6 +2384,34 @@ async function applySources(list) {
   renderSources();
   syncSetSummaries();
   syncSearchBox(); // 有源/没源决定搜索框能不能用
+  // 用的是订阅配置、又手改了源:问一次要不要存成独立的本地订阅
+  await maybeAdoptEdit();
+}
+
+/// 远程订阅下改了源:提醒一次(只提醒一次,不然每改一次弹一次)
+let SUB_ADOPT_ASKED = false;
+async function maybeAdoptEdit() {
+  try {
+    const st = await invoke("sub_state");
+    SUB_STORE = st;
+    if (!st.dirty) {
+      SUB_ADOPT_ASKED = false;
+      return;
+    }
+    if (!st.active || st.active === "local" || SUB_ADOPT_ASKED) return;
+    SUB_ADOPT_ASKED = true;
+    const it = (st.items || []).find((x) => x.id === st.active);
+    const ok = await confirmDialog(
+      "改了订阅配置",
+      "你现在用的是「" +
+        ((it && it.name) || "订阅") +
+        "」。直接改源只存在本机,订阅一更新就会被盖回去。要不要把当前这套复制成一份新的本地订阅并切过去?",
+      "存成新订阅"
+    );
+    if (ok) await subClone();
+  } catch (e) {
+    log("SUB adopt fail", errText(e));
+  }
 }
 
 /* ---------- 全部测速(I6) ---------- */
@@ -3671,65 +3701,102 @@ function bindVerifyPanel() {
 }
 
 // ---------------------------------------------------------------- 配置订阅
+//
+// 模型:一个生效、其余挂着。切换 = 整体换一套源,每条订阅在本地都有快照。
+// 后端算好 has_update / dirty,这边只负责画和点。
 
-/** 设置 → 配置订阅:一条链接装齐源 + 插件 + 适配器 */
-let SUBS = [];
+let SUB_STORE = { active: "", items: [], dirty: false };
 
-function subMeta(s) {
-  const parts = ["v" + s.version];
-  parts.push((s.sources || []).length + " 源");
-  if ((s.files || []).length) parts.push(s.files.length + " 个文件");
-  const at = String(s.synced_at || "").replace("T", " ").replace("Z", "");
-  if (at) parts.push("同步于 " + at);
+function subActiveItem() {
+  return (SUB_STORE.items || []).find((x) => x.id === SUB_STORE.active) || null;
+}
+
+function subMeta(it) {
+  const parts = ["v" + (it.version || "0.0.0"), (it.source_count || 0) + " 条源"];
+  parts.push(it.kind === "remote" ? "远程" : "本地");
+  if (it.files && it.files.length) parts.push(it.files.length + " 个文件");
+  if (it.checked_at) parts.push("检查于 " + it.checked_at.replace("T", " ").replace("Z", ""));
   return parts.join(" · ");
 }
 
-function renderSubList() {
+function subCard(it) {
+  const active = it.id === SUB_STORE.active;
+  const card = document.createElement("article");
+  card.className = "sub-card";
+  if (active) card.dataset.active = "";
+
+  const head = document.createElement("div");
+  head.className = "sub-card__head";
+  const text = document.createElement("div");
+  text.className = "sub-card__text";
+
+  const name = document.createElement("div");
+  name.className = "sub-card__name";
+  name.append(document.createTextNode(it.name || it.id));
+  if (active) {
+    const tag = document.createElement("span");
+    tag.className = "sub-tag";
+    tag.textContent = "使用中";
+    name.append(tag);
+  }
+  if (it.has_update) {
+    const tag = document.createElement("span");
+    tag.className = "sub-tag sub-tag--new";
+    tag.textContent = "可更新 " + it.latest;
+    name.append(tag);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "sub-card__meta";
+  meta.textContent = subMeta(it);
+
+  text.append(name, meta);
+  head.append(text);
+
+  const acts = document.createElement("div");
+  acts.className = "sub-card__acts";
+  const btn = (label, fn, cls) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "m3e-button m3e-button--text" + (cls ? " " + cls : "");
+    b.textContent = label;
+    b.onclick = fn;
+    return b;
+  };
+
+  if (!active) acts.append(btn("切换", () => subSwitch(it)));
+  if (it.has_update) acts.append(btn("更新到 " + it.latest, () => subUpdate(it)));
+  if (it.kind === "remote" || it.path) acts.append(btn("检查", () => subCheck(it)));
+  acts.append(btn("导出", () => subExport(it)));
+  if (it.id !== "local") acts.append(btn("删除", () => subRemove(it), "sub-danger"));
+
+  card.append(head, acts);
+  return card;
+}
+
+function renderSubs() {
   const box = $("subList");
   if (!box) return;
   box.innerHTML = "";
-  for (const s of SUBS) {
-    const row = document.createElement("div");
-    row.className = "sub-row";
-    const text = document.createElement("div");
-    text.className = "sub-row__text";
-    const name = document.createElement("b");
-    name.textContent = s.name || s.id;
-    const meta = document.createElement("span");
-    meta.className = "sub-row__meta";
-    meta.textContent = subMeta(s);
-    text.append(name, meta);
-    const acts = document.createElement("div");
-    acts.className = "sub-row__acts";
-    const sync = document.createElement("button");
-    sync.type = "button";
-    sync.className = "m3e-button m3e-button--text";
-    sync.textContent = "同步";
-    sync.onclick = () => subAction(s, "sync");
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "m3e-button m3e-button--text";
-    del.textContent = "删除";
-    del.onclick = () => subAction(s, "remove");
-    acts.append(sync, del);
-    row.append(text, acts);
-    box.append(row);
-  }
+  for (const it of SUB_STORE.items || []) box.append(subCard(it));
+}
+
+function subSay(text) {
+  const out = $("subOut");
+  if (out) out.textContent = text;
 }
 
 function subReport(r) {
-  const lines = ["✅ " + (r.name || r.id) + " v" + r.version];
-  lines.push("新增 " + r.added + " 条源 · 更新 " + r.updated + " 条 · 回收 " + r.removed + " 条");
-  if (r.files) lines.push("写入 " + r.files + " 个文件");
+  const lines = ["✓ " + (r.name || r.id) + " v" + (r.version || "?") + " 已生效"];
+  lines.push(r.sources + " 条源" + (r.files ? " · 写入 " + r.files + " 个文件" : ""));
   if ((r.skipped || []).length) {
-    lines.push("");
     lines.push("没装成的:");
-    for (const s of r.skipped) lines.push("· " + s);
+    for (const x of r.skipped) lines.push("· " + x);
   }
   return lines.join(NL);
 }
 
-/** 装完/删完之后:源列表变了,顶栏下拉和设置首页的摘要都要跟上 */
+/** 装完/切完之后:源列表整个换了,顶栏下拉和摘要都要跟上 */
 async function reloadAfterSub() {
   try {
     S.sources = await invoke("list_sources");
@@ -3742,80 +3809,221 @@ async function reloadAfterSub() {
 
 async function loadSubs() {
   try {
-    SUBS = await invoke("sub_list");
+    SUB_STORE = await invoke("sub_state");
   } catch (e) {
-    SUBS = [];
-    log("SUB list fail", errText(e));
+    log("SUB state fail", errText(e));
   }
-  renderSubList();
-  const out = $("subOut");
-  if (out && !SUBS.length) out.textContent = "还没有订阅";
+  renderSubs();
+  const banner = $("subDirty");
+  if (banner) {
+    const it = subActiveItem();
+    const on = !!(SUB_STORE.dirty && it && it.id !== "local");
+    banner.hidden = !on;
+    const label = $("subDirtyText");
+    if (on && label) {
+      label.textContent =
+        "当前这套源和「" +
+        (it.name || it.id) +
+        "」不一样了(可能手改过)。想留住改动就存成一份本地订阅。";
+    }
+  }
 }
 
-async function subAction(s, what) {
-  const out = $("subOut");
-  const say = (t) => {
-    if (out) out.textContent = t;
-  };
-  if (what === "remove") {
-    const ok = await confirmDialog(
-      "删除订阅",
-      "「" + (s.name || s.id) + "」装的源会一起移除,但它装的文件会留着。",
-      "删除",
-      true
-    );
-    if (!ok) return;
-    try {
-      const r = await invoke("sub_remove", { id: s.id });
-      say("已删除「" + (r.name || r.id) + "」,回收 " + r.removed + " 条源");
-    } catch (e) {
-      say("删除失败:" + errText(e));
-    }
-    await loadSubs();
-    await reloadAfterSub();
-    return;
-  }
-  say("正在同步「" + (s.name || s.id) + "」…");
+async function subCall(fn, ok) {
   try {
-    const r = await invoke("sub_sync", { id: s.id, force: false });
-    say(subReport(r));
+    const r = await fn();
+    if (ok) subSay(ok(r));
   } catch (e) {
-    say("同步失败:" + errText(e));
+    subSay("失败:" + errText(e));
   }
   await loadSubs();
   await reloadAfterSub();
 }
 
-function bindSubPanel() {
-  const input = $("subUrl");
-  const btn = $("btnSubAdd");
-  if (!input || !btn) return;
-  const out = $("subOut");
-  const say = (t) => {
-    if (out) out.textContent = t;
-  };
-  loadSubs();
+async function subSwitch(it) {
+  await subCall(
+    async () => {
+      SUB_STORE = await invoke("sub_switch", { id: it.id });
+      return { name: it.name, version: it.version, sources: it.source_count, files: 0, skipped: [] };
+    },
+    (r) => "已切到「" + r.name + "」,共 " + r.sources + " 条源"
+  );
+}
 
-  btn.onclick = async () => {
-    const url = input.value.trim();
-    if (!/^https?:/i.test(url)) {
-      say("地址要以 http(s):// 开头");
-      return;
-    }
-    btn.disabled = true;
-    say("正在拉取并安装…");
-    try {
-      const r = await invoke("sub_add", { url: url, force: false });
-      say(subReport(r));
-      input.value = "";
-    } catch (e) {
-      say("安装失败:" + errText(e));
-    } finally {
-      btn.disabled = false;
-    }
-    await loadSubs();
-    await reloadAfterSub();
-  };
+async function subCheck(it) {
+  subSay("正在检查「" + (it.name || it.id) + "」…");
+  await subCall(
+    async () => {
+      const one = await invoke("sub_check", { id: it.id });
+      return {
+        name: one.name,
+        version: one.version,
+        sources: one.source_count,
+        files: 0,
+        skipped: [],
+        _msg: one.has_update ? "有新版本 " + one.latest : "已是最新",
+      };
+    },
+    (r) => "「" + r.name + "」" + (r._msg || "已检查")
+  );
+}
+
+async function subCheckAll() {
+  subSay("正在检查全部订阅…");
+  await subCall(
+    async () => {
+      SUB_STORE = await invoke("sub_check_all");
+      const hit = (SUB_STORE.items || []).filter((x) => x.has_update);
+      return {
+        name: "全部订阅",
+        version: "",
+        sources: 0,
+        files: 0,
+        skipped: [],
+        _msg: hit.length
+          ? hit.length + " 条有更新:" + hit.map((x) => x.name).join("、")
+          : "都是最新",
+      };
+    },
+    (r) => r._msg
+  );
+}
+
+async function subUpdate(it) {
+  subSay("正在更新「" + (it.name || it.id) + "」…");
+  await subCall(async () => invoke("sub_update", { id: it.id }), subReport);
+}
+
+async function subExport(it) {
+  await subCall(
+    async () => {
+      const path = await invoke("sub_export", { id: it.id });
+      return {
+        name: it.name,
+        version: it.version,
+        sources: it.source_count,
+        files: 0,
+        skipped: [],
+        _msg: path,
+      };
+    },
+    (r) => "已导出到 " + r._msg
+  );
+}
+
+async function subRemove(it) {
+  const ok = await confirmDialog(
+    "删除订阅",
+    "「" +
+      (it.name || it.id) +
+      "」会被移除。" +
+      (it.id === SUB_STORE.active ? "它正在使用,删掉后回到「本地配置」。" : "") +
+      "它装的文件会留着。",
+    "删除",
+    true
+  );
+  if (!ok) return;
+  await subCall(
+    async () => {
+      SUB_STORE = await invoke("sub_remove", { id: it.id });
+      return { name: it.name, version: it.version, sources: 0, files: 0, skipped: [] };
+    },
+    (r) => "已删除「" + r.name + "」"
+  );
+}
+
+async function subClone() {
+  const it = subActiveItem();
+  const ok = await confirmDialog(
+    "存成新的本地订阅",
+    "当前这套源会复制成一份新的本地订阅并立刻切过去,原来那份「" +
+      (it ? it.name : "") +
+      "」保持原样。",
+    "存成新订阅"
+  );
+  if (!ok) return;
+  await subCall(
+    async () => {
+      SUB_STORE = await invoke("sub_clone", { name: "" });
+      const now = subActiveItem();
+      return {
+        name: now ? now.name : "",
+        version: now ? now.version : "",
+        sources: now ? now.source_count : 0,
+        files: 0,
+        skipped: [],
+      };
+    },
+    (r) => "已存成「" + r.name + "」并切换"
+  );
+}
+
+async function subReset() {
+  const ok = await confirmDialog(
+    "重置全部",
+    "所有订阅和源都会清空,回到空白的本地配置。原来的 sources.json 会先备份。这一步不能撤销。",
+    "重置",
+    true
+  );
+  if (!ok) return;
+  await subCall(
+    async () => {
+      SUB_STORE = await invoke("sub_reset");
+      return { name: "本地配置", version: "0.0.0", sources: 0, files: 0, skipped: [] };
+    },
+    () => "已重置,现在是空白的本地配置"
+  );
+}
+
+async function subAdd() {
+  const input = $("subUrl");
+  const raw = input ? input.value.trim() : "";
+  if (!raw) return;
+  const isUrl = /^https?:/i.test(raw);
+  subSay(isUrl ? "正在拉取…" : "正在读文件…");
+  await subCall(
+    async () => {
+      const r = isUrl
+        ? await invoke("sub_add", { url: raw })
+        : await invoke("sub_add_file", { path: raw });
+      if (input) input.value = "";
+      return r;
+    },
+    subReport
+  );
+}
+
+function bindSubPanel() {
+  const add = $("btnSubAdd");
+  if (!add || !$("subUrl")) return;
+  add.onclick = subAdd;
+
+  const pick = $("btnSubPick");
+  const file = $("subFile");
+  if (pick && file) {
+    pick.onclick = () => file.click();
+    file.onchange = async () => {
+      const f = file.files && file.files[0];
+      if (!f) return;
+      subSay("正在读取 " + f.name + "…");
+      try {
+        const text = await f.text();
+        await subCall(async () => invoke("sub_add_text", { text }), subReport);
+      } catch (e) {
+        subSay("读文件失败:" + errText(e));
+      }
+      file.value = "";
+    };
+  }
+
+  const all = $("btnSubCheckAll");
+  if (all) all.onclick = subCheckAll;
+  const clone = $("btnSubClone");
+  if (clone) clone.onclick = subClone;
+  const reset = $("btnSubReset");
+  if (reset) reset.onclick = subReset;
+
+  loadSubs();
 }
 
 function showDebugPanel(on) {
@@ -3876,9 +4084,9 @@ function syncPlaySettings() {
 // 二级页位置不记忆:每次进设置都回到入口列表(expanded 下默认落在「源」)。
 
 const SET_PAGES = [
-  { key: "src", icon: "dns", title: "源", group: 0 },
-  // 配置订阅:一条链接装齐源 + 插件 + 适配器(见 docs 与 reelbox-config 仓库)
+  // 订阅排第一:它决定"用哪一套源",比改单条源更上一级
   { key: "subs", icon: "cloud_download", title: "订阅", group: 0 },
+  { key: "src", icon: "dns", title: "源", group: 0 },
   // 适配器单独一页:它既不是源,也不该埋在源的页面里(见 docs/ARCHITECTURE.md 第 4 节)
   { key: "adapters", icon: "extension", title: "适配器", group: 0 },
   { key: "play", icon: "play_circle", title: "播放", group: 0 },
@@ -3936,8 +4144,11 @@ function setSummary(key) {
     return mode + " · " + themeSeedLabel() + " · " + (VARIANT_LABEL[themeState.variant] || "标准");
   }
   if (key === "subs") {
-    if (!SUBS.length) return "未添加,点进去粘一个地址";
-    return SUBS.length + " 条 · " + SUBS.map((s) => s.name || s.id).join("、");
+    const items = SUB_STORE.items || [];
+    const on = items.find((x) => x.id === SUB_STORE.active);
+    if (!on) return "读取中…";
+    const more = items.length > 1 ? " · 共 " + items.length + " 份" : "";
+    return (on.name || on.id) + " v" + (on.version || "0.0.0") + more;
   }
   if (key === "sites") {
     return "人机验证 · 登录页";

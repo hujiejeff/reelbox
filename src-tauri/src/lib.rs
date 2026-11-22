@@ -59,10 +59,18 @@ pub fn run() {
             session::session_list,
             session::session_close,
             session::session_fetch,
-            sub::sub_list,
+            sub::sub_state,
             sub::sub_add,
-            sub::sub_sync,
+            sub::sub_add_file,
+            sub::sub_add_text,
+            sub::sub_switch,
+            sub::sub_check,
+            sub::sub_check_all,
+            sub::sub_update,
             sub::sub_remove,
+            sub::sub_clone,
+            sub::sub_export,
+            sub::sub_reset,
         ])
         .run(tauri::generate_context!())
         .expect("reelbox: 启动失败");

@@ -1,14 +1,16 @@
-//! 配置订阅的应用侧:拉索引、比对、装文件、合并源。
+//! 配置订阅的应用侧。
 //!
-//! 解析和挑错在 `reelbox_core::sub`(纯逻辑、能单测),这里只做 IO:
+//! 模型是**一个生效、其余挂着**:同一时刻只有一份配置在跑,切换 = 整体换一套源。
+//! 每份订阅在本地都有一份快照(`subs/<id>.json`),切走/切回都不用联网。
 //!
-//! 1. **拉**:`GET index.json`(走和插件同一套网络层,按域名选路)
-//! 2. **比**:`sha256` 三方比对 —— 索引里的 / 本地文件的 / 上次装的时候记的
-//! 3. **装**:先适配器、再插件、最后源(源的 `adapter` 可能指向这次刚装的适配器)
-//! 4. **记**:`subscriptions.json` 存"这条路我装过什么",下次才能算增删改
+//! ```
+//! subscriptions.json   { active: "s264642d9", items: [...] }
+//! subs/local.json      ← "本地配置"的内容
+//! subs/s264642d9.json  ← 远程订阅上次拉下来的内容
+//! sources.json         ← 当前生效那一份(切换时被写)
+//! ```
 //!
-//! 安全边界只有一条:**只动自己装的东西**。`Source.from == 订阅 id` 才归它管,
-//! 用户手加的源、手改过的文件,订阅碰不到(冲突会列进报告,不会静默覆盖)。
+//! 解析和挑错在 `reelbox_core::sub`(纯逻辑、能单测),这里只做 IO。
 
 use crate::commands::FETCH_UA;
 use reelbox_core::source::Source;
@@ -18,9 +20,15 @@ use std::path::PathBuf;
 
 /// 订阅账本。和 `sources.json` 同一个数据目录。
 const STORE: &str = "subscriptions.json";
-
-/// 单个文件不能超过这个大小。插件都是几十 KB,超过基本就是地址写错了(拿到了网页)。
+/// 每份订阅的内容快照放这里
+const SNAP_DIR: &str = "subs";
+/// 单个文件不能超过这个大小。插件都是几十 KB,超过基本就是地址写错了。
 const MAX_FILE: usize = 512 * 1024;
+/// 内置的"本地配置":永远存在,删不掉
+const LOCAL_ID: &str = "local";
+
+const KIND_LOCAL: &str = "local";
+const KIND_REMOTE: &str = "remote";
 
 /// 一个装过的文件。`sha256` 是**装的时候**的指纹,之后一直不变 ——
 /// 拿它和磁盘上现在的指纹比,就知道用户有没有动过。
@@ -34,110 +42,215 @@ pub struct InstalledFile {
     pub sha256: String,
 }
 
-/// 订阅装进去的一条源。
-///
-/// 两个 id 都要记:索引里的 id(`id`)是订阅认人的,**本地 id**(`local_id`)是用户
-/// 那边真正的主键。两者不一样是因为订阅会「接管」用户自己已经加过的同地址源 ——
-/// 接管时不改人家的 id(收藏和进度都按 id 存),但下次同步还得认得出它。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AppliedSource {
-    /// 索引里的 id
-    pub id: String,
-    /// 本地 `sources.json` 里的 id
-    #[serde(default)]
-    pub local_id: String,
-}
-
 /// 一条订阅。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Stored {
+pub struct Item {
     pub id: String,
-    pub url: String,
+    /// `local`(内容在本地) / `remote`(有地址)
+    pub kind: String,
+    #[serde(default)]
     pub name: String,
-    pub version: u32,
-    pub updated: String,
-    #[serde(default = "yes")]
-    pub enabled: bool,
+    /// 远程订阅的索引地址
     #[serde(default)]
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    /// 本地订阅的来源文件(用户 `git clone` 下来的 json 之类);空 = 就是这条订阅自己
+    #[serde(default)]
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// 上次应用时的版本(`1.0.0`)
+    #[serde(default)]
+    pub version: String,
+    /// 最近一次检查到的版本;比 `version` 新就是有更新
+    #[serde(default)]
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub latest: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub checked_at: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub applied_at: String,
+    /// 这条订阅有多少条源
+    /// 这条订阅有多少条源
+    #[serde(default)]
+    pub source_count: usize,
+    /// 检查到的版本比装着的这份新(每次读账本时现算,不靠落盘)
+    #[serde(default)]
+    pub has_update: bool,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<InstalledFile>,
-    /// 上次装进去的源(整份留着:下次算增删改、订阅被移除时按它对账)
-    #[serde(default)]
-    pub sources: Vec<AppliedSource>,
-    #[serde(default)]
-    pub synced_at: String,
 }
 
-fn yes() -> bool {
-    true
-}
-
-impl Default for Stored {
+impl Default for Item {
     fn default() -> Self {
         Self {
             id: String::new(),
-            url: String::new(),
+            kind: KIND_LOCAL.to_string(),
             name: String::new(),
-            version: 0,
-            updated: String::new(),
-            enabled: true,
+            url: String::new(),
+            path: String::new(),
+            version: String::new(),
+            latest: String::new(),
+            checked_at: String::new(),
+            applied_at: String::new(),
+            source_count: 0,
+            has_update: false,
             files: Vec::new(),
-            sources: Vec::new(),
-            synced_at: String::new(),
         }
     }
 }
 
-/// 一次同步干了什么。给人看的数字 + 没干成的理由。
+impl Item {
+    /// 检查到的新版本比装着的这份新?
+    pub fn needs_update(&self) -> bool {
+        !self.latest.is_empty() && sub::is_newer(&self.latest, &self.version)
+    }
+}
+
+/// 账本。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Store {
+    #[serde(default)]
+    pub active: String,
+    #[serde(default)]
+    pub items: Vec<Item>,
+    /// 当前 `sources.json` 和生效订阅的快照不一样 = 用户手改过。
+    ///
+    /// 每次读账本时现算,写盘的值只是"上次算出来的",不影响判断(见 `sub_state`)。
+    #[serde(default)]
+    pub dirty: bool,
+}
+
+/// 一次应用的结果。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Report {
     pub id: String,
     pub name: String,
-    pub version: u32,
-    /// 新增的源
-    pub added: usize,
-    /// 有更新的源
-    pub updated: usize,
-    /// 被索引删掉、本地跟着回收的源
-    pub removed: usize,
-    /// 这次真正写盘的文件数(适配器 + 插件)
+    pub version: String,
+    /// 这条订阅有几条源
+    pub sources: usize,
+    /// 这次真正写盘的文件数
     pub files: usize,
-    /// 没装成的,每条一句人话(不阻断其它条目)
+    /// 没装成的,每条一句人话
     pub skipped: Vec<String>,
 }
 
+// ---------------------------------------------------------------- 路径与读写
+
+fn base() -> PathBuf {
+    crate::paths::base_dir()
+}
+
 fn store_path() -> PathBuf {
-    crate::paths::base_dir().join(STORE)
+    base().join(STORE)
 }
 
-pub fn load_store() -> Vec<Stored> {
-    std::fs::read_to_string(store_path())
-        .ok()
-        .and_then(|t| serde_json::from_str::<Vec<Stored>>(&t).ok())
-        .unwrap_or_default()
+fn snap_dir() -> PathBuf {
+    base().join(SNAP_DIR)
 }
 
-fn save_store(list: &[Stored]) -> Result<(), String> {
+fn snap_path(id: &str) -> PathBuf {
+    snap_dir().join(format!("{id}.json"))
+}
+
+fn now_iso() -> String {
+    reelbox_core::source::now_iso()
+}
+
+/// 读账本。老格式(直接一个数组)顺手迁成新结构 —— 那时候还没有"切换"。
+fn store_load() -> Store {
+    let path = store_path();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    if !text.trim().is_empty() {
+        if let Ok(mut s) = serde_json::from_str::<Store>(&text) {
+            if s.items.is_empty() {
+                s.items.push(local_item(0));
+            }
+            if s.active.is_empty() {
+                s.active = s.items[0].id.clone();
+            }
+            return s;
+        }
+        if let Ok(old) = serde_json::from_str::<Vec<Item>>(&text) {
+            // 老格式:每条都留着,默认生效第一条
+            let mut items = old;
+            if items.is_empty() {
+                items.push(local_item(0));
+            }
+            let active = items[0].id.clone();
+            return Store {
+                active,
+                items,
+                dirty: false,
+            };
+        }
+    }
+    let mut s = Store::default();
+    s.items.push(local_item(crate::commands::load_sources().len()));
+    s.active = LOCAL_ID.to_string();
+    s
+}
+
+fn store_save(s: &Store) -> Result<(), String> {
     let path = store_path();
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败: {e}"))?;
     }
-    let text = serde_json::to_string_pretty(list).map_err(|e| format!("序列化失败: {e}"))?;
+    let text = serde_json::to_string_pretty(s).map_err(|e| format!("序列化失败: {e}"))?;
     std::fs::write(&path, text).map_err(|e| format!("写文件失败: {e}"))
 }
 
-/// 订阅 id:地址的指纹取前 8 位。
-///
-/// 用地址而不是自增序号,是为了"同一个地址粘两次不会变成两条订阅";
-/// 也不用名字 —— 名字改一次,历史就断了。
-fn id_of(url: &str) -> String {
-    let h = sub::sha256_hex(url.trim().as_bytes());
-    format!("s{}", &h[..8])
+fn local_item(count: usize) -> Item {
+    Item {
+        id: LOCAL_ID.to_string(),
+        kind: KIND_LOCAL.to_string(),
+        name: "本地配置".to_string(),
+        version: "0.0.0".to_string(),
+        source_count: count,
+        ..Default::default()
+    }
 }
 
-/// 时间戳和源的健康检查用同一个实现(UTC ISO8601 秒精度),别处不用再引 chrono
-fn now_iso() -> String {
-    reelbox_core::source::now_iso()
+fn snap_read(id: &str) -> Vec<Source> {
+    std::fs::read_to_string(snap_path(id))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<Source>>(&t).ok())
+        .unwrap_or_default()
 }
+
+fn snap_write(id: &str, list: &[Source]) -> Result<(), String> {
+    let dir = snap_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+    let text = serde_json::to_string_pretty(list).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(snap_path(id), text).map_err(|e| format!("写快照失败: {e}"))
+}
+
+/// 内容的指纹:只算"订阅管得着"的字段,`health`/`probe` 不参与 ——
+/// 它们每测一次连接就变,算进去会让"有没有手改"永远为真。
+fn fingerprint(list: &[Source]) -> String {
+    let mut out = String::new();
+    for s in list {
+        out.push_str(&format!(
+            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{2}",
+            s.id, s.name, s.kind, s.url, s.adapter, s.verify, s.verify_url, s.poster_ratio
+        ));
+    }
+    out
+}
+
+/// 同一个订阅 id:地址取指纹,本地订阅用内容取指纹
+fn id_of_remote(url: &str) -> String {
+    format!("s{}", &sub::sha256_hex(url.trim().as_bytes())[..8])
+}
+
+fn id_of_local(seed: &str) -> String {
+    let salt = format!("{seed}\u{1}{}", now_iso());
+    format!("f{}", &sub::sha256_hex(salt.as_bytes())[..8])
+}
+
+// ---------------------------------------------------------------- 网络
 
 fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let headers = [("User-Agent", FETCH_UA.to_string())];
@@ -152,7 +265,6 @@ fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     Ok(bytes.to_vec())
 }
 
-/// 拉一份索引。`url` 是索引自己的地址,里面相对路径按它解析。
 fn fetch_index(url: &str) -> Result<Index, String> {
     let headers = [("User-Agent", FETCH_UA.to_string())];
     let resp = reelbox_core::net::http::get(url, &headers).map_err(|e| format!("拉取失败: {e}"))?;
@@ -163,41 +275,24 @@ fn fetch_index(url: &str) -> Result<Index, String> {
     serde_json::from_str::<Index>(&text).map_err(|e| format!("不是合法的 index.json: {e}"))
 }
 
-/// 源里"订阅该管"的字段有没有变。
-///
-/// `health` / `probe` 是本地观测结果,永远不比 —— 拿它们比会让每次同步都"有更新"。
-fn same_source(a: &Source, b: &Source) -> bool {
-    a.name == b.name
-        && a.kind == b.kind
-        && a.url == b.url
-        && a.adapter == b.adapter
-        && a.verify == b.verify
-        && a.verify_url == b.verify_url
-        && a.poster_ratio == b.poster_ratio
-        && a.options == b.options
+/// 本地 json 文件当订阅:同一个格式,同一个体检
+fn read_index_file(path: &str) -> Result<Index, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("读不了这个文件: {e}"))?;
+    serde_json::from_str::<Index>(&text).map_err(|e| format!("不是合法的 index.json: {e}"))
 }
 
-/// 更新一条已存在的源:换掉订阅管的字段,保留本地观测(健康、探测证据)。
-fn merge_into(old: Source, mut new: Source) -> Source {
-    new.health = old.health;
-    new.probe = old.probe;
-    if new.url != old.url {
-        // 地址换了,旧的探测结论不再成立
-        new.health = None;
-        new.probe = None;
-    }
-    new
-}
+// ---------------------------------------------------------------- 应用一份索引
 
-/// 装一份索引。`prev` 是上次的记录(首次安装传 None)。
+/// 装文件 + 生成源列表。**不改** `sources.json` —— 由调用方决定要不要切过去。
 ///
-/// `force = true` 时连"用户改过的文件"也覆盖(界面上是二次确认之后才传)。
-fn apply(
-    url: &str,
+/// 文件顺序:先适配器、再插件(源的 `adapter` 可能指向这次刚装的适配器)。
+fn apply_index(
+    id: &str,
+    base_url: &str,
     idx: &Index,
-    prev: Option<&Stored>,
+    prev: &[InstalledFile],
     force: bool,
-) -> Result<(Stored, Report), String> {
+) -> Result<(Vec<InstalledFile>, Vec<Source>, Report), String> {
     let problems = sub::problems(idx, env!("CARGO_PKG_VERSION"));
     if !problems.is_empty() {
         return Err(format!(
@@ -206,15 +301,14 @@ fn apply(
         ));
     }
 
-    let id = id_of(url);
     let mut report = Report {
-        id: id.clone(),
+        id: id.to_string(),
         name: idx.name.clone(),
-        version: idx.version,
+        version: idx.version.clone(),
         ..Default::default()
     };
 
-    // ---- 1. 适配器 + 插件 ----
+    // ---- 文件 ----
     let dir = crate::paths::plugins_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("建插件目录失败: {e}"))?;
     let mut files: Vec<InstalledFile> = Vec::new();
@@ -222,19 +316,13 @@ fn apply(
     for (kind, e) in idx.code_entries() {
         let target = dir.join(&e.path);
         let want = e.sha256.to_lowercase();
-        let prev_rec = prev.and_then(|p| {
-            p.files
-                .iter()
-                .find(|f| f.kind == kind && f.id == e.id)
-                .cloned()
-        });
+        let prev_rec = prev.iter().find(|f| f.kind == kind && f.id == e.id).cloned();
 
         if target.exists() {
             let cur = std::fs::read(&target)
                 .map(|b| sub::sha256_hex(&b))
                 .unwrap_or_default();
             if cur == want {
-                // 已经是这份了
                 files.push(InstalledFile {
                     id: e.id.clone(),
                     kind: kind.into(),
@@ -259,7 +347,7 @@ fn apply(
             }
         }
 
-        let src = sub::code_url(url, &e.path);
+        let src = sub::code_url(base_url, &e.path);
         match fetch_bytes(&src) {
             Ok(bytes) => {
                 let got = sub::sha256_hex(&bytes);
@@ -280,224 +368,500 @@ fn apply(
                     sha256: want,
                 });
             }
-            Err(err) => report
-                .skipped
-                .push(format!("{} {}:{}", kind, e.id, err)),
+            Err(err) => report.skipped.push(format!("{} {}:{}", kind, e.id, err)),
         }
     }
 
-    // ---- 2. 源 ----
-    //
-    // 三条规则,顺序不能换:
-    //   1. 上次装过的那条(按 local_id 认)→ 直接更新
-    //   2. 用户自己加过、地址完全一样的 → **接管**,不重复加一条
-    //      (常见于"我先把配置导进应用了,后来才做成订阅")
-    //   3. 同 id 但地址不同的 → 不碰,报冲突(用户可能故意的)
-    let mut list = crate::commands::load_sources();
-    let mut kept: Vec<AppliedSource> = Vec::new();
-
+    // ---- 源 ----
+    // 切换模型下这里是**整份替换**,不再有"接管/跳过"的分支。
+    // 唯一保留的温情:同 id 的源把上次的 health/probe 带过去,免得换一次订阅
+    // 所有源的健康状态都变回"没测过"。
+    let old = crate::commands::load_sources();
+    let mut list: Vec<Source> = Vec::with_capacity(idx.sources.len());
     for s in &idx.sources {
         let mut src = s.to_source();
-        src.from = id.clone();
-
-        let remembered = prev.and_then(|p| p.sources.iter().find(|a| a.id == s.id)).cloned();
-        let hit = remembered
-            .as_ref()
-            .and_then(|a| {
-                list.iter()
-                    .position(|x| !a.local_id.is_empty() && x.id == a.local_id && x.from == id)
-            })
-            .or_else(|| list.iter().position(|x| x.id == s.id));
-
-        match hit {
-            Some(i) if list[i].from == id => {
-                if !same_source(&list[i], &src) {
-                    src.id = list[i].id.clone();
-                    list[i] = merge_into(list[i].clone(), src);
-                    report.updated += 1;
-                }
-                kept.push(AppliedSource {
-                    id: s.id.clone(),
-                    local_id: list[i].id.clone(),
-                });
-            }
-            Some(i) if list[i].from.is_empty() && list[i].url == src.url && list[i].adapter == src.adapter => {
-                // 同一条源,只是用户先自己加过了:接管过来,id 保持用户原来那个
-                src.id = list[i].id.clone();
-                list[i] = merge_into(list[i].clone(), src);
-                list[i].from = id.clone();
-                report.updated += 1;
-                kept.push(AppliedSource {
-                    id: s.id.clone(),
-                    local_id: list[i].id.clone(),
-                });
-            }
-            Some(_) => {
-                // 同 id 不同地址,或者已经被别的订阅管着:不碰,但要说清楚
-                report.skipped.push(format!(
-                    "源 {}:本地已有同 id 的源(地址不同或来自别的订阅),没有覆盖",
-                    src.id
-                ));
-            }
-            None => {
-                // 没有同 id 的,再看有没有「同一个地址」的本地源 —— 用户先把配置
-                // 导进过应用的话,id 是随机的,靠地址才认得出来
-                let same_url = list.iter().position(|x| {
-                    x.from.is_empty() && x.url == src.url && x.adapter == src.adapter
-                });
-                match same_url {
-                    Some(i) => {
-                        src.id = list[i].id.clone();
-                        list[i] = merge_into(list[i].clone(), src);
-                        list[i].from = id.clone();
-                        report.updated += 1;
-                        kept.push(AppliedSource {
-                            id: s.id.clone(),
-                            local_id: list[i].id.clone(),
-                        });
-                    }
-                    None => {
-                        let local_id = src.id.clone();
-                        list.push(src);
-                        report.added += 1;
-                        kept.push(AppliedSource {
-                            id: s.id.clone(),
-                            local_id,
-                        });
-                    }
-                }
-            }
+        src.from = id.to_string();
+        if let Some(prev_src) = old.iter().find(|x| x.id == src.id && x.url == src.url) {
+            src.health = prev_src.health.clone();
+            src.probe = prev_src.probe.clone();
         }
+        list.push(src);
     }
-
-    // 索引里删掉的,本地跟着回收 —— 只回收自己装的那些
-    if let Some(p) = prev {
-        let alive: Vec<&str> = idx.sources.iter().map(|s| s.id.as_str()).collect();
-        for old in &p.sources {
-            if alive.contains(&old.id.as_str()) {
-                continue;
-            }
-            let lid = if old.local_id.is_empty() { &old.id } else { &old.local_id };
-            if let Some(i) = list.iter().position(|x| x.id == *lid && x.from == id) {
-                list.remove(i);
-                report.removed += 1;
-            }
-        }
-    }
-
-    crate::commands::save_sources(list)?;
-
-    let stored = Stored {
-        id,
-        url: url.to_string(),
-        name: idx.name.clone(),
-        version: idx.version,
-        updated: idx.updated.clone(),
-        enabled: true,
-        files,
-        sources: kept,
-        synced_at: now_iso(),
-    };
+    report.sources = list.len();
 
     crate::logging::event(&format!(
-        "SUB sync id={} v{} +{} ~{} -{} files={} skip={}",
-        stored.id,
-        stored.version,
-        report.added,
-        report.updated,
-        report.removed,
+        "SUB apply id={id} v{} sources={} files={} skip={}",
+        report.version,
+        report.sources,
         report.files,
         report.skipped.len()
     ));
 
-    Ok((stored, report))
+    Ok((files, list, report))
+}
+
+// ---------------------------------------------------------------- 切换
+
+/// 切到某条订阅:先把当前这份存回它的快照,再把目标的快照写进 `sources.json`。
+fn do_switch(store: &mut Store, id: &str) -> Result<(), String> {
+    if store.active == id {
+        return Ok(());
+    }
+    let items: Vec<String> = store.items.iter().map(|i| i.id.clone()).collect();
+    if !items.iter().any(|x| x == id) {
+        return Err(format!("没有这条订阅: {id}"));
+    }
+
+    // 存当前(用户可能手改过,手改的也算这份订阅的内容)
+    if !store.active.is_empty() {
+        let cur = crate::commands::load_sources();
+        snap_write(&store.active, &cur)?;
+        if let Some(it) = store.items.iter_mut().find(|i| i.id == store.active) {
+            it.source_count = cur.len();
+        }
+    }
+
+    let target = snap_read(id);
+    crate::commands::save_sources(target.clone())?;
+    store.active = id.to_string();
+    if let Some(it) = store.items.iter_mut().find(|i| i.id == id) {
+        it.source_count = target.len();
+        it.applied_at = now_iso();
+    }
+    crate::logging::event(&format!("SUB switch id={id} sources={}", target.len()));
+    Ok(())
+}
+
+/// 把一条订阅的内容取出来(远程/文件订阅都要过一遍体检)
+fn load_item(item: &Item, force: bool) -> Result<(Vec<InstalledFile>, Vec<Source>, Report), String> {
+    let (base_url, idx) = if item.kind == KIND_REMOTE {
+        (item.url.clone(), fetch_index(&item.url)?)
+    } else if !item.path.is_empty() {
+        // 本地文件订阅:相对路径按文件所在目录解析
+        let abs = std::fs::canonicalize(&item.path).unwrap_or_else(|_| PathBuf::from(&item.path));
+        let dir = abs
+            .parent()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        (format!("{dir}/index.json"), read_index_file(&item.path)?)
+    } else {
+        // "本地配置"这种没有外部来源,只有快照
+        return Ok((item.files.clone(), snap_read(&item.id), Report {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            version: item.version.clone(),
+            sources: item.source_count,
+            files: 0,
+            skipped: vec![],
+        }));
+    };
+    apply_index(&item.id, &base_url, &idx, &item.files, force)
 }
 
 // ---------------------------------------------------------------- 命令
 
+/// 账本 + 每条的"有更新/手改过"状态
 #[tauri::command]
-pub fn sub_list() -> Vec<Stored> {
-    load_store()
+pub fn sub_state() -> Store {
+    let mut s = store_load();
+    let cur = crate::commands::load_sources();
+    if !s.active.is_empty() {
+        s.dirty = fingerprint(&cur) != fingerprint(&snap_read(&s.active));
+    }
+    if let Some(it) = s.items.iter_mut().find(|i| i.id == s.active) {
+        it.source_count = cur.len();
+    }
+    for it in s.items.iter_mut() {
+        it.has_update = it.needs_update();
+    }
+    s
 }
 
-/// 添加 / 更新一条订阅(地址就是 id,同一个地址再粘一次 = 同步)。
+/// 添加远程订阅(地址就是身份,同一个地址再粘一次 = 重新拉一遍)
 #[tauri::command]
-pub async fn sub_add(url: String, force: bool) -> Result<Report, String> {
+pub async fn sub_add(url: String) -> Result<Report, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let url = url.trim().to_string();
-        if url.is_empty() {
-            return Err("没有地址".to_string());
+        let lower = url.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            return Err("地址要以 http(s):// 开头".to_string());
         }
-        let idx = fetch_index(&url)?;
-        let prev = load_store().into_iter().find(|s| s.id == id_of(&url));
-        let (stored, report) = apply(&url, &idx, prev.as_ref(), force)?;
-
-        let mut list = load_store();
-        match list.iter().position(|s| s.id == stored.id) {
-            Some(i) => list[i] = stored,
-            None => list.push(stored),
-        }
-        save_store(&list)?;
-        Ok(report)
-    })
-    .await
-    .map_err(|e| format!("任务失败: {e}"))?
-}
-
-/// 重新拉一次某条订阅。`force` 时连用户改过的文件也覆盖。
-#[tauri::command]
-pub async fn sub_sync(id: String, force: bool) -> Result<Report, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let list = load_store();
-        let prev = list
+        let id = id_of_remote(&url);
+        let mut store = store_load();
+        let prev_files = store
+            .items
             .iter()
-            .find(|s| s.id == id)
-            .cloned()
-            .ok_or_else(|| format!("没有这条订阅: {id}"))?;
-        let idx = fetch_index(&prev.url)?;
-        let (stored, report) = apply(&prev.url, &idx, Some(&prev), force)?;
+            .find(|i| i.id == id)
+            .map(|i| i.files.clone())
+            .unwrap_or_default();
 
-        let mut list = load_store();
-        if let Some(i) = list.iter().position(|s| s.id == stored.id) {
-            list[i] = stored;
+        let idx = fetch_index(&url)?;
+        let (files, list, report) = apply_index(&id, &url, &idx, &prev_files, false)?;
+
+        snap_write(&id, &list)?;
+        let item = Item {
+            id: id.clone(),
+            kind: KIND_REMOTE.to_string(),
+            name: idx.name.clone(),
+            url: url.clone(),
+            path: String::new(),
+            version: idx.version.clone(),
+            latest: String::new(),
+            checked_at: now_iso(),
+            applied_at: now_iso(),
+            source_count: list.len(),
+            has_update: false,
+            files,
+        };
+        match store.items.iter_mut().find(|i| i.id == id) {
+            Some(it) => *it = item,
+            None => store.items.push(item),
         }
-        save_store(&list)?;
+        do_switch(&mut store, &id)?;
+        store_save(&store)?;
         Ok(report)
     })
     .await
     .map_err(|e| format!("任务失败: {e}"))?
 }
 
-/// 删除一条订阅:回收它装的源,**不动**它装的文件。
-///
-/// 文件可能是别的订阅也在用的同一个,也可能用户拿去改成了自己的源 ——
-/// 删文件比删源危险得多,所以留给用户自己决定。
+/// 添加本地订阅:指向一个 json 文件(和 index.json 一个格式)
 #[tauri::command]
-pub fn sub_remove(id: String) -> Result<Report, String> {
-    let list = load_store();
-    let prev = list
-        .iter()
-        .find(|s| s.id == id)
-        .cloned()
-        .ok_or_else(|| format!("没有这条订阅: {id}"))?;
+pub async fn sub_add_file(path: String) -> Result<Report, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = path.trim().to_string();
+        if path.is_empty() {
+            return Err("没有选中文件".to_string());
+        }
+        let id = id_of_local(&path);
+        let mut store = store_load();
+        let idx = read_index_file(&path)?;
+        let abs = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+        let dir = abs
+            .parent()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        let base_url = format!("{dir}/index.json");
 
-    let mut sources = crate::commands::load_sources();
-    let before = sources.len();
-    sources.retain(|s| s.from != id);
-    let removed = before - sources.len();
-    if removed > 0 {
-        crate::commands::save_sources(sources)?;
+        let (files, list, report) = apply_index(&id, &base_url, &idx, &[], false)?;
+
+        snap_write(&id, &list)?;
+        store.items.push(Item {
+            id: id.clone(),
+            kind: KIND_LOCAL.to_string(),
+            name: idx.name.clone(),
+            url: String::new(),
+            path: path.clone(),
+            version: idx.version.clone(),
+            latest: String::new(),
+            checked_at: now_iso(),
+            applied_at: now_iso(),
+            source_count: list.len(),
+            has_update: false,
+            files,
+        });
+        do_switch(&mut store, &id)?;
+        store_save(&store)?;
+        Ok(report)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 从一段 json 文本建一条本地订阅(文件选择器读出来的内容)。
+///
+/// 不带插件/适配器:相对地址是相对"索引所在的仓库"的,手里只有一段文本时
+/// 推不出仓库在哪,与其装半个不如说清楚。
+#[tauri::command]
+pub fn sub_add_text(text: String) -> Result<Report, String> {
+    let idx: Index =
+        serde_json::from_str(&text).map_err(|e| format!("不是合法的 index.json: {e}"))?;
+    if !idx.plugins.is_empty() || !idx.adapters.is_empty() {
+        return Err("这份配置带了插件或适配器,从文件导入装不了 —— 请把它放到仓库里用地址订阅".to_string());
+    }
+    let problems = sub::problems(&idx, env!("CARGO_PKG_VERSION"));
+    if !problems.is_empty() {
+        return Err(format!("这份配置有问题,没有安装:
+· {}", problems.join("
+· ")));
     }
 
-    let rest: Vec<Stored> = list.into_iter().filter(|s| s.id != id).collect();
-    save_store(&rest)?;
+    let mut store = store_load();
+    let id = id_of_local(&format!("{}{}", idx.name, idx.version));
+    let list: Vec<Source> = idx
+        .sources
+        .iter()
+        .map(|s| {
+            let mut src = s.to_source();
+            src.from = id.clone();
+            src
+        })
+        .collect();
+    snap_write(&id, &list)?;
 
-    crate::logging::event(&format!("SUB remove id={id} sources={removed}"));
-    Ok(Report {
-        id,
-        name: prev.name,
-        version: prev.version,
-        removed,
+    let report = Report {
+        id: id.clone(),
+        name: idx.name.clone(),
+        version: idx.version.clone(),
+        sources: list.len(),
+        files: 0,
+        skipped: Vec::new(),
+    };
+    store.items.push(Item {
+        id: id.clone(),
+        kind: KIND_LOCAL.to_string(),
+        name: idx.name.clone(),
+        version: idx.version.clone(),
+        latest: String::new(),
+        checked_at: now_iso(),
+        applied_at: now_iso(),
+        source_count: list.len(),
+        has_update: false,
+        files: Vec::new(),
         ..Default::default()
+    });
+    do_switch(&mut store, &id)?;
+    store_save(&store)?;
+    Ok(report)
+}
+
+/// 切换订阅(整体换一套源)
+#[tauri::command]
+pub fn sub_switch(id: String) -> Result<Store, String> {
+    let mut store = store_load();
+    do_switch(&mut store, &id)?;
+    store_save(&store)?;
+    Ok(sub_state())
+}
+
+/// 检查一条订阅有没有新版本(只比版本号,不改任何东西)
+#[tauri::command]
+pub async fn sub_check(id: String) -> Result<Item, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = store_load();
+        let item = store
+            .items
+            .iter()
+            .find(|i| i.id == id)
+            .cloned()
+            .ok_or_else(|| format!("没有这条订阅: {id}"))?;
+
+        let latest = if item.kind == KIND_REMOTE {
+            fetch_index(&item.url)?.version
+        } else if !item.path.is_empty() {
+            read_index_file(&item.path)?.version
+        } else {
+            item.version.clone()
+        };
+
+        if let Some(it) = store.items.iter_mut().find(|i| i.id == id) {
+            it.latest = latest;
+            it.checked_at = now_iso();
+            // 返回值要带"有没有更新" —— 这里不现算,前端就只能看到上一次的结论
+            it.has_update = it.needs_update();
+        }
+        store_save(&store)?;
+        Ok(store
+            .items
+            .into_iter()
+            .find(|i| i.id == id)
+            .unwrap_or(item))
     })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 全部检查一遍
+#[tauri::command]
+pub async fn sub_check_all() -> Result<Store, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = store_load();
+        for i in 0..store.items.len() {
+            let item = store.items[i].clone();
+            let got = if item.kind == KIND_REMOTE && !item.url.is_empty() {
+                fetch_index(&item.url).map(|x| x.version)
+            } else if !item.path.is_empty() {
+                read_index_file(&item.path).map(|x| x.version)
+            } else {
+                continue;
+            };
+            match got {
+                Ok(v) => {
+                    store.items[i].latest = v;
+                    store.items[i].checked_at = now_iso();
+                }
+                Err(e) => {
+                    crate::logging::event(&format!("SUB check fail id={} {e}", item.id));
+                }
+            }
+        }
+        store_save(&store)?;
+        drop(store);
+        Ok(sub_state())
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 应用某条订阅的最新内容(远程会重新拉)
+#[tauri::command]
+pub async fn sub_update(id: String) -> Result<Report, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = store_load();
+        let item = store
+            .items
+            .iter()
+            .find(|i| i.id == id)
+            .cloned()
+            .ok_or_else(|| format!("没有这条订阅: {id}"))?;
+
+        let (files, list, report) = load_item(&item, false)?;
+        snap_write(&id, &list)?;
+
+        if let Some(it) = store.items.iter_mut().find(|i| i.id == id) {
+            it.files = files;
+            it.version = report.version.clone();
+            it.latest = String::new();
+            it.checked_at = now_iso();
+            it.source_count = list.len();
+        }
+        // 正在用它:切一次让 sources.json 跟上
+        if store.active == id {
+            let target = snap_read(&id);
+            crate::commands::save_sources(target)?;
+            if let Some(it) = store.items.iter_mut().find(|i| i.id == id) {
+                it.applied_at = now_iso();
+            }
+        }
+        store_save(&store)?;
+        Ok(report)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 删除订阅。删的是正在用的那条时,回到"本地配置"。
+#[tauri::command]
+pub fn sub_remove(id: String) -> Result<Store, String> {
+    if id == LOCAL_ID {
+        return Err("「本地配置」删不掉".to_string());
+    }
+    let mut store = store_load();
+    store.items.retain(|i| i.id != id);
+    let _ = std::fs::remove_file(snap_path(&id));
+    if store.active == id {
+        store.active = String::new();
+        if !store.items.iter().any(|i| i.id == LOCAL_ID) {
+            store.items.insert(0, local_item(0));
+        }
+        do_switch(&mut store, LOCAL_ID)?;
+    }
+    store_save(&store)?;
+    crate::logging::event(&format!("SUB remove id={id}"));
+    Ok(sub_state())
+}
+
+/// 把当前这套源另存一份新订阅(「复制」),并切过去。
+///
+/// 用户在远程订阅下改了源,又不想丢改动时走这条:改动变成一份独立的本地订阅。
+#[tauri::command]
+pub fn sub_clone(name: String) -> Result<Store, String> {
+    let mut store = store_load();
+    let cur = crate::commands::load_sources();
+    let id = id_of_local(&format!("clone{name}{}", cur.len()));
+    snap_write(&id, &cur)?;
+
+    let base_name = if name.trim().is_empty() {
+        store
+            .items
+            .iter()
+            .find(|i| i.id == store.active)
+            .map(|i| format!("{} 副本", i.name))
+            .unwrap_or_else(|| "新的本地订阅".to_string())
+    } else {
+        name.trim().to_string()
+    };
+
+    store.items.push(Item {
+        id: id.clone(),
+        kind: KIND_LOCAL.to_string(),
+        name: base_name,
+        version: "0.0.0".to_string(),
+        applied_at: now_iso(),
+        source_count: cur.len(),
+        ..Default::default()
+    });
+    store.active = id;
+    store_save(&store)?;
+    Ok(sub_state())
+}
+
+/// 导出某条订阅的内容成一个 json 文件(备份 / 分享给别人)
+#[tauri::command]
+pub fn sub_export(id: String) -> Result<String, String> {
+    let store = store_load();
+    let item = store
+        .items
+        .iter()
+        .find(|i| i.id == id)
+        .ok_or_else(|| format!("没有这条订阅: {id}"))?;
+
+    // 正在用的那条以 sources.json 为准(可能刚手改过)
+    let list = if store.active == id {
+        crate::commands::load_sources()
+    } else {
+        snap_read(&id)
+    };
+
+    let slug: String = item
+        .name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
+    let stamp = now_iso().replace([':', '-'], "").replace('T', "-");
+    let stamp = stamp.trim_end_matches('Z').to_string();
+    let dir = base().join("exports");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建目录失败: {e}"))?;
+    let path = dir.join(format!("{slug}-{stamp}.json"));
+
+    let idx = serde_json::json!({
+        "schema": sub::SCHEMA,
+        "name": item.name,
+        "version": if sub::is_semver(&item.version) { item.version.clone() } else { "0.0.0".to_string() },
+        "updated": now_iso(),
+        "sources": list.iter().map(|s| serde_json::json!({
+            "id": s.id, "name": s.name, "type": s.kind, "url": s.url,
+            "adapter": s.adapter,
+            "verify": s.verify,
+            "verifyUrl": s.verify_url,
+            "posterRatio": s.poster_ratio,
+        })).collect::<Vec<_>>(),
+    });
+    let text = serde_json::to_string_pretty(&idx).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&path, text).map_err(|e| format!("写文件失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 整体重置:清空所有订阅和源,回到初始的空白「本地配置」。
+///
+/// 原来的 `sources.json` 会备份成 `sources.bak-<时间>.json`,不直接毁掉。
+#[tauri::command]
+pub fn sub_reset() -> Result<Store, String> {
+    let dir = base();
+    let src = crate::paths::sources_path();
+    if src.exists() {
+        let stamp = now_iso().replace([':', '-'], "").replace('T', "-");
+        let bak = dir.join(format!("sources.bak-{}.json", stamp.trim_end_matches('Z')));
+        let _ = std::fs::copy(&src, &bak);
+    }
+    crate::commands::save_sources(Vec::new())?;
+    let _ = std::fs::remove_dir_all(snap_dir());
+    let _ = std::fs::remove_file(store_path());
+
+    let mut s = Store::default();
+    s.items.push(local_item(0));
+    s.active = LOCAL_ID.to_string();
+    store_save(&s)?;
+    crate::logging::event("SUB reset");
+    Ok(s)
 }
