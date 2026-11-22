@@ -1257,8 +1257,10 @@ function posterFor(url) {
 // 从 from 开始把 items 追加到网格;已存在的卡片不动,所以滚动不会重载图片。
 function appendCards(from) {
   const grid = $("grid");
-  // 直播频道用 16:9 磁贴(台标是方的),点播还是 2:3 海报
-  if (grid) grid.classList.toggle("grid--live", sourceType(S.source) === "live");
+  // 直播:名字直接写进磁贴(台标来源太杂,有的方有的宽还有一半是坏的);
+  // 点播仍是 2:3 海报
+  const live = sourceType(S.source) === "live";
+  if (grid) grid.classList.toggle("grid--live", live);
   const el = $("empty");
   el.style.display = "none";
   el.innerHTML = "";
@@ -1271,16 +1273,22 @@ function appendCards(from) {
     .slice(from)
     .map(
       (it, k) =>
-        '<article class="card" data-i="' + (from + k) + '"><div class="poster">' +
-        (it.poster ? "" : '<span class="m3e-icon poster__icon" aria-hidden="true">live_tv</span>') +
-        (it.subtitle ? '<span class="badge">' + esc(it.subtitle) + "</span>" : "") +
-        '</div><div class="meta"><b>' + esc(it.title) + "</b></div></article>"
+        live
+          ? '<article class="card" data-i="' + (from + k) + '">' +
+            '<div class="poster poster--text">' +
+            '<span class="poster__name">' + esc(it.title) + "</span>" +
+            (it.subtitle ? '<span class="badge">' + esc(it.subtitle) + "</span>" : "") +
+            "</div></article>"
+          : '<article class="card" data-i="' + (from + k) + '"><div class="poster">' +
+            (it.subtitle ? '<span class="badge">' + esc(it.subtitle) + "</span>" : "") +
+            '</div><div class="meta"><b>' + esc(it.title) + "</b></div></article>"
     )
     .join("");
   const added = Array.from(frag.children);
   added.forEach((el) => grid.appendChild(el));
 
   added.forEach((el, k) => {
+    if (live) return; // 直播卡不加载图片
     const it = S.items[from + k];
     if (!it || !it.poster) return;
     const box = el.querySelector(".poster");

@@ -283,6 +283,23 @@
   .grid--live .poster img { object-fit: contain; padding: 12px; box-sizing: border-box; }
   /* 台标本身是宽的(接近 16:9):铺满磁贴,只留一点边 */
   .grid--live .poster img.is-wide { object-fit: cover; padding: 4px; }
+  /* 直播磁贴:只有名字。字号跟着磁贴走,最多三行 */
+  .poster--text {
+    display: grid;
+    place-items: center;
+    padding: 10px 12px;
+    text-align: center;
+  }
+  .poster--text .poster__name {
+    font: 600 13.5px/1.35 system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
   /* 拿不到台标别留一块空灰:给个电视图标 */
   .poster__icon {
     position: absolute;
