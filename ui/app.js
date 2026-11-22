@@ -1261,6 +1261,7 @@ function appendCards(from) {
   // 点播仍是 2:3 海报
   const live = sourceType(S.source) === "live";
   if (grid) grid.classList.toggle("grid--live", live);
+  applyPosterRatio(grid);
   const el = $("empty");
   el.style.display = "none";
   el.innerHTML = "";
@@ -1317,9 +1318,19 @@ function appendCards(from) {
   });
 }
 
+/** 封面比例:源上存的是 "16:9" 这种,转成 CSS 认的 "16 / 9" */
+function applyPosterRatio(grid) {
+  if (!grid) return;
+  const raw = String((S.source && S.source.posterRatio) || "").trim();
+  const m = /^(\d{1,2}):(\d{1,2})$/.exec(raw);
+  if (m) grid.style.setProperty("--poster-ratio", m[1] + " / " + m[2]);
+  else grid.style.removeProperty("--poster-ratio");
+}
+
 function resetGrid() {
   const g0 = $("grid");
   if (g0) g0.classList.toggle("grid--live", sourceType(S.source) === "live");
+  applyPosterRatio(g0);
   clearSkeleton();
   $("grid").innerHTML = "";
 }
@@ -1766,6 +1777,8 @@ function normSource(raw) {
   if (raw.verify) src.verify = true;
   const vurl = String(raw.verifyUrl == null ? "" : raw.verifyUrl).trim();
   if (vurl) src.verifyUrl = vurl;
+  const ratio = String(raw.posterRatio == null ? "" : raw.posterRatio).trim();
+  if (ratio) src.posterRatio = ratio;
   const probe = raw.probe;
   if (probe && typeof probe === "object" && !Array.isArray(probe)) {
     const one = {
@@ -2534,6 +2547,20 @@ async function editSource(src) {
         ],
       },
       {
+        id: "posterRatio",
+        label: "封面比例",
+        type: "select",
+        value: String(src.posterRatio || ""),
+        hint: "列表卡片的宽高比。站点海报不统一时按它调,默认 2:3。",
+        options: [
+          { value: "", label: "默认(2:3)" },
+          { value: "3:4", label: "3:4" },
+          { value: "4:3", label: "4:3(横向)" },
+          { value: "16:9", label: "16:9(截图)" },
+          { value: "1:1", label: "1:1(方形)" },
+        ],
+      },
+      {
         id: "verifyUrl",
         label: "校验页地址",
         value: String(src.verifyUrl || ""),
@@ -2563,6 +2590,7 @@ async function editSource(src) {
     adapter: res.adapter, // 表单里选的;「自动」是空串,运行时再按地址推断
     verify: res.verify === "1",
     verifyUrl: res.verifyUrl,
+    posterRatio: res.posterRatio,
     probe: src.probe,
   });
   if (!src2) return;

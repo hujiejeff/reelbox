@@ -229,7 +229,7 @@
     max-width: 1290px; margin-inline: auto;
   }
   .card { cursor: pointer; }
-  .poster { aspect-ratio: 2 / 3; border-radius: 18px;
+  .poster { aspect-ratio: var(--poster-ratio, 2 / 3); border-radius: 18px;
     background: linear-gradient(160deg, hsl(calc(212deg + var(--h,0deg)) 40% 50%), hsl(calc(258deg + var(--h,0deg)) 46% 22%));
     transition: transform .18s cubic-bezier(.2,.9,.3,1.2), box-shadow .18s ease; }
   .card:hover .poster { transform: translateY(-3px) scale(1.015); box-shadow: 0 10px 24px rgba(0,0,0,.16); }

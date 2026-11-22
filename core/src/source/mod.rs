@@ -52,6 +52,11 @@ pub struct Source {
     /// 落盘用 camelCase:前端只认 `verifyUrl`(和它的其它字段同名习惯一致)。
     #[serde(default, rename = "verifyUrl", skip_serializing_if = "String::is_empty")]
     pub verify_url: String,
+    /// 列表封面的比例。不同站的海报不统一(2:3 / 3:4 / 16:9 都有),
+    /// 这里按源存一个,渲染时用 CSS 变量喂给网格。空 = 用默认 2:3。
+    /// 落盘 camelCase:前端只认 `posterRatio`。
+    #[serde(default, rename = "posterRatio", skip_serializing_if = "String::is_empty")]
+    pub poster_ratio: String,
     /// 最近一次「测试连接」的结果;None = 从没测过(界面上是空心圆)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,
