@@ -213,7 +213,21 @@ pub fn forget(host: &str) {
 ///    只有直连失败才试它,日志里会写清"第二个候选是没启用的代理"
 /// 4. 完全没有代理配置:`[直连]` 一条
 pub fn candidates(host: &str) -> Vec<Via> {
+    // 环回地址永远直连。
+    //
+    // 系统代理很可能指向别的机器(甚至另一台电脑上的 7890),让它去连
+    // `127.0.0.1` 只会拿到 502 —— 而且会把这个错误记进"这条域名该走代理"
+    // 的记忆里,连累后面所有真请求。
+    if is_loopback(host) {
+        return vec![Via::Direct];
+    }
     candidates_with(recall(host), &proxy::outlook())
+}
+
+/// `localhost` / `127.x.x.x` / `[::1]`(IPv6 方括号要去掉再比)
+fn is_loopback(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    h == "localhost" || h.ends_with(".localhost") || h == "::1" || h.starts_with("127.")
 }
 
 /// [`candidates`] 的纯函数版:学过的 + 系统代理现状 → 候选顺序(单测走这条)
@@ -240,6 +254,16 @@ mod tests {
 
     fn proxy_via(url: &str) -> Via {
         Via::Proxy(url.to_string())
+    }
+
+    #[test]
+    fn loopback_never_uses_proxy() {
+        // 系统代理开着也得直连:代理连不到本机
+        for h in ["127.0.0.1", "127.1.2.3", "localhost", "LOCALHOST", "[::1]", "a.localhost"] {
+            assert_eq!(candidates(h), vec![Via::Direct], "{h}");
+        }
+        // 别人家的域名照旧
+        assert!(!matches!(candidates("example.com"), v if v.is_empty()));
     }
 
     fn enabled(url: &str) -> Outlook {

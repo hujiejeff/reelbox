@@ -163,6 +163,7 @@ async function init() {
   } catch (e) {
     return showListError(errorInfo("source", e), () => init());
   }
+
   // 老配置里有名字塌成 "-" 的 id(见 docs/REVIEW-2026-11-14.md A1):
   // 先修 id 再往下走,收藏与进度里「源id|片名」的键会同步搬过去。
   if (migrateSourceIds()) renderFavs();
@@ -3669,6 +3670,154 @@ function bindVerifyPanel() {
   };
 }
 
+// ---------------------------------------------------------------- 配置订阅
+
+/** 设置 → 配置订阅:一条链接装齐源 + 插件 + 适配器 */
+let SUBS = [];
+
+function subMeta(s) {
+  const parts = ["v" + s.version];
+  parts.push((s.sources || []).length + " 源");
+  if ((s.files || []).length) parts.push(s.files.length + " 个文件");
+  const at = String(s.synced_at || "").replace("T", " ").replace("Z", "");
+  if (at) parts.push("同步于 " + at);
+  return parts.join(" · ");
+}
+
+function renderSubList() {
+  const box = $("subList");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const s of SUBS) {
+    const row = document.createElement("div");
+    row.className = "sub-row";
+    const text = document.createElement("div");
+    text.className = "sub-row__text";
+    const name = document.createElement("b");
+    name.textContent = s.name || s.id;
+    const meta = document.createElement("span");
+    meta.className = "sub-row__meta";
+    meta.textContent = subMeta(s);
+    text.append(name, meta);
+    const acts = document.createElement("div");
+    acts.className = "sub-row__acts";
+    const sync = document.createElement("button");
+    sync.type = "button";
+    sync.className = "m3e-button m3e-button--text";
+    sync.textContent = "同步";
+    sync.onclick = () => subAction(s, "sync");
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "m3e-button m3e-button--text";
+    del.textContent = "删除";
+    del.onclick = () => subAction(s, "remove");
+    acts.append(sync, del);
+    row.append(text, acts);
+    box.append(row);
+  }
+}
+
+function subReport(r) {
+  const lines = ["✅ " + (r.name || r.id) + " v" + r.version];
+  lines.push("新增 " + r.added + " 条源 · 更新 " + r.updated + " 条 · 回收 " + r.removed + " 条");
+  if (r.files) lines.push("写入 " + r.files + " 个文件");
+  if ((r.skipped || []).length) {
+    lines.push("");
+    lines.push("没装成的:");
+    for (const s of r.skipped) lines.push("· " + s);
+  }
+  return lines.join(NL);
+}
+
+/** 装完/删完之后:源列表变了,顶栏下拉和设置首页的摘要都要跟上 */
+async function reloadAfterSub() {
+  try {
+    S.sources = await invoke("list_sources");
+  } catch (e) {
+    log("SUB reload fail", errText(e));
+  }
+  renderSources();
+  syncSetSummaries();
+}
+
+async function loadSubs() {
+  try {
+    SUBS = await invoke("sub_list");
+  } catch (e) {
+    SUBS = [];
+    log("SUB list fail", errText(e));
+  }
+  renderSubList();
+  const out = $("subOut");
+  if (out && !SUBS.length) out.textContent = "还没有订阅";
+}
+
+async function subAction(s, what) {
+  const out = $("subOut");
+  const say = (t) => {
+    if (out) out.textContent = t;
+  };
+  if (what === "remove") {
+    const ok = await confirmDialog(
+      "删除订阅",
+      "「" + (s.name || s.id) + "」装的源会一起移除,但它装的文件会留着。",
+      "删除",
+      true
+    );
+    if (!ok) return;
+    try {
+      const r = await invoke("sub_remove", { id: s.id });
+      say("已删除「" + (r.name || r.id) + "」,回收 " + r.removed + " 条源");
+    } catch (e) {
+      say("删除失败:" + errText(e));
+    }
+    await loadSubs();
+    await reloadAfterSub();
+    return;
+  }
+  say("正在同步「" + (s.name || s.id) + "」…");
+  try {
+    const r = await invoke("sub_sync", { id: s.id, force: false });
+    say(subReport(r));
+  } catch (e) {
+    say("同步失败:" + errText(e));
+  }
+  await loadSubs();
+  await reloadAfterSub();
+}
+
+function bindSubPanel() {
+  const input = $("subUrl");
+  const btn = $("btnSubAdd");
+  if (!input || !btn) return;
+  const out = $("subOut");
+  const say = (t) => {
+    if (out) out.textContent = t;
+  };
+  loadSubs();
+
+  btn.onclick = async () => {
+    const url = input.value.trim();
+    if (!/^https?:/i.test(url)) {
+      say("地址要以 http(s):// 开头");
+      return;
+    }
+    btn.disabled = true;
+    say("正在拉取并安装…");
+    try {
+      const r = await invoke("sub_add", { url: url, force: false });
+      say(subReport(r));
+      input.value = "";
+    } catch (e) {
+      say("安装失败:" + errText(e));
+    } finally {
+      btn.disabled = false;
+    }
+    await loadSubs();
+    await reloadAfterSub();
+  };
+}
+
 function showDebugPanel(on) {
   if (!isDevBuild()) return; // 发布版不暴露实时日志(日志照旧写文件)
   const box = document.getElementById("dbg");
@@ -3728,6 +3877,8 @@ function syncPlaySettings() {
 
 const SET_PAGES = [
   { key: "src", icon: "dns", title: "源", group: 0 },
+  // 配置订阅:一条链接装齐源 + 插件 + 适配器(见 docs 与 reelbox-config 仓库)
+  { key: "subs", icon: "cloud_download", title: "订阅", group: 0 },
   // 适配器单独一页:它既不是源,也不该埋在源的页面里(见 docs/ARCHITECTURE.md 第 4 节)
   { key: "adapters", icon: "extension", title: "适配器", group: 0 },
   { key: "play", icon: "play_circle", title: "播放", group: 0 },
@@ -3783,6 +3934,10 @@ function setSummary(key) {
     const dark = isDark();
     const mode = dark ? (themeState.pureBlack ? "纯黑" : "深色") : "浅色";
     return mode + " · " + themeSeedLabel() + " · " + (VARIANT_LABEL[themeState.variant] || "标准");
+  }
+  if (key === "subs") {
+    if (!SUBS.length) return "未添加,点进去粘一个地址";
+    return SUBS.length + " 条 · " + SUBS.map((s) => s.name || s.id).join("、");
   }
   if (key === "sites") {
     return "人机验证 · 登录页";
@@ -3874,6 +4029,7 @@ function openSetPage(key) {
     renderSourceManager();
   }
   if (page === "adapters") loadAdapters();
+  if (page === "subs") loadSubs();
 
   if (page === "about") fillAbout();
   if (page === "debug") fillLogPath();
@@ -4108,6 +4264,8 @@ function bindSettings() {
 
   // 人工校验会话:开窗口 → 用户点「我已完成」→ 用会话取一次
   bindVerifyPanel();
+  // 配置订阅:粘地址 → 拉索引 → 装文件 → 合并源
+  bindSubPanel();
 
   // 外观改了(主题/种子色/风格)之后摘要要跟着变
   ["segMode", "segBlack", "segVariant", "swatches"].forEach((id) => {

@@ -60,6 +60,12 @@ pub struct Source {
     /// 最近一次「测试连接」的结果;None = 从没测过(界面上是空心圆)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,
+    /// 来自哪个配置订阅(见 `core/src/sub.rs`)。空 = 用户自己加的。
+    ///
+    /// 同步时只动 `from == 自己` 的那些源:订阅不能删掉用户手动加的源,
+    /// 也不能覆盖同 id 的本地源。订阅被移除时按这个字段回收。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from: String,
 }
 
 /// 一次健康检查。(`ms` 是这次探测的耗时:列表接口的首字节到读完;

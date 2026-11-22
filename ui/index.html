@@ -558,6 +558,26 @@
     color: var(--m3e-sys-color-on-surface-variant);
   }
   .set-block { display: flex; flex-direction: column; }
+  /* 订阅列表:一行一条,行距 14px(和源管理器里的一致) */
+  .sub-list { display: flex; flex-direction: column; gap: 14px; }
+  .sub-list:empty::after {
+    content: "—";
+    font: 400 14px/20px system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant);
+  }
+  .sub-row { display: flex; align-items: center; gap: 8px; }
+  .sub-row__text { flex: 1; min-width: 0; }
+  .sub-row__text b {
+    display: block;
+    font: 500 16px/24px system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface);
+  }
+  .sub-row__meta {
+    display: block; margin-top: 2px;
+    font: 400 14px/20px system-ui, "PingFang SC", sans-serif;
+    color: var(--m3e-sys-color-on-surface-variant);
+  }
+  .sub-row__acts { flex: none; display: flex; align-items: center; gap: 4px; }
   .set-block__head { display: flex; align-items: center; min-height: 24px; }
   /* 块头右侧带一个动作(源页的「导入适配器」):标题左、按钮右,间距 12 */
   .set-block__head--acts { justify-content: space-between; gap: 12px; }
@@ -1591,6 +1611,39 @@
                     <div class="set-block__head"><span class="set-block__title">会话</span></div>
                     <p class="set-page__sub">会话按站点隔离,不会跨站复用;「撤销」会把它删掉,下次要重新校验。</p>
                     <div class="set-mono" id="verifySessions">—</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- 配置订阅:一条链接装齐源 + 插件 + 适配器 -->
+            <section class="set-page" data-page="subs">
+              <header class="set-page__bar">
+                <button type="button" class="set-page__back" data-back aria-label="返回">
+                  <span class="m3e-icon" aria-hidden="true">arrow_back</span>
+                </button>
+                <h2 class="set-page__title">配置订阅</h2>
+              </header>
+              <div class="set-page__scroll">
+                <div class="set-page__body">
+                  <p class="set-page__sub">一个 index.json 里装着源、源插件和适配器。粘一次地址就装齐,以后仓库改了再点「同步」,只拉变了的文件。你手改过的文件不会被覆盖。</p>
+
+                  <div class="set-block">
+                    <div class="set-block__head"><span class="set-block__title">添加</span></div>
+                    <div class="verify-form">
+                      <input id="subUrl" class="set-input" spellcheck="false" autocomplete="off"
+                        placeholder="https://…/index.json" value="">
+                      <div class="set-acts">
+                        <button type="button" class="m3e-button" id="btnSubAdd">添加并安装</button>
+                      </div>
+                    </div>
+                    <p class="set-mono" id="subOut">还没有订阅</p>
+                  </div>
+
+                  <div class="set-block">
+                    <div class="set-block__head"><span class="set-block__title">已添加</span></div>
+                    <p class="set-page__sub">订阅只动它自己装的东西:删掉一条订阅,它装的源跟着走,但它装的文件会留着 —— 你可能已经拿去改成自己的源了。</p>
+                    <div class="sub-list" id="subList"></div>
                   </div>
                 </div>
               </div>

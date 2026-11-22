@@ -6,3 +6,4 @@ pub mod net;
 pub mod playlist;
 pub mod plugin;
 pub mod source;
+pub mod sub;

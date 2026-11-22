@@ -18,3 +18,4 @@ boa_engine = "0.22.0"
 # m3u8 里的相对地址按 RFC 3986 解析(`../`、协议相对、查询串),见 playlist::resolve。
 # 版本必须和 reqwest 依赖的那份一致,否则会各编一份 —— 改动前先跑 `cargo tree -i url`
 url = "2"
+sha2 = "0.10"
