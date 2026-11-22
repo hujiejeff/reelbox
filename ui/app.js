@@ -3840,7 +3840,60 @@ async function subCall(fn, ok) {
   await reloadAfterSub();
 }
 
+/**
+ * 切换前问一句:当前这套要不要先备份。
+ *
+ * 为什么值得问:切换是**完整替换** —— `sources.json` 会整个换成目标那份。
+ * 目标那份有快照、随时能切回来,但用户看不出来,只看到"我的源没了"。
+ * 给一个"备份成文件"的出口,这件事就不吓人了。
+ *
+ * 返回 "cancel" / "switch" / "backup"
+ */
+function subSwitchAsk(cur, n, next) {
+  return dialog({
+    icon: "swap_horiz",
+    headline: "切换配置",
+    content:
+      '<p class="dlg-text">当前「' +
+      esc(cur.name || cur.id) +
+      "」有 <b>" +
+      n +
+      "</b> 条源,切换后会<b>完整替换</b>成「" +
+      esc(next.name || next.id) +
+      "」的 " +
+      (next.source_count || 0) +
+      " 条。</p>" +
+      '<p class="dlg-text">备份 = 把现在这套写成一个 json(index.json 格式),以后能直接导回来。</p>',
+    actions: [
+      { label: "取消", value: "cancel" },
+      { label: "直接切换", value: "switch" },
+      { label: "备份并切换", value: "backup", primary: true },
+    ],
+    dismissValue: "cancel",
+  });
+}
+
 async function subSwitch(it) {
+  const cur = subActiveItem();
+  let n = 0;
+  try {
+    n = (await invoke("list_sources")).length;
+  } catch (_) {
+    n = (cur && cur.source_count) || 0;
+  }
+  if (cur && n > 0) {
+    const choice = await subSwitchAsk(cur, n, it);
+    if (choice === "cancel" || !choice) return;
+    if (choice === "backup") {
+      try {
+        const path = await invoke("sub_export", { id: cur.id });
+        subSay("已备份当前配置:" + path);
+      } catch (e) {
+        subSay("备份失败,没有切换:" + errText(e));
+        return;
+      }
+    }
+  }
   await subCall(
     async () => {
       SUB_STORE = await invoke("sub_switch", { id: it.id });
