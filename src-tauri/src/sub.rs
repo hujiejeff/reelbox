@@ -314,7 +314,9 @@ fn apply_index(
     let mut files: Vec<InstalledFile> = Vec::new();
 
     for (kind, e) in idx.code_entries() {
-        let target = dir.join(&e.path);
+        // path 可能是文件名,也可能是绝对地址;落盘一律用文件名
+        let name = sub::local_name(&e.path);
+        let target = dir.join(&name);
         let want = e.sha256.to_lowercase();
         let prev_rec = prev.iter().find(|f| f.kind == kind && f.id == e.id).cloned();
 
@@ -326,7 +328,7 @@ fn apply_index(
                 files.push(InstalledFile {
                     id: e.id.clone(),
                     kind: kind.into(),
-                    file: e.path.clone(),
+                    file: name.clone(),
                     sha256: want,
                 });
                 continue;
@@ -340,7 +342,7 @@ fn apply_index(
                 files.push(prev_rec.unwrap_or(InstalledFile {
                     id: e.id.clone(),
                     kind: kind.into(),
-                    file: e.path.clone(),
+                    file: name.clone(),
                     sha256: cur,
                 }));
                 continue;
@@ -364,7 +366,7 @@ fn apply_index(
                 files.push(InstalledFile {
                     id: e.id.clone(),
                     kind: kind.into(),
-                    file: e.path.clone(),
+                    file: name.clone(),
                     sha256: want,
                 });
             }

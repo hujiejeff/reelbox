@@ -183,7 +183,23 @@ pub fn resolve(base: &str, path: &str) -> String {
 /// 校验脚本按 `plugins/<path>` 找文件,下载也必须按同一个位置找,否则 404 之后
 /// 会被当成"网络问题",排查半天。
 pub fn code_url(base: &str, path: &str) -> String {
-    resolve(base, &format!("plugins/{}", path.trim().trim_start_matches("./")))
+    let p = path.trim();
+    // 写死一个绝对地址也认:插件放在别的仓库 / 别的 CDN 时用得上。
+    // 代价是这份索引就绑在那个域名上了 —— 换入口要改索引,不再是一份走天下。
+    if is_http(p) {
+        return p.to_string();
+    }
+    resolve(base, &format!("plugins/{}", p.trim_start_matches("./")))
+}
+
+/// 这个文件装到本机叫什么名字。
+///
+/// 相对路径时 `path` 本身就是文件名;写成绝对地址时取 URL 最后一段
+/// (去掉 `?xv=1` 这类查询串)。
+pub fn local_name(path: &str) -> String {
+    let p = path.trim();
+    let no_query = p.split(['?', '#']).next().unwrap_or(p);
+    no_query.rsplit('/').next().unwrap_or(no_query).to_string()
 }
 
 fn is_http(url: &str) -> bool {
@@ -374,12 +390,15 @@ fn check_code(out: &mut Vec<String>, kind: &str, e: &CodeEntry, suffix: &str, ap
         out.push(format!("{kind} {who}:缺 path"));
         return;
     }
-    // 应用只扫 plugins/ 一层,子目录等于没装
-    if e.path.contains('/') || e.path.contains('\\') {
-        out.push(format!("{kind} {who}:path 不能带目录(应用只扫 plugins/ 一层)"));
+    // path 两种写法:plugins/ 下的文件名,或者一个完整的 http(s) 地址。
+    // 前者要求不带目录 —— 应用只扫 plugins/ 一层,子目录等于没装。
+    if !is_http(&e.path) && (e.path.contains('/') || e.path.contains('\\')) {
+        out.push(format!(
+            "{kind} {who}:path 要么是文件名(装在 plugins/ 下),要么是完整的 http(s) 地址"
+        ));
     }
-    if !e.path.ends_with(suffix) {
-        out.push(format!("{kind} {who}:path 必须以 {suffix} 结尾"));
+    if !local_name(&e.path).ends_with(suffix) {
+        out.push(format!("{kind} {who}:文件名必须以 {suffix} 结尾"));
     }
     if e.sha256.len() != 64 || !e.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
         out.push(format!("{kind} {who}:sha256 必须填 64 位十六进制(用 stamp 脚本生成)"));
@@ -452,6 +471,37 @@ mod tests {
     }
 
     #[test]
+    fn absolute_code_path_is_used_as_is() {
+        // 写死绝对地址:原样用,不拼 plugins/
+        assert_eq!(
+            code_url("https://a.com/u/r/master/index.json", "https://cdn.x.com/p/4kvm.reelbox.js"),
+            "https://cdn.x.com/p/4kvm.reelbox.js"
+        );
+        // 落盘用的名字:相对路径就是文件名,绝对地址取 URL 最后一段(去掉查询串)
+        assert_eq!(local_name("4kvm.reelbox.js"), "4kvm.reelbox.js");
+        assert_eq!(local_name("https://cdn.x.com/p/4kvm.reelbox.js?v=2"), "4kvm.reelbox.js");
+        assert_eq!(local_name("./a/b/x.adapter.js"), "x.adapter.js");
+    }
+
+    #[test]
+    fn problems_allows_absolute_path_but_not_subdirs() {
+        let sha = "c".repeat(64);
+        let ok = Index::parse(&format!(
+            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
+                 "plugins":[{{"id":"p","name":"P","path":"https://cdn.x.com/p/p.reelbox.js","sha256":"{sha}"}}]}}"#
+        ))
+        .unwrap();
+        assert_eq!(problems(&ok, ""), Vec::<String>::new());
+
+        let bad = Index::parse(&format!(
+            r#"{{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
+                 "plugins":[{{"id":"q","name":"Q","path":"sub/q.reelbox.js","sha256":"{sha}"}}]}}"#
+        ))
+        .unwrap();
+        assert!(problems(&bad, "").iter().any(|x| x.contains("要么是文件名")), "{:?}", problems(&bad, ""));
+    }
+
+    #[test]
     fn code_url_points_at_plugins_dir() {
         assert_eq!(
             code_url("https://a.com/u/r/main/index.json", "iplayr.adapter.js"),
@@ -492,17 +542,6 @@ mod tests {
         assert!(p.contains("type 只能是"), "{p}");
         assert!(p.contains("不能是本地路径"), "{p}");
         assert!(p.contains("既不是内置的"), "{p}");
-    }
-
-    #[test]
-    fn code_entry_path_rules() {
-        let idx = idx_with_sources(
-            r#"{"schema":"reelbox-index/1","name":"t","version":"1.0.0",
-                "plugins":[{"id":"p","name":"P","path":"sub/p.reelbox.js","sha256":"aa"}]}"#,
-        );
-        let p = problems(&idx, "").join("\n");
-        assert!(p.contains("path 不能带目录"), "{p}");
-        assert!(p.contains("path 必须以 .reelbox.js 结尾") == false || true);
     }
 
     #[test]

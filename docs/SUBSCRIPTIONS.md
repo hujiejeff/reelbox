@@ -93,8 +93,15 @@
 **版本号用 semver**:`1.0.0`。加/删/改一条源 → 升最后一段(`1.0.1`);换了结构 → 升中间那段。
 应用只比版本号,不看 `updated` —— 时间戳会骗人,版本号不会。
 
-`path` 只写文件名:应用只扫 `plugins/` 第一层,子目录等于没装。真实地址是
-`<index 所在目录>/plugins/<path>`,由 `core::sub::code_url` 拼。
+`path` 有两种写法:
+
+- **文件名**(常规):应用只扫 `plugins/` 第一层,子目录等于没装。真实地址是
+  `<index 所在目录>/plugins/<path>`,由 `core::sub::code_url` 拼 ——
+  同一份索引放 raw / jsDelivr / Pages 都能用
+- **完整的 http(s) 地址**:文件放在别的仓库或 CDN 时用。此时这份索引就绑在那个域名上了,
+  换入口得改索引;落盘时取 URL 最后一段当文件名
+
+不管哪种,装的时候都是**下载到本机** `plugins/<文件名>`,运行时读本地文件,不再联网。
 
 源上的字段和 `sources.json` 一样(见 [SOURCES.md](SOURCES.md)):
 `verify` / `verifyUrl`(人工校验)、`posterRatio`(封面比例)、`options`(引擎插件配置)。
