@@ -579,10 +579,10 @@ async function switchSource(src, opts) {
 // 判定只做一次(导入时写进 adapter + probe),运行时不再重新猜格式。
 
 /** 钩子跑在沙箱里的适配器(其余的交给 Rust:现在只剩 `vod-rs` 那条回滚路径) */
-const SANDBOX_ADAPTERS = ["reelbox", "webox", "iplayr", "vod"];
+const SANDBOX_ADAPTERS = ["reelbox", "webox", "iplayr", "vod", "m3u"];
 
 /** 插件文件随包安装的适配器(名字 → `builtin_adapters()` 里的键) */
-const BUILTIN_ADAPTERS = ["iplayr", "vod"];
+const BUILTIN_ADAPTERS = ["iplayr", "vod", "m3u"];
 
 /**
  * 这条源用哪个适配器。
@@ -646,6 +646,7 @@ function adapterOptions(src) {
   const name = sourceAdapter(src);
   if (name === "iplayr") return { config: String(src.url || "") };
   if (name === "vod") return { config: String(src.url || ""), format: "auto" };
+  if (name === "m3u") return { config: String(src.url || "") };
   return src.options || {};
 }
 
@@ -2722,7 +2723,7 @@ function nameFromTarget(target) {
 const PROBE_TIMEOUT_MS = 8000;
 
 /** 进度提示里的叫法:用户不需要认识 vod / iplayr 这些词 */
-const PROBE_LABEL = { vod: "接口", iplayr: "站点配置", reelbox: "插件", webox: "插件" };
+const PROBE_LABEL = { vod: "接口", iplayr: "站点配置", reelbox: "插件", webox: "插件", m3u: "频道表" };
 
 /** 认不出来时依次试这三个(顺序即优先级) */
 const PROBE_FALLBACK = ["vod", "iplayr", "reelbox"];
@@ -2746,6 +2747,8 @@ function probeCandidates(target, text) {
   if (data && typeof data === "object" && !Array.isArray(data) && data.category && data.vod_node) {
     add("iplayr");
   }
+  // 直播频道表:内置 m3u 适配器,粘地址就能建源
+  if (bare.endsWith(".m3u") || bare.endsWith(".m3u8")) add("m3u");
   // 苹果 CMS:接口关键字 / XML 变体
   if (/api\.php|ac=list|ac=detail/i.test(addr)) add("vod");
   if (bare.endsWith(".xml") || /ac=xml/i.test(addr)) add("vod");

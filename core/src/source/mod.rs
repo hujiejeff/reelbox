@@ -188,9 +188,19 @@ pub fn derive_adapter(kind: &str, url: &str) -> &'static str {
                 "webox"
             }
         }
+        // 直播频道表:内置 m3u 适配器直接吃得下,用户只填地址
+        "live" => {
+            if bare.ends_with(".m3u") || bare.ends_with(".m3u8") {
+                "m3u"
+            } else {
+                "reelbox"
+            }
+        }
         "xml" => "vod",
         "vod" => {
-            if u.contains("api.php") || u.contains("ac=list") || u.contains("ac=detail") {
+            if bare.ends_with(".m3u") || bare.ends_with(".m3u8") {
+        "m3u"
+    } else if u.contains("api.php") || u.contains("ac=list") || u.contains("ac=detail") {
                 "vod"
             } else if bare.ends_with(".json") {
                 // 苹果 CMS 的外壳、iplayr 的 XPath 规则:拿它当接口只会把配置本身当响应体
@@ -404,7 +414,11 @@ mod tests {
         assert_eq!(derive_adapter("", ""), "reelbox");
         assert_eq!(derive_adapter("", "https://example.com/list"), "reelbox");
         assert_eq!(derive_adapter("vod", "https://example.com/list"), "reelbox");
-        assert_eq!(derive_adapter("live", "https://example.com/a.m3u8"), "reelbox");
+        // 直播频道表:内置 m3u 适配器吃得下(粘地址就能建源)
+        assert_eq!(derive_adapter("live", "https://example.com/a.m3u8"), "m3u");
+        assert_eq!(derive_adapter("live", "https://example.com/list.m3u"), "m3u");
+        // 不是频道表形态的直播源,还是交给插件
+        assert_eq!(derive_adapter("live", "D:/x/mylive.reelbox.js"), "reelbox");
         // 地址说了,`type` 说了别的:先听 `type`(顺序即优先级)
         assert_eq!(derive_adapter("xml", "https://example.com/crawl.json"), "vod");
     }

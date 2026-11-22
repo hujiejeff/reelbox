@@ -26,11 +26,15 @@ const IPLAYR: &str = include_str!("../../examples/iplayr.reelbox.js");
 /// 打完包它和 Rust 那份实现应该给出逐字段一致的结果。
 const VOD: &str = include_str!("../../examples/vod.reelbox.js");
 
+/// m3u / m3u8 直播频道表适配器:解析 #EXTINF,分出「分组 + 频道」。
+/// 有了它,建一个直播源只要填频道表地址,不用写代码。
+const M3U: &str = include_str!("../../examples/m3u.reelbox.js");
+
 /// 内置适配器落地的子目录(`plugins/builtin/`),和用户导入的插件分开
 const SUBDIR: &str = "builtin";
 
 /// 内置适配器的清单:`名字 → 源码`。前端不用它,只给 [`install`] 用。
-const ALL: [(&str, &str); 2] = [("iplayr", IPLAYR), ("vod", VOD)];
+const ALL: [(&str, &str); 3] = [("iplayr", IPLAYR), ("vod", VOD), ("m3u", M3U)];
 
 /// 一个内置适配器的落地路径(`<数据目录>/plugins/builtin/<名字>.adapter.js`)。
 fn path_of(name: &str) -> PathBuf {

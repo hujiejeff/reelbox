@@ -109,6 +109,9 @@ fn plugin_path(src: &Source) -> Result<std::path::PathBuf, String> {
         "iplayr" => crate::builtin::adapter_path("iplayr").ok_or_else(|| {
             "内置 iplayr 引擎没装上(插件目录里找不到 builtin/iplayr.adapter.js):重装或重编应用即可".to_string()
         }),
+        "m3u" => crate::builtin::adapter_path("m3u").ok_or_else(|| {
+            "内置 m3u 适配器没装上(插件目录里找不到 builtin/m3u.adapter.js):重装或重编应用即可".to_string()
+        }),
         "vod" => crate::builtin::adapter_path("vod").ok_or_else(|| {
             "内置 vod 适配器没装上(插件目录里找不到 builtin/vod.adapter.js):重装或重编应用即可".to_string()
         }),
@@ -125,6 +128,8 @@ fn plugin_options_json(src: &Source) -> String {
     match src.adapter() {
         "iplayr" => serde_json::json!({ "config": src.url }).to_string(),
         "vod" => serde_json::json!({ "config": src.url, "format": "auto" }).to_string(),
+        // m3u 的 config 就是频道表地址
+        "m3u" => serde_json::json!({ "config": src.url }).to_string(),
         _ => {
             if src.options.is_null() {
                 "{}".into()
@@ -741,9 +746,10 @@ pub struct AdapterEntry {
 
 /// 内置适配器:名字固定在这张表里(顺序即界面顺序)。
 /// `hint` 只说"它的 `config` 该填什么",界面上一行说明。
-const BUILTIN_ADAPTER_LIST: [(&str, &str, &str); 4] = [
+const BUILTIN_ADAPTER_LIST: [(&str, &str, &str); 5] = [
     ("vod", "苹果 CMS", "接口地址 → 我们的接口"),
     ("iplayr", "iplayr 配置", "XPath 规则 → 我们的接口"),
+    ("m3u", "m3u 频道表", "直播频道表 → 我们的接口"),
     ("webox", "WeBox 插件", "老插件格式 → 我们的接口"),
     // 原生插件不是"适配":它直接实现 list/detail/play,中间没有翻译层。
     // 列在这里只是为了让清单完整 —— 文案上必须说清楚,否则会误导成"插件也是一种适配器"。
