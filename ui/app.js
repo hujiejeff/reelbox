@@ -2726,7 +2726,9 @@ const PROBE_TIMEOUT_MS = 8000;
 const PROBE_LABEL = { vod: "接口", iplayr: "站点配置", reelbox: "插件", webox: "插件", m3u: "频道表" };
 
 /** 认不出来时依次试这三个(顺序即优先级) */
-const PROBE_FALLBACK = ["vod", "iplayr", "reelbox"];
+// 短链(.m3u 地址被 bit.ly 之类包了一层)看不出后缀,只能靠试跑回答 ——
+// 所以 m3u 也在候选里,排在最后:它不是频道表时会立刻报「不像 m3u」
+const PROBE_FALLBACK = ["vod", "iplayr", "reelbox", "m3u"];
 
 /**
  * 静态特征表(不发网络):返回候选适配器,最可能的排在最前。
@@ -3242,7 +3244,15 @@ async function applyProbedSource(hit, ctx) {
   }
   // 名字:用户填的 > 配置自称的(iplayr 配置里的 title)> 配置里的名字 > 从地址猜
   const name = given || probe.name || (hit.source && hit.source.name) || nameFromTarget(ctx.target);
-  const kind = hit.type === "xml" ? "xml" : hit.type === "live" ? "live" : "vod";
+  // 适配器说了算:m3u 判成功就是直播源,哪怕地址没后缀(短链)
+  const kind =
+    probe.adapter === "m3u"
+      ? "live"
+      : hit.type === "xml"
+        ? "xml"
+        : hit.type === "live"
+          ? "live"
+          : "vod";
   const src = normSource({
     name: name,
     url: target,
