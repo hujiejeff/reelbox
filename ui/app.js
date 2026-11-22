@@ -1257,6 +1257,8 @@ function posterFor(url) {
 // 从 from 开始把 items 追加到网格;已存在的卡片不动,所以滚动不会重载图片。
 function appendCards(from) {
   const grid = $("grid");
+  // 直播频道用 16:9 磁贴(台标是方的),点播还是 2:3 海报
+  if (grid) grid.classList.toggle("grid--live", sourceType(S.source) === "live");
   const el = $("empty");
   el.style.display = "none";
   el.innerHTML = "";
@@ -1270,6 +1272,7 @@ function appendCards(from) {
     .map(
       (it, k) =>
         '<article class="card" data-i="' + (from + k) + '"><div class="poster">' +
+        (it.poster ? "" : '<span class="m3e-icon poster__icon" aria-hidden="true">live_tv</span>') +
         (it.subtitle ? '<span class="badge">' + esc(it.subtitle) + "</span>" : "") +
         '</div><div class="meta"><b>' + esc(it.title) + "</b></div></article>"
     )
@@ -1289,11 +1292,21 @@ function appendCards(from) {
         box.classList.add("has-img");
         box.prepend(img);
       })
-      .catch(() => {});
+      .catch(() => {
+        // 台标没下下来(常见于 gitee 图床被墙):退成图标,别留空白
+        if (!box.querySelector(".poster__icon")) {
+          box.insertAdjacentHTML(
+            "afterbegin",
+            '<span class="m3e-icon poster__icon" aria-hidden="true">live_tv</span>'
+          );
+        }
+      });
   });
 }
 
 function resetGrid() {
+  const g0 = $("grid");
+  if (g0) g0.classList.toggle("grid--live", sourceType(S.source) === "live");
   clearSkeleton();
   $("grid").innerHTML = "";
 }

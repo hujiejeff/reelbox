@@ -273,6 +273,27 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* 直播:台标多是方形 PNG,2:3 会把两边裁掉。换成 16:9 磁贴 + contain,
+     底色用中性的 container-high,透明 PNG 也不会露出彩条渐变 */
+  .grid--live .poster {
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    background: var(--m3e-sys-color-surface-container-high);
+  }
+  .grid--live .poster img { object-fit: contain; padding: 12px; box-sizing: border-box; }
+  /* 拿不到台标别留一块空灰:给个电视图标 */
+  .poster__icon {
+    position: absolute;
+    inset: 0;
+    /* .m3e-icon 自带 24px 宽高,不改回来会缩在左上角 */
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    font-size: 30px;
+    opacity: .3;
+    pointer-events: none;
+  }
   /* 收藏卡右上角的 ⋮:压在封面图上,只能用半透明黑底(与 .badge 同一个例外,
      原因同样是"底图不可控,角色色读不清") */
   .card__more {
