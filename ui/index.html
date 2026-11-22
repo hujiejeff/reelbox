@@ -71,6 +71,28 @@
     font: 600 16px/1 system-ui, "PingFang SC", sans-serif; }
   .src-btn:hover { background: var(--m3e-sys-color-surface-container-high); }
   .src-btn .m3e-icon { font-size: 20px; color: var(--m3e-sys-color-on-surface-variant); }
+  /* 封面比例:和源按钮同高,方形图标按钮 */
+  .ratio-btn {
+    flex: none; margin-left: auto; width: 44px; height: 44px; border: 0; cursor: pointer;
+    border-radius: 22px; background: transparent; color: var(--m3e-sys-color-on-surface-variant);
+    display: grid; place-items: center;
+  }
+  .ratio-btn:hover { background: var(--m3e-sys-color-surface-container-high); }
+  .ratio-btn .m3e-icon { font-size: 22px; }
+  .ratio-menu {
+    position: fixed; z-index: 240; min-width: 168px; padding: 6px;
+    border-radius: 16px; display: flex; flex-direction: column; gap: 2px;
+    background: var(--m3e-sys-color-surface-container);
+    box-shadow: 0 8px 28px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.10);
+  }
+  .ratio-menu[hidden] { display: none; }
+  .ratio-menu button {
+    border: 0; cursor: pointer; text-align: left; padding: 10px 12px; border-radius: 10px;
+    background: transparent; color: inherit; font: 500 13.5px/1 system-ui, "PingFang SC", sans-serif;
+  }
+  .ratio-menu button:hover { background: var(--m3e-sys-color-surface-container-high); }
+  .ratio-menu button[aria-current="true"] { color: var(--m3e-sys-color-primary); font-weight: 600; }
+
   /* 切源面板:同一份 DOM,<840 挂进 bottom sheet,≥840 挂进侧栏弹出层 */
   .srcmenu {
     position: absolute; z-index: 20; width: 348px; max-width: calc(100vw - 24px);
@@ -432,6 +454,8 @@
 
   /* 控件组:宽屏在侧栏纵向,窄屏在顶栏横向 */
   .controls { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  /* 顶栏里让控件行撑满,右上角那颗按钮才真的在右边 */
+  .topbar > .controls { flex: 1 1 auto; }
   .side .controls { flex-direction: column; align-items: stretch; padding: 14px 10px 4px; gap: 4px; }
   .side .controls .src-btn { align-self: flex-start; margin-left: 2px; }
   .controls .searchbox { flex: 1; }
@@ -1636,6 +1660,11 @@
       <button class="search-go" id="btnSearch" aria-label="搜索"><span class="m3e-icon" aria-hidden="true">search</span></button>
       <input id="q" placeholder="搜索影片" autocomplete="off">
     </div>
+    <!-- 封面比例:只对当前源生效,点开就是几个预设 -->
+    <button class="ratio-btn" id="ratioBtn" type="button" aria-haspopup="true" aria-label="封面比例">
+      <span class="m3e-icon" aria-hidden="true">aspect_ratio</span>
+    </button>
+    <div class="ratio-menu" id="ratioMenu" role="menu" hidden></div>
   </div>
 
   <div class="float-tabs m3e-floating-toolbar" role="toolbar" aria-label="主导航">

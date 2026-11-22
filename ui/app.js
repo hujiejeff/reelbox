@@ -170,6 +170,7 @@ async function init() {
   if (!listableSources().length) {
     bindNav();
     bindSourceMenu();
+    bindRatioMenu();
     renderSources();
     showNoSources();
     return;
@@ -178,6 +179,7 @@ async function init() {
   renderSources();
   bindNav();
   bindSourceMenu();
+  bindRatioMenu();
   await switchSource(S.source);
 
   // reelbox.exe --selftest:无人值守跑一遍 列表 → 详情 → 播放,结果写日志
@@ -5139,6 +5141,90 @@ function showView(key) {
     if (wideSettings()) openSetPage("src");
   }
   layoutControls();
+}
+
+/** 顶栏右上角:封面比例(只影响当前源的列表卡片) */
+const RATIO_OPTIONS = [
+  ["", "默认 2:3"],
+  ["3:4", "3:4"],
+  ["4:3", "4:3(横向)"],
+  ["16:9", "16:9(截图)"],
+  ["1:1", "1:1(方形)"],
+];
+
+function currentRatio() {
+  return String((S.source && S.source.posterRatio) || "");
+}
+
+async function setSourceRatio(v) {
+  if (!S.source) {
+    toast("先选一个源");
+    return;
+  }
+  const id = S.source.id;
+  const hit = (S.sources || []).find((s) => s.id === id);
+  if (!hit) return;
+  if (v) hit.posterRatio = v;
+  else delete hit.posterRatio;
+  S.source = hit;
+  await persistSources();
+  applyPosterRatio($("grid"));
+  toast("封面比例:" + (v || "默认 2:3"));
+}
+
+function positionRatioMenu() {
+  const btn = $("ratioBtn");
+  const menu = $("ratioMenu");
+  if (!btn || !menu) return;
+  const r = btn.getBoundingClientRect();
+  menu.style.top = Math.round(r.bottom + 6) + "px";
+  menu.style.left = Math.max(8, Math.min(r.right - 176, window.innerWidth - 184)) + "px";
+}
+
+function bindRatioMenu() {
+  const btn = $("ratioBtn");
+  const menu = $("ratioMenu");
+  if (!btn || !menu || btn.dataset.bound) return;
+  btn.dataset.bound = "1";
+
+  const render = () => {
+    const cur = currentRatio();
+    menu.innerHTML = RATIO_OPTIONS.map(
+      ([v, label]) =>
+        '<button type="button" role="menuitem" data-ratio="' + v + '"' +
+        (v === cur ? ' aria-current="true"' : "") + ">" + label + "</button>"
+    ).join("");
+    menu.querySelectorAll("button").forEach((b) => {
+      b.onclick = async () => {
+        menu.hidden = true;
+        try {
+          await setSourceRatio(b.getAttribute("data-ratio") || "");
+        } catch (e) {
+          log("RATIO FAIL", errText(e));
+          toast("设置失败:" + errText(e));
+        }
+      };
+    });
+  };
+
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const willOpen = menu.hidden;
+    if (willOpen) {
+      render();
+      positionRatioMenu();
+    }
+    menu.hidden = !willOpen;
+  };
+
+  document.addEventListener("click", (e) => {
+    if (menu.hidden) return;
+    if (e.target.closest("#ratioMenu") || e.target.closest("#ratioBtn")) return;
+    menu.hidden = true;
+  });
+  window.addEventListener("resize", () => {
+    if (!menu.hidden) positionRatioMenu();
+  });
 }
 
 function bindSourceMenu() {
