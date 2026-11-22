@@ -59,7 +59,14 @@ jobs:
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: "Reelbox v__VERSION__"
-          releaseBody: "见提交记录。"
+          releaseBody: |
+            Reelbox v__VERSION__
+
+            - 源:点播 / XML / 直播 / 插件都支持;也可以订阅一份配置,源和插件一起装
+            - 播放:内置 HLS 反代,多线路、清晰度切换
+            - 直播:频道表、同名频道合并、断流重连、手动换线
+            - 网络:按域名自动选路,跟随系统代理
+            - 桌面:封面比例可调;移动端可安装使用
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
@@ -229,3 +236,19 @@ jobs:
           name: ios-ipa
           path: src-tauri/gen/apple/build/**/*.ipa
           if-no-files-found: warn
+
+  # ---------- 收尾:三个平台都出完了才把草稿转正 ----------
+  # 留着 draft 到最后一步是故意的:任何一路失败,发布就不会发生,
+  # 不会出现"发了一半"的版本。手动触发(workflow_dispatch)不做这一步,
+  # 所以自测跑出来的永远是草稿。
+  publish:
+    needs: [desktop, android, ios]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false

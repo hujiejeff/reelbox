@@ -14,8 +14,14 @@ use crate::commands::{PluginResponse, FETCH_MAX_BYTES, FETCH_UA};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+// 子 WebView 这一套(WebviewBuilder / add_child / set_position / close)是**桌面专有**的:
+// 移动端没有"往窗口里塞一个子 WebView"这个概念(要用原生 WebView + CookieManager)。
+// 所以桌面代码整块 `#[cfg(desktop)]`,移动端留同名的桩 —— 否则 Android / iOS 直接编不过。
+#[cfg(desktop)]
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Webview, WebviewUrl};
+#[cfg(desktop)]
+use tauri::{Manager, PhysicalPosition, PhysicalSize, Webview, WebviewUrl};
+use tauri::{AppHandle, Emitter};
 
 /// 注入到页面里:把真实 UA 用 cookie 回传(不做假导航 —— 那会把页面清空)
 const UA_JS: &str = r#"
@@ -135,6 +141,7 @@ fn next_id() -> String {
     format!("{:08x}", h)
 }
 
+#[cfg(desktop)]
 fn webview_of(app: &AppHandle, id: &str) -> Option<Webview> {
     let label = store()
         .lock()
@@ -144,6 +151,7 @@ fn webview_of(app: &AppHandle, id: &str) -> Option<Webview> {
 }
 
 /// 取当前窗口里的 cookie + UA,快照进会话
+#[cfg(desktop)]
 fn snapshot(app: &AppHandle, id: &str) {
     let (origin, url) = match store().lock().ok().and_then(|m| m.get(id).map(|s| (s.origin.clone(), s.url.clone()))) {
         Some(v) => v,
@@ -182,6 +190,7 @@ fn snapshot(app: &AppHandle, id: &str) {
 }
 
 /// 关掉子 WebView 并把状态定下来
+#[cfg(desktop)]
 fn teardown(app: &AppHandle, id: &str, state: State) {
     let label = store().lock().ok().and_then(|m| {
         m.get(id)
@@ -255,6 +264,7 @@ pub async fn verify_ensure(
         .map_err(|e| e.to_string())?
 }
 
+#[cfg(desktop)]
 fn start_session(
     app: &AppHandle,
     url: String,
@@ -347,19 +357,28 @@ pub fn verify_bounds(app: AppHandle, id: String, rect: Vec<f64>) -> Result<(), S
     if rect.len() != 4 {
         return Err("rect 需要 4 个数".into());
     }
-    let Some(wv) = webview_of(&app, &id) else {
-        return Err("校验页已经关了".into());
-    };
-    // 前端给的是物理像素(自己乘过 devicePixelRatio),这里不再做 DPI 换算 ——
-    // 走 Logical 会被再乘一次,子 WebView 就会撑出内容区盖住底栏(实测)
-    wv.set_position(PhysicalPosition::new(rect[0] as i32, rect[1] as i32))
-        .and_then(|_| {
-            wv.set_size(PhysicalSize::new(
-                rect[2].max(1.0) as u32,
-                rect[3].max(1.0) as u32,
-            ))
-        })
-        .map_err(|e| e.to_string())
+    #[cfg(desktop)]
+    {
+        let Some(wv) = webview_of(&app, &id) else {
+            return Err("校验页已经关了".into());
+        };
+        // 前端给的是物理像素(自己乘过 devicePixelRatio),这里不再做 DPI 换算 ——
+        // 走 Logical 会被再乘一次,子 WebView 就会撑出内容区盖住底栏(实测)
+        return wv
+            .set_position(PhysicalPosition::new(rect[0] as i32, rect[1] as i32))
+            .and_then(|_| {
+                wv.set_size(PhysicalSize::new(
+                    rect[2].max(1.0) as u32,
+                    rect[3].max(1.0) as u32,
+                ))
+            })
+            .map_err(|e| e.to_string());
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (&app, &id, &rect);
+        Ok(())
+    }
 }
 
 /// 用户点「完成」:快照 cookie → 关子 WebView → 会话留着给请求用
@@ -431,6 +450,7 @@ pub fn session_list() -> Vec<SessionInfo> {
 
 #[tauri::command]
 pub fn session_close(app: AppHandle, id: String) -> Result<(), String> {
+    #[cfg(desktop)]
     if let Some(wv) = webview_of(&app, &id) {
         let _ = wv.close();
     }
@@ -537,4 +557,37 @@ fn fetch_with(
         });
     }
     Err(format!("重定向次数过多: {url}"))
+}
+
+// ---------------------------------------------------------------- 移动端的桩
+//
+// 移动端没有"往窗口里塞一个子 WebView"这回事:要做就得用原生 WebView +
+// CookieManager(Android)/ WKHTTPCookieStore(iOS),那是另一套活,还没写。
+// 这里先让 Android / iOS 编得过:会话能建、能查、能取(cookie 由宿主给),
+// 只是弹不出校验页 —— 调用方拿到的是一句明确的话,不是一屏看不懂的报错。
+
+#[cfg(not(desktop))]
+fn snapshot(_app: &AppHandle, _id: &str) {
+    // 没有子 WebView,就没有 cookie 罐可快照
+}
+
+#[cfg(not(desktop))]
+fn teardown(app: &AppHandle, id: &str, state: State) {
+    if let Ok(mut m) = store().lock() {
+        if let Some(s) = m.get_mut(id) {
+            s.state = state;
+        }
+    }
+    let _ = app.emit("verify:close", serde_json::json!({ "id": id }));
+}
+
+#[cfg(not(desktop))]
+fn start_session(
+    _app: &AppHandle,
+    _url: String,
+    _reason: Option<String>,
+    _source: Option<String>,
+    _rect: Option<Vec<f64>>,
+) -> Result<SessionInfo, String> {
+    Err("人工校验目前只在桌面端支持;移动端要等原生 WebView + CookieManager 那一版".to_string())
 }

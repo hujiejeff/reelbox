@@ -4204,7 +4204,8 @@ const SET_PAGES = [
   // 没有「网络」页:代理不开放给用户选,出口一律跟着系统走(见 docs/NETWORK.md)
   { key: "look", icon: "palette", title: "外观", group: 0 },
   // 站点校验:Cloudflare / 登录这类必须人工过的站点,用户自己也能用(不是调试工具)
-  { key: "sites", icon: "verified_user", title: "校验", group: 0 },
+  // 校验页是桌面专有的:用子 WebView 过 Cloudflare,移动端还没有对应实现
+  { key: "sites", icon: "verified_user", title: "校验", group: 0, desktopOnly: true },
   { key: "debug", icon: "terminal", title: "调试", group: 1 },
   { key: "about", icon: "info", title: "关于", group: 1 },
 ];
@@ -4229,7 +4230,9 @@ function isDevBuild() {
 
 /** 设置里能看到的入口:发布版没有「调试」 */
 function setPages() {
-  return SET_PAGES.filter((p) => p.key !== "debug" || isDevBuild());
+  return SET_PAGES.filter(
+    (p) => (!p.desktopOnly || !platform.isMobile) && (p.key !== "debug" || isDevBuild())
+  );
 }
 
 function themeSeedLabel() {
