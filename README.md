@@ -59,7 +59,23 @@ cargo test -p reelbox-core     # 核心逻辑测试,离线可跑
 ```bash
 npm run test:ui          # 前端纯逻辑(node --test)
 npm run verify:arch      # 架构自检 + 上面的测试
+npm run probe -- 配置文件   # 源快检:不开界面跑一遍 list/detail/play/search
 ```
+
+**源快检**(改完配置不用开应用点半天):
+
+```bash
+# 直接对着本地配置跑,约 2 分钟(30 条并发)
+npm run probe -- ../reelbox-config/index.json
+
+# 只测几条 / 输出 json / 失败的再跑一遍
+npm run probe -- ../reelbox-config/index.json --only=ffzy,dytt
+npm run probe -- ../reelbox-config/index.json --json
+npm run probe -- ../reelbox-config/index.json --retry
+```
+
+它走**应用自己的网络层**(系统代理、按域名选路),所以这里判"通"应用里就通。
+只覆盖 `adapter: vod` 的源;iplayr / m3u / 自定义适配器要把 js 跑起来,那得靠应用里的沙箱。
 
 另有 `verify-playback.ps1`(静态接线检查)、`verify-plugin-playback.ps1`(连跑插件源自检)。
 二进制支持 `--selftest`,会自己跑一遍列表 → 详情 → 播放并把结果写进日志。

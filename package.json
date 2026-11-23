@@ -8,7 +8,8 @@
     "build": "tauri build",
     "tauri": "tauri",
     "test:ui": "node --test ui/import-shape.test.mjs",
-    "verify:arch": "node scripts/verify-architecture.mjs"
+    "verify:arch": "node scripts/verify-architecture.mjs",
+    "probe": "cargo run -q -p reelbox-core --example probe --"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.0"

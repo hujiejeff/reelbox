@@ -703,7 +703,18 @@ async function callAdapter(src, hook, arg) {
   const args = Object.assign({}, arg || {});
   args.options = adapterOptions(src);
   const session = await ensureVerify(src);
-  return callPlugin(await adapterPath(src), hook, args, session);
+  const t0 = performance.now();
+  const path = await adapterPath(src);
+  try {
+    const out = await callPlugin(path, hook, args, session);
+    // 一行一次调用:出问题时看日志就知道是"没跑"还是"跑了但空"
+    const n = Array.isArray(out) ? out.length : out && Array.isArray(out.items) ? out.items.length : "";
+    log("HOOK " + (src && src.id) + "." + hook + " " + Math.round(performance.now() - t0) + "ms ok" + (n === "" ? "" : " n=" + n));
+    return out;
+  } catch (e) {
+    log("HOOK " + (src && src.id) + "." + hook + " " + Math.round(performance.now() - t0) + "ms fail " + errText(e));
+    throw e;
+  }
 }
 
 /** 列表:沙箱类适配器走 ui/plugin-host.js,`vod-rs` 走 Rust */
