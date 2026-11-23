@@ -28,6 +28,9 @@ struct Row {
     search: Option<usize>,
     ms: u128,
     error: String,
+    /// 跑了多少次 / 成功多少次 —— 这些站本身不稳,一次跑不出来不代表死了
+    runs: usize,
+    ok_runs: usize,
 }
 
 fn read_target(target: &str) -> Result<String, String> {
@@ -82,6 +85,7 @@ fn probe_one(src: &Source) -> Row {
         id: src.id.clone(),
         name: src.name.clone(),
         adapter: src.adapter().to_string(),
+        runs: 1,
         ..Default::default()
     };
     let t0 = Instant::now();
@@ -179,6 +183,12 @@ fn main() {
         .unwrap_or(6)
         .clamp(1, 16);
 
+    let times: usize = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--times=").and_then(|n| n.parse().ok()))
+        .unwrap_or(1)
+        .clamp(1, 5);
+
     let pick: Vec<&reelbox_core::sub::SubSource> = idx
         .sources
         .iter()
@@ -198,7 +208,26 @@ fn main() {
         let chunk = (all.len() + jobs - 1) / jobs.max(1);
         for part in all.chunks(chunk.max(1)) {
             handles.push(scope.spawn(move || {
-                part.iter().map(probe_one).collect::<Vec<Row>>()
+                part.iter()
+                    .map(|s| {
+                        let mut best = probe_one(s);
+                        let mut ok = if best.error.is_empty() { 1 } else { 0 };
+                        for _ in 1..times {
+                            let r = probe_one(s);
+                            if r.error.is_empty() {
+                                ok += 1;
+                                if best.error.is_empty() {
+                                    best = r; // 已经通了就留最新一次的耗时
+                                } else {
+                                    best = r; // 这次通了,替换掉失败记录
+                                }
+                            }
+                        }
+                        best.runs = times;
+                        best.ok_runs = ok;
+                        best
+                    })
+                    .collect::<Vec<Row>>()
             }));
         }
         for h in handles {
@@ -229,13 +258,18 @@ fn main() {
         }
         let status = if r.error.is_empty() { "✓" } else { "✗" };
         println!(
-            "{status} {:24} list={:>2} 详情={:>3}集 播放={:8} 搜索={:>2} {:>5}ms {}",
+            "{status} {:24} list={:>2} 详情={:>3}集 播放={:8} 搜索={:>2} {:>5}ms {}{}",
             format!("{} ({})", r.name, r.id),
             r.list.unwrap_or(0),
             r.detail.unwrap_or(0),
             r.play.clone().unwrap_or_else(|| "-".into()),
             r.search.unwrap_or(0),
             r.ms,
+            if r.runs > 1 {
+                format!("{}/{}次通 ", r.ok_runs, r.runs)
+            } else {
+                String::new()
+            },
             r.error
         );
     }

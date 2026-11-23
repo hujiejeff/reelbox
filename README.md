@@ -72,6 +72,7 @@ npm run probe -- ../reelbox-config/index.json
 npm run probe -- ../reelbox-config/index.json --only=ffzy,dytt
 npm run probe -- ../reelbox-config/index.json --json
 npm run probe -- ../reelbox-config/index.json --retry
+npm run probe -- ../reelbox-config/index.json --times=3   # 每条跑 3 次,看命中率
 ```
 
 它走**应用自己的网络层**(系统代理、按域名选路),所以这里判"通"应用里就通。
